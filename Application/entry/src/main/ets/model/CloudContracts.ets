@@ -276,6 +276,14 @@ export interface NearbyCardsRequest {
   pageSize: number;
 }
 
+/** Public homepage feed. Coordinates are deliberately absent. */
+export interface PublicCardsRequest {
+  scope: 'all';
+  category: string;
+  pageToken: string;
+  pageSize: number;
+}
+
 export interface NearbyCardsResponse {
   cards: Array<FoodCard>;
   nextPageToken: string;

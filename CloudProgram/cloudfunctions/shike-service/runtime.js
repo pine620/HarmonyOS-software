@@ -114,7 +114,9 @@ FoodCard.indexes = Object.freeze([
   'ownerUid,createdAt',
   'ownerUid,status,createdAt',
   'status,latE3,lonE3,createdAt',
-  'status,createdAt'
+  'status,createdAt',
+  'status,createdAt,id',
+  'status,category,createdAt,id'
 ]);
 
 class CardMedia extends CloudDbModel {}
@@ -1313,13 +1315,12 @@ function mediaIdFromApprovedObjectKey(objectKey) {
 }
 
 /**
- * Approved media is always read through the authenticated Cloud Object, which
+ * Approved media is read through the app-signed Cloud Object, which
  * validates the database record and writes bytes into the app-private cache.
  * The object itself is never exposed as a direct Storage URL, so read access
  * stays independent of the device's local login implementation.
  */
 async function getPublicMedia(uid, payload, env) {
-  if (!uid) throw new Error('登录状态已失效。');
   const bucketName = String(payload && payload.bucketName || '').trim();
   const objectKey = String(payload && payload.cloudPath || '').trim();
   if (bucketName !== required(env, 'SHIKE_STORAGE_BUCKET')) {
@@ -1332,6 +1333,21 @@ async function getPublicMedia(uid, payload, env) {
     throw new Error('图片不存在、尚未发布或路径不匹配。');
   }
   const mediaOwnerUid = String(media.ownerUid || '');
+  if (!uid) {
+    const cardId = String(media.cardId || '');
+    if (mediaOwnerUid && cardId === `profile:${mediaOwnerUid}`) {
+      const profile = await one(collection(env, 'UserProfile').query().equalTo('uid', mediaOwnerUid));
+      if (!profile || String(profile.avatarMediaId || '') !== mediaId ||
+          String(profile.accountStatus || 'ACTIVE') !== 'ACTIVE') {
+        throw new Error('头像不再公开。');
+      }
+    } else {
+      const card = cardId && await one(collection(env, 'FoodCard').query().equalTo('id', cardId));
+      if (!card || card.status !== 'APPROVED' || String(card.ownerUid || '') !== mediaOwnerUid) {
+        throw new Error('图片所属卡片未公开或已下架。');
+      }
+    }
+  }
   if (mediaOwnerUid && String(media.cardId || '') === `profile-cover:${mediaOwnerUid}` && mediaOwnerUid !== uid) {
     const relationship = await friendshipBetween(uid, mediaOwnerUid, env);
     if (!relationship || String(relationship.status || '') !== 'ACCEPTED') {
@@ -1830,8 +1846,8 @@ async function cardActionSummary(cardId, viewerUid, env) {
     const kind = String(action.kind || '');
     if (kind === 'LIKE') likeCount += 1;
     if (kind === 'FAVORITE') favoriteCount += 1;
-    if (String(action.actorUid || '') === viewerUid && kind === 'LIKE') viewerLiked = true;
-    if (String(action.actorUid || '') === viewerUid && kind === 'FAVORITE') viewerFavorited = true;
+    if (viewerUid && String(action.actorUid || '') === viewerUid && kind === 'LIKE') viewerLiked = true;
+    if (viewerUid && String(action.actorUid || '') === viewerUid && kind === 'FAVORITE') viewerFavorited = true;
   }
   return { likeCount, favoriteCount, viewerLiked, viewerFavorited };
 }
@@ -1845,7 +1861,7 @@ async function commentReactionSummary(commentId, viewerUid, env) {
     const kind = String(reaction.kind || '');
     if (kind === 'LIKE') likeCount += 1;
     if (kind === 'DISLIKE') dislikeCount += 1;
-    if (String(reaction.actorUid || '') === viewerUid && (kind === 'LIKE' || kind === 'DISLIKE')) {
+    if (viewerUid && String(reaction.actorUid || '') === viewerUid && (kind === 'LIKE' || kind === 'DISLIKE')) {
       viewerReaction = kind;
     }
   }
@@ -1913,7 +1929,7 @@ async function publicComments(cardId, viewerUid, env) {
       const kind = String(reaction.kind || '');
       if (kind === 'LIKE') summary.likeCount += 1;
       if (kind === 'DISLIKE') summary.dislikeCount += 1;
-      if (String(reaction.actorUid || '') === viewerUid && (kind === 'LIKE' || kind === 'DISLIKE')) {
+      if (viewerUid && String(reaction.actorUid || '') === viewerUid && (kind === 'LIKE' || kind === 'DISLIKE')) {
         summary.viewerReaction = kind;
       }
     }
@@ -1921,7 +1937,7 @@ async function publicComments(cardId, viewerUid, env) {
   const byId = new Map();
   const ordered = [];
   let commentCount = 0;
-  const viewerIsAdministrator = isAdministrator(viewerUid, env);
+  const viewerIsAdministrator = !!viewerUid && isAdministrator(viewerUid, env);
   for (const row of rows) {
     const author = authorsByUid.get(String(row.authorUid || '')) ||
       { nickname: '食刻用户', avatarPath: '', avatarBucket: '' };
@@ -1942,8 +1958,8 @@ async function publicComments(cardId, viewerUid, env) {
       likeCount: reactions.likeCount,
       dislikeCount: reactions.dislikeCount,
       viewerReaction: reactions.viewerReaction,
-      viewerIsAuthor: String(row.authorUid || '') === viewerUid,
-      viewerCanDelete: String(row.authorUid || '') === viewerUid || viewerIsAdministrator,
+      viewerIsAuthor: !!viewerUid && String(row.authorUid || '') === viewerUid,
+      viewerCanDelete: !!viewerUid && (String(row.authorUid || '') === viewerUid || viewerIsAdministrator),
       createdAt: Number(row.createdAt || 0),
       replies: []
     };
@@ -2003,7 +2019,7 @@ async function publicCard(row, env, distanceKm = 0, includePhoto = false, viewer
     authorAvatarPath: author.avatarPath,
     authorAvatarBucket: author.avatarBucket,
     photos,
-    viewerIsOwner: ownerUid === viewerUid,
+    viewerIsOwner: !!viewerUid && ownerUid === viewerUid,
     likeCount: actions.likeCount,
     favoriteCount: actions.favoriteCount,
     viewerLiked: actions.viewerLiked,
@@ -2162,6 +2178,42 @@ function nearbyCacheMetric(env, metrics, requestStarted) {
     `profileDbQueries=${metrics.profileDbQueries} mediaDbQueries=${metrics.mediaDbQueries} ` +
     `profileFailures=${metrics.profileFailures} hydrationMs=${metrics.hydrationMs} cards=${metrics.cards} ` +
     `totalMs=${Date.now() - requestStarted}`);
+}
+
+/** Public homepage pagination has no location, radius or 200-candidate cutoff. */
+async function listPublicRecommendations(payload, env) {
+  const category = String(payload.category || 'all');
+  if (category !== 'all' && !VALID_CATEGORY.has(category)) throw new Error('商品分类无效。');
+  const requestedSize = Number(payload.pageSize || MAX_PAGE_SIZE);
+  const pageSize = Number.isFinite(requestedSize)
+    ? Math.floor(Math.min(MAX_PAGE_SIZE, Math.max(1, requestedSize))) : MAX_PAGE_SIZE;
+  let snapshotAt = Date.now();
+  let offset = 0;
+  const token = String(payload.pageToken || '').trim();
+  if (token) {
+    const parts = /^g1\.([a-z]+)\.(\d+)\.(\d+)$/.exec(token);
+    if (!parts || parts[1] !== category) throw new Error('推荐分页已失效，请刷新列表。');
+    snapshotAt = Number(parts[2]);
+    offset = Number(parts[3]);
+    if (!Number.isSafeInteger(snapshotAt) || snapshotAt < 0 || snapshotAt > Date.now() ||
+        !Number.isSafeInteger(offset) || offset < 0) throw new Error('推荐分页参数无效。');
+  }
+  let query = collection(env, 'FoodCard').query().equalTo('status', 'APPROVED')
+    .lessThanOrEqualTo('createdAt', snapshotAt);
+  if (category !== 'all') query = query.equalTo('category', category);
+  const rows = await query.orderByDesc('createdAt').orderByAsc('id').limit(pageSize + 1, offset).get();
+  const hasMore = rows.length > pageSize;
+  const pageRows = rows.slice(0, pageSize);
+  const cards = [];
+  for (let start = 0; start < pageRows.length; start += NEARBY_CARD_HYDRATION_CONCURRENCY) {
+    const batch = pageRows.slice(start, start + NEARBY_CARD_HYDRATION_CONCURRENCY);
+    cards.push(...await Promise.all(batch.map((row) => publicCard(row, env, 0, true, '', false, 1))));
+  }
+  return {
+    cards,
+    nextPageToken: hasMore ? `g1.${category}.${snapshotAt}.${offset + pageRows.length}` : '',
+    district: ''
+  };
 }
 
 async function listNearby(uid, payload, env) {
@@ -2341,7 +2393,7 @@ async function listFriendRankings(uid, env) {
 
 async function cardDetail(uid, payload, env) {
   const row = await one(collection(env, 'FoodCard').query().equalTo('id', String(payload.cardId || '')));
-  if (!row || (row.status !== 'APPROVED' && row.ownerUid !== uid)) {
+  if (!row || (row.status !== 'APPROVED' && (!uid || row.ownerUid !== uid))) {
     throw new Error('卡片不存在、尚未公开或不属于当前用户。');
   }
   return publicCard(row, env, 0, row.status === 'APPROVED', uid, true);
@@ -3688,13 +3740,15 @@ const operations = {
   'upload-card-photo': async ({ accessToken, payload }, env) =>
     uploadCardPhoto(await verifiedUid(accessToken, env), payload, env),
   'get-public-media': async ({ accessToken, payload }, env) =>
-    getPublicMedia(await verifiedUid(accessToken, env), payload, env),
+    getPublicMedia(accessToken ? await verifiedUid(accessToken, env) : '', payload, env),
   'publish-card': async ({ accessToken, payload }, env) => publishCard(await verifiedUid(accessToken, env), payload, env),
-  'list-nearby-cards': async ({ accessToken, payload }, env) => listNearby(await verifiedUid(accessToken, env), payload, env),
+  'list-nearby-cards': async ({ accessToken, payload }, env) => payload.scope === 'all'
+    ? listPublicRecommendations(payload, env) : listNearby(await verifiedUid(accessToken, env), payload, env),
   'list-friend-rankings': async ({ accessToken }, env) => listFriendRankings(await verifiedUid(accessToken, env), env),
   'get-friend-profile': async ({ accessToken, payload }, env) =>
     friendProfile(await verifiedUid(accessToken, env), payload, env),
-  'get-card-detail': async ({ accessToken, payload }, env) => cardDetail(await verifiedUid(accessToken, env), payload, env),
+  'get-card-detail': async ({ accessToken, payload }, env) =>
+    cardDetail(accessToken ? await verifiedUid(accessToken, env) : '', payload, env),
   'list-my-cards': async ({ accessToken }, env) => myCards(await verifiedUid(accessToken, env), env),
   'list-my-favorite-cards': async ({ accessToken }, env) => myFavoriteCards(await verifiedUid(accessToken, env), env),
   'list-received-comments': async ({ accessToken, payload }, env) =>

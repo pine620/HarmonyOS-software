@@ -1,7 +1,6 @@
 import { common } from '@kit.AbilityKit';
-import { FoodCard, FoodCategory, RoundedLocation } from '../model/CloudContracts';
+import { FoodCard, FoodCategory } from '../model/CloudContracts';
 import { CardRepository } from '../repository/CardRepository';
-import { LocationService } from '../service/LocationService';
 import { NearbyPreloadService } from '../service/NearbyPreloadService';
 import { NearbyPerformanceTrace, PreloadMetricState } from '../service/NearbyPerformanceTrace';
 import { MediaPriority, MediaRequestGuard, PhotoUploadService } from '../service/PhotoUploadService';
@@ -46,9 +45,9 @@ export struct NearbyPage {
   @State waterfallWidthVp: number = 0;
   onOpenCard: (card: FoodCard) => void = (_card: FoodCard): void => {};
   @Prop @Watch('onRevisionChanged') revision: number = 0;
+  @Prop loggedIn: boolean = false;
   @State cards: Array<NearbyCardEntry> = [];
-  @State district: string = '等待定位';
-  @State status: string = '将展示 20 km 内附有实拍图的公开推荐。';
+  @State status: string = '展示全部公开推荐，无需定位。';
   @State selectedCategory: string = 'all';
   @State loading: boolean = false;
   @State loadingMore: boolean = false;
@@ -58,7 +57,6 @@ export struct NearbyPage {
   private repository: CardRepository = new CardRepository();
   private refreshQueued: boolean = false;
   private refreshQueuedForRemoteSync: boolean = false;
-  private latestLocation: RoundedLocation | undefined = undefined;
   private showingStaleSnapshot: boolean = false;
   private refreshGeneration: number = 0;
   private photoHydrationGeneration: number = 0;
@@ -121,7 +119,7 @@ export struct NearbyPage {
 
   private approvedCards(cards: Array<FoodCard>): Array<FoodCard> {
     return cards.filter((card: FoodCard): boolean =>
-      card.status === 'APPROVED' && card.distanceKm <= 20.0 && card.photoPath.length > 0);
+      card.status === 'APPROVED');
   }
 
   private createNearbyCardEntry(card: FoodCard): NearbyCardEntry {
@@ -177,11 +175,11 @@ export struct NearbyPage {
   }
 
   private nearbyStatus(cardCount: number, nextPageToken: string): string {
-    if (cardCount === 0) return '附近还没有附实拍图的推荐。';
+    if (cardCount === 0) return '当前分类还没有公开推荐。';
     if (nextPageToken.length > 0) {
-      return '已找到 ' + cardCount.toString() + ' 条实拍推荐，继续上滑查看更多。';
+      return '已找到 ' + cardCount.toString() + ' 条推荐，继续上滑查看更多。';
     }
-    return '已加载附近全部 ' + cardCount.toString() + ' 条实拍推荐。';
+    return '已加载全部 ' + cardCount.toString() + ' 条推荐。';
   }
 
   private displayStatus(): string {
@@ -221,8 +219,8 @@ export struct NearbyPage {
         if (this.activePhotoHydrationCount === 0 && this.refreshGeneration === refreshGeneration) {
           this.photoLoading = false;
         }
-        if (priority === 'high' && !this.showingStaleSnapshot && this.latestLocation !== undefined) {
-          NearbyPreloadService.prefetchNextPage(context, this.latestLocation, this.nextPageToken);
+        if (priority === 'high' && !this.showingStaleSnapshot) {
+          NearbyPreloadService.prefetchNextPage(context, this.selectedCategory, this.nextPageToken);
         }
       }
     }
@@ -255,7 +253,7 @@ export struct NearbyPage {
       // The recommendation surface remains available when a desktop service
       // card is absent or temporarily cannot be updated.
     }
-    if (!requestRemoteSync) return '';
+    if (!requestRemoteSync || !this.loggedIn) return '';
     const remoteStatus = ServiceCardRemoteSyncService.status(context);
     if (!remoteStatus.supported) return '当前设备不支持桌面卡片远程同步。';
     if (!remoteStatus.optedIn) {
@@ -274,19 +272,6 @@ export struct NearbyPage {
       return '桌面卡片已登记，远程同步暂未完成，请稍后再试。';
     } catch (error) {
       return `桌面卡片同步未完成：${errorText(error as ErrorDetail)}`;
-    }
-  }
-
-  private async resolveDistrictInBackground(location: RoundedLocation, refreshGeneration: number): Promise<void> {
-    try {
-      const previousDistrict: string = location.district;
-      const district: string = await LocationService.resolveDistrict(location.latE3, location.lonE3);
-      if (this.refreshGeneration !== refreshGeneration) return;
-      location.district = district;
-      this.latestLocation = location;
-      if (this.district === previousDistrict || this.district === '当前位置') this.district = district;
-    } catch (_error) {
-      // The fallback district is already usable; reverse geocoding is display-only.
     }
   }
 
@@ -328,7 +313,7 @@ export struct NearbyPage {
     }
   }
 
-  private async refresh(requestRemoteSync: boolean = false): Promise<void> {
+  private async refresh(requestRemoteSync: boolean = false, forceRefresh: boolean = false): Promise<void> {
     if (this.loading || this.loadingMore) {
       // Preserve a repeated refresh request while the previous one is still
       // in flight, then perform one follow-up pull with fresh card data.
@@ -347,17 +332,13 @@ export struct NearbyPage {
     this.photoLoading = false;
     this.mediaServiceUnavailable = PhotoUploadService.isMediaServiceUnavailable();
     this.loading = true;
-    this.status = '正在获取一次精确位置与实拍推荐…';
+    this.status = '正在加载全部公开推荐…';
     try {
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      const snapshot = await NearbyPreloadService.load(context, requestRemoteSync);
+      const snapshot = await NearbyPreloadService.load(context, requestRemoteSync || forceRefresh, this.selectedCategory);
       if (this.refreshGeneration !== refreshGeneration) return;
-      const location: RoundedLocation = snapshot.location;
       const response = snapshot.response;
-      this.latestLocation = location;
       this.showingStaleSnapshot = snapshot.stale === true;
-      this.district = location.district;
-      void this.resolveDistrictInBackground(location, refreshGeneration);
       const approved: Array<FoodCard> = this.approvedCards(response.cards);
       if (!PhotoUploadService.isMediaServiceUnavailable()) {
         approved.forEach((card: FoodCard): void => {
@@ -374,16 +355,15 @@ export struct NearbyPage {
         requestRemoteSync ? 'refresh' : 'open', started, approved.length);
       if (this.firstCoverIds.size === 0) this.finishFirstCover('empty');
       this.nextPageToken = response.nextPageToken;
-      this.district = response.district || location.district;
       this.status = this.nearbyStatus(approved.length, this.nextPageToken);
       if (snapshot.stale === true) {
-        this.status = '网络暂不可用，正在显示 5 分钟内的附近推荐缓存；详情将重新向云端确认。';
+        this.status = '网络暂不可用，正在显示 5 分钟内的公开推荐缓存；详情将重新向云端确认。';
       }
       if (approved.length > 0) {
         void this.hydrateNearbyPhotos(approved.slice(0, NEARBY_VISIBLE_PHOTO_COUNT), refreshGeneration, 'high');
         if (approved.slice(0, NEARBY_VISIBLE_PHOTO_COUNT).every((card: FoodCard): boolean =>
           card.primaryPhotoResolved === true) && snapshot.stale !== true) {
-          NearbyPreloadService.prefetchNextPage(context, location, this.nextPageToken);
+          NearbyPreloadService.prefetchNextPage(context, this.selectedCategory, this.nextPageToken);
         }
       }
       const firstCard: FoodCard | undefined = approved[0];
@@ -412,28 +392,26 @@ export struct NearbyPage {
   }
 
   private async loadMore(): Promise<void> {
-    const location: RoundedLocation | undefined = this.latestLocation;
-    if (this.loading || this.loadingMore || this.nextPageToken.length === 0 || location === undefined) {
+    if (this.loading || this.loadingMore || this.nextPageToken.length === 0) {
       return;
     }
     const pageToken: string = this.nextPageToken;
     const refreshGeneration: number = this.refreshGeneration;
     this.loadingMore = true;
-    this.status = '正在加载更多附近实拍推荐…';
+    this.status = '正在加载更多公开推荐…';
     try {
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      const response = await NearbyPreloadService.loadNextPage(context, location, pageToken);
+      const response = await NearbyPreloadService.loadNextPage(context, this.selectedCategory, pageToken);
       if (this.refreshGeneration !== refreshGeneration) return;
       const incoming: Array<FoodCard> = this.approvedCards(response.cards);
       const merged: Array<NearbyCardEntry> = this.mergeCards(this.cards, incoming);
       this.cards = merged;
       this.nextPageToken = response.nextPageToken;
-      this.district = response.district || location.district;
       this.status = this.nearbyStatus(merged.length, this.nextPageToken);
       if (incoming.length > 0) {
         void this.hydrateNearbyPhotos(incoming.slice(0, 2), refreshGeneration, 'normal');
       }
-      NearbyPreloadService.prefetchNextPage(context, location, this.nextPageToken);
+      NearbyPreloadService.prefetchNextPage(context, this.selectedCategory, this.nextPageToken);
     } catch (error) {
       if (this.refreshGeneration !== refreshGeneration) return;
       this.status = '更多推荐加载失败：' + errorText(error as ErrorDetail) + '；上滑可重试。';
@@ -459,8 +437,20 @@ export struct NearbyPage {
       .border({ width: this.selectedCategory === option.value ? 0 : 1, color: $r('app.color.line') })
       .borderRadius(24)
       .onClick((): void => {
+        if (this.selectedCategory === option.value) return;
         this.finishFirstCover('cancelled');
+        this.refreshGeneration += 1;
+        this.loading = false;
+        this.loadingMore = false;
+        this.refreshQueued = false;
+        this.refreshQueuedForRemoteSync = false;
+        this.pendingServiceCard = undefined;
+        this.pendingServiceCardRemoteSync = false;
+        this.cards = [];
+        this.nextPageToken = '';
         this.selectedCategory = option.value;
+        NearbyPreloadService.invalidate();
+        void this.refresh(false, true);
       })
   }
 
@@ -501,7 +491,7 @@ export struct NearbyPage {
     Column({ space: 12 }) {
       Text(this.loading ? '正在准备推荐' : '还没有符合条件的推荐')
         .fontSize(19).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'))
-      Text(this.loading ? '正在复用最近的位置或读取一次定位，并加载附近推荐。' : '推荐只展示发布者上传的实拍图；你也可以先发布一张带图卡片。')
+      Text(this.loading ? '正在加载公开推荐，无需定位或登录。' : '当前分类暂无公开卡片，可切换“全部”或刷新重试。')
         .fontSize(13).lineHeight(20).fontColor($r('app.color.muted')).textAlign(TextAlign.Center).width('82%')
       Button(this.loading ? '正在更新' : '刷新推荐').height(48).enabled(!this.loading)
         .backgroundColor($r('app.color.accent_action')).fontColor($r('app.color.on_accent_action'))
@@ -516,8 +506,8 @@ export struct NearbyPage {
     Column({ space: 14 }) {
       Row() {
         Column({ space: 4 }) {
-          Text('附近推荐').fontSize(26).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'))
-          Text(`${this.district} · 20 km 内实拍分享`).fontSize(13).fontColor($r('app.color.leaf'))
+          Text('全部推荐').fontSize(26).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'))
+          Text('公开美食分享 · 不限距离').fontSize(13).fontColor($r('app.color.leaf'))
         }.alignItems(HorizontalAlign.Start)
         Blank()
         Button(this.loading ? '更新中' : '刷新').enabled(!this.loading).height(48).fontSize(14)
@@ -525,7 +515,7 @@ export struct NearbyPage {
           .onClick((): void => this.retryPhotosAndRefresh())
       }.width('100%')
 
-      Text('分类浏览 · 附近实拍推荐').fontSize(12)
+      Text('分类浏览 · 全部公开推荐').fontSize(12)
         .fontColor($r('app.color.muted')).width('100%')
 
       Scroll() {
@@ -568,6 +558,12 @@ export struct NearbyPage {
         .onReachEnd((): void => {
           this.loadMore();
         })
+      }
+      if (this.nextPageToken.length > 0) {
+        Button(this.loadingMore ? '正在加载…' : '加载更多推荐')
+          .width('100%').height(48).enabled(!this.loading && !this.loadingMore)
+          .fontColor($r('app.color.accent_action')).backgroundColor($r('app.color.accent_soft'))
+          .onClick((): void => { void this.loadMore(); });
       }
     }
     .width('100%').height('100%').padding({

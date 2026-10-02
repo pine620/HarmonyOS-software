@@ -405,7 +405,7 @@ export struct PermissionsPrivacyPage {
               .fontColor($r('app.color.ink')).width('100%')
             Text(this.permissionStatus).fontSize(14).fontWeight(FontWeight.Medium)
               .fontColor($r('app.color.leaf')).width('100%')
-            Text('仅在打开推荐或发布时请求一次精确位置，不会持续定位。')
+            Text('浏览推荐无需定位；仅在发布时按需请求一次精确位置，不会持续定位。')
               .fontSize(13).lineHeight(20).fontColor($r('app.color.muted')).width('100%')
             Button(this.loading ? '正在刷新…' : '刷新权限状态')
               .width('100%').height(48).enabled(!this.loading)

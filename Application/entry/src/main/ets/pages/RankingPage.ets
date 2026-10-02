@@ -1,7 +1,7 @@
 import { common } from '@kit.AbilityKit';
-import { FoodCard, FoodCategory, RoundedLocation, UserProfile } from '../model/CloudContracts';
+import { FoodCard, FoodCategory, NearbyCardsRequest, NearbyCardsResponse, RoundedLocation, UserProfile } from '../model/CloudContracts';
 import { CardRepository } from '../repository/CardRepository';
-import { NearbyPreloadService, NearbySnapshot } from '../service/NearbyPreloadService';
+import { LocationService } from '../service/LocationService';
 import { FriendRankingPreloadService } from '../service/FriendRankingPreloadService';
 import { AuthService } from '../service/AuthService';
 import { categoryLabel, coverFor } from '../components/FoodCover';
@@ -216,10 +216,14 @@ export struct RankingPage {
     this.nearbyStatus = '正在获取一次精确位置与附近评分…';
     try {
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      const snapshot: NearbySnapshot = await NearbyPreloadService.load(context, forceRefresh);
-      const location: RoundedLocation = snapshot.location;
+      // The optional nearby board keeps its legacy geographic query separate
+      // from the homepage's coordinate-free public feed cache.
+      const location: RoundedLocation = await LocationService.getPreciseRoundedLocationFast(context, forceRefresh);
+      const request: NearbyCardsRequest = {
+        latE3: location.latE3, lonE3: location.lonE3, pageToken: '', pageSize: 20
+      };
+      const response: NearbyCardsResponse = await this.repository.listNearbyMetadata(context, request);
       this.district = location.district;
-      const response = snapshot.response;
       this.nearbyCards = response.cards.filter((card: FoodCard): boolean =>
         card.status === 'APPROVED' && card.distanceKm <= 20.0 && card.photoPath.length > 0);
       this.district = response.district || location.district;

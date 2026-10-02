@@ -267,7 +267,7 @@ export class AuthService {
     throw new Error('登录状态已失效，请重新登录。');
   }
 
-  static async restore(context: common.Context): Promise<UserProfile | undefined> {
+  static async restore(context: common.Context, allowHuaweiRestore: boolean = true): Promise<UserProfile | undefined> {
     AuthSessionStore.initialize(context);
     try {
       const currentUser = await AuthSessionStore.getCurrentUser();
@@ -276,7 +276,9 @@ export class AuthService {
         AuthService.authMode = 'email';
         return await AuthService.loadProfile(context);
       }
-      return await AuthService.login(context, false);
+      if (allowHuaweiRestore) return await AuthService.login(context, false);
+      AuthService.clearLocalSession();
+      return undefined;
     } catch (_error) {
       AuthService.clearLocalSession();
       return undefined;

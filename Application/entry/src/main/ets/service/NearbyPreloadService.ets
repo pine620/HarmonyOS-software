@@ -1,9 +1,8 @@
 import { common } from '@kit.AbilityKit';
-import { NearbyCardsRequest, NearbyCardsResponse, RoundedLocation, UserProfile } from '../model/CloudContracts';
+import { PublicCardsRequest, NearbyCardsResponse, UserProfile } from '../model/CloudContracts';
 import { CardRepository } from '../repository/CardRepository';
 import { AuthService } from './AuthService';
 import { CloudGateway } from './CloudGateway';
-import { LocationService } from './LocationService';
 import { NearbyPerformanceTrace } from './NearbyPerformanceTrace';
 import { PrivacyStore } from './PrivacyStore';
 import { MediaRequestGuard } from './PhotoUploadService';
@@ -22,12 +21,13 @@ interface NextPageCacheEntry {
 
 interface NearbyRequestScope {
   uid: string;
+  category: string;
   generation: number;
 }
 
-/** A short-lived, memory-only nearby result shared by app startup and the page. */
+/** A short-lived public feed snapshot shared by app startup and the page. */
 export interface NearbySnapshot {
-  location: RoundedLocation;
+  category: string;
   response: NearbyCardsResponse;
   fetchedAt: number;
   stale?: boolean;
@@ -38,8 +38,8 @@ function recoverableListFailure(error: Error): boolean {
 }
 
 /**
- * Prepares nearby content after the user has already consented and granted
- * location. It never requests permission, persists a location, or schedules
+ * Prepares all public recommendations after privacy consent. It never
+ * requests location permission, persists coordinates, or schedules
  * periodic or background work.
  */
 export class NearbyPreloadService {
@@ -55,6 +55,7 @@ export class NearbyPreloadService {
   private static cacheGeneration: number = 0;
   private static scopeGeneration: number = 0;
   private static cacheOwner: string = '';
+  private static cacheCategory: string = 'all';
 
   static invalidate(): void {
     NearbyPreloadService.cacheGeneration += 1;
@@ -70,34 +71,35 @@ export class NearbyPreloadService {
   static clear(): void {
     NearbyPreloadService.invalidate();
     NearbyPreloadService.cacheOwner = '';
-    LocationService.clearCachedRoundedLocation();
   }
 
-  private static captureScope(): NearbyRequestScope {
+  private static viewerScopeId(): string {
     const profile: UserProfile | undefined = AuthService.profile();
-    if (profile === undefined || !CloudGateway.hasSession()) throw new Error('请先登录后加载附近推荐。');
-    if (NearbyPreloadService.cacheOwner !== profile.uid) {
+    return profile !== undefined && CloudGateway.hasSession() ? profile.uid : 'guest';
+  }
+
+  private static captureScope(category: string = NearbyPreloadService.cacheCategory): NearbyRequestScope {
+    const uid: string = NearbyPreloadService.viewerScopeId();
+    if (NearbyPreloadService.cacheOwner !== uid || NearbyPreloadService.cacheCategory !== category) {
       NearbyPreloadService.clear();
-      NearbyPreloadService.cacheOwner = profile.uid;
+      NearbyPreloadService.cacheOwner = uid;
+      NearbyPreloadService.cacheCategory = category;
     }
-    return { uid: profile.uid, generation: NearbyPreloadService.scopeGeneration };
+    return { uid, category, generation: NearbyPreloadService.scopeGeneration };
   }
 
   private static isCurrentScope(scope: NearbyRequestScope): boolean {
-    const profile: UserProfile | undefined = AuthService.profile();
     return scope.generation === NearbyPreloadService.scopeGeneration &&
-      CloudGateway.hasSession() && profile !== undefined && profile.uid === scope.uid;
+      scope.uid === NearbyPreloadService.viewerScopeId() && scope.category === NearbyPreloadService.cacheCategory;
   }
 
-  private static async ensureEligible(context: common.UIAbilityContext, scope: NearbyRequestScope,
-    requireLocation: boolean = true, invalidateOnDenial: boolean = true): Promise<void> {
-    if (!NearbyPreloadService.isCurrentScope(scope)) throw new Error('附近请求已失效。');
+  private static async ensureEligible(context: common.UIAbilityContext, scope: NearbyRequestScope): Promise<void> {
+    if (!NearbyPreloadService.isCurrentScope(scope)) throw new Error('推荐请求已失效。');
     const consent: boolean = await PrivacyStore.hasConsent(context);
-    const locationAllowed: boolean = !requireLocation || await LocationService.hasFullLocationPermission(context);
-    if (!NearbyPreloadService.isCurrentScope(scope)) throw new Error('附近请求已失效。');
-    if (!consent || !locationAllowed) {
-      if (invalidateOnDenial) NearbyPreloadService.clear();
-      throw new Error(!consent ? '请先同意隐私协议。' : '定位权限未完整授权。');
+    if (!NearbyPreloadService.isCurrentScope(scope)) throw new Error('推荐请求已失效。');
+    if (!consent) {
+      NearbyPreloadService.clear();
+      throw new Error('请先同意隐私协议。');
     }
   }
 
@@ -161,49 +163,47 @@ export class NearbyPreloadService {
     return undefined;
   }
 
-  private static staleSnapshotFor(location: RoundedLocation): NearbySnapshot | undefined {
+  private static staleSnapshotFor(category: string): NearbySnapshot | undefined {
     const cached: NearbySnapshot | undefined = NearbyPreloadService.snapshotCache;
     if (cached === undefined || cached.fetchedAt + NEARBY_SNAPSHOT_STALE_MS <= Date.now() ||
-      cached.location.latE3 !== location.latE3 || cached.location.lonE3 !== location.lonE3) return undefined;
-    return { location: cached.location, response: cached.response, fetchedAt: cached.fetchedAt, stale: true };
+      cached.category !== category) return undefined;
+    return { category: cached.category, response: cached.response, fetchedAt: cached.fetchedAt, stale: true };
   }
 
-  private static nextPageRequestKeyFor(location: RoundedLocation, pageToken: string): string {
-    return location.latE3.toString() + ':' + location.lonE3.toString() + ':' + pageToken;
+  private static nextPageRequestKeyFor(category: string, pageToken: string): string {
+    return category + ':' + pageToken;
   }
 
   private static async requestSnapshot(context: common.UIAbilityContext,
-    forceRefresh: boolean, scope: NearbyRequestScope, requestPermission: boolean): Promise<NearbySnapshot> {
+    forceRefresh: boolean, scope: NearbyRequestScope): Promise<NearbySnapshot> {
     const generation: number = NearbyPreloadService.cacheGeneration;
     const traceTaskId: number = NearbyPerformanceTrace.start('shike.nearby.snapshot_load');
     try {
-      const location: RoundedLocation = await LocationService.getPreciseRoundedLocationFast(
-        context, forceRefresh, requestPermission);
       await NearbyPreloadService.ensureEligible(context, scope);
-      const request: NearbyCardsRequest = {
-        latE3: location.latE3,
-        lonE3: location.lonE3,
+      const request: PublicCardsRequest = {
+        scope: 'all',
+        category: scope.category,
         pageToken: '',
         pageSize: NEARBY_PAGE_SIZE
       };
       let response: NearbyCardsResponse;
       try {
-        response = await NearbyPreloadService.repository.listNearbyMetadata(context, request,
+        response = await NearbyPreloadService.repository.listRecommendationsMetadata(request,
           (): boolean => NearbyPreloadService.isCurrentScope(scope));
       } catch (error) {
         await NearbyPreloadService.ensureEligible(context, scope);
         const stale: NearbySnapshot | undefined = !forceRefresh && generation === NearbyPreloadService.cacheGeneration &&
-          error instanceof Error && recoverableListFailure(error) ? NearbyPreloadService.staleSnapshotFor(location) : undefined;
+          error instanceof Error && recoverableListFailure(error) ? NearbyPreloadService.staleSnapshotFor(scope.category) : undefined;
         if (stale !== undefined) {
           NearbyPerformanceTrace.record('snapshot', 'stale');
           return stale;
         }
         if (error instanceof Error) throw error;
-        throw new Error('附近推荐加载失败。');
+        throw new Error('推荐加载失败。');
       }
       await NearbyPreloadService.ensureEligible(context, scope);
-      if (generation !== NearbyPreloadService.cacheGeneration) throw new Error('附近请求已失效。');
-      const snapshot: NearbySnapshot = { location, response, fetchedAt: Date.now() };
+      if (generation !== NearbyPreloadService.cacheGeneration) throw new Error('推荐请求已失效。');
+      const snapshot: NearbySnapshot = { category: scope.category, response, fetchedAt: Date.now() };
       if (generation === NearbyPreloadService.cacheGeneration) {
         NearbyPreloadService.cacheSnapshot(snapshot);
         NearbyPreloadService.clearNextPageCache();
@@ -218,9 +218,9 @@ export class NearbyPreloadService {
   }
 
   static async load(context: common.UIAbilityContext, forceRefresh: boolean = false,
-    requestPermission: boolean = true): Promise<NearbySnapshot> {
-    const scope: NearbyRequestScope = NearbyPreloadService.captureScope();
-    await NearbyPreloadService.ensureEligible(context, scope, false);
+    category: string = 'all'): Promise<NearbySnapshot> {
+    const scope: NearbyRequestScope = NearbyPreloadService.captureScope(category);
+    await NearbyPreloadService.ensureEligible(context, scope);
     const cached: NearbySnapshot | undefined = NearbyPreloadService.freshSnapshot();
     if (!forceRefresh && cached !== undefined) {
       await NearbyPreloadService.ensureEligible(context, scope);
@@ -241,10 +241,10 @@ export class NearbyPreloadService {
         // Manual refresh must still make a new request.
       }
     }
-    if (!NearbyPreloadService.isCurrentScope(scope)) throw new Error('附近请求已失效。');
+    if (!NearbyPreloadService.isCurrentScope(scope)) throw new Error('推荐请求已失效。');
     NearbyPerformanceTrace.record('snapshot', 'miss');
     const request: Promise<NearbySnapshot> = NearbyPreloadService.requestSnapshot(
-      context, forceRefresh, scope, requestPermission);
+      context, forceRefresh, scope);
     NearbyPreloadService.snapshotRequest = request;
     try {
       return await request;
@@ -275,9 +275,8 @@ export class NearbyPreloadService {
   private static async warmNearbyIfEligible(context: common.UIAbilityContext): Promise<void> {
     try {
       const scope: NearbyRequestScope = NearbyPreloadService.captureScope();
-      // An ineligible startup warm-up must not cancel a visible permission prompt.
-      await NearbyPreloadService.ensureEligible(context, scope, true, false);
-      const snapshot: NearbySnapshot = await NearbyPreloadService.load(context, false, false);
+      await NearbyPreloadService.ensureEligible(context, scope);
+      const snapshot: NearbySnapshot = await NearbyPreloadService.load(context, false, scope.category);
       await NearbyPreloadService.ensureEligible(context, scope);
       await NearbyPreloadService.repository.hydrateNearbyPrimaryPhotoUrls(
         context, snapshot.response.cards, 0, NEARBY_PRELOAD_PRIMARY_PHOTO_COUNT, 'high',
@@ -287,21 +286,21 @@ export class NearbyPreloadService {
     }
   }
 
-  private static async requestNextPage(context: common.UIAbilityContext, location: RoundedLocation,
+  private static async requestNextPage(context: common.UIAbilityContext,
     pageToken: string, requestKey: string, scope: NearbyRequestScope): Promise<NearbyCardsResponse> {
     const generation: number = NearbyPreloadService.cacheGeneration;
     const traceTaskId: number = NearbyPerformanceTrace.start('shike.nearby.next_page_prefetch');
     try {
-      const request: NearbyCardsRequest = {
-        latE3: location.latE3,
-        lonE3: location.lonE3,
+      const request: PublicCardsRequest = {
+        scope: 'all',
+        category: scope.category,
         pageToken,
         pageSize: NEARBY_PAGE_SIZE
       };
-      const response: NearbyCardsResponse = await NearbyPreloadService.repository.listNearbyMetadata(context, request,
+      const response: NearbyCardsResponse = await NearbyPreloadService.repository.listRecommendationsMetadata(request,
         (): boolean => NearbyPreloadService.isCurrentScope(scope));
       await NearbyPreloadService.ensureEligible(context, scope);
-      if (generation !== NearbyPreloadService.cacheGeneration) throw new Error('附近请求已失效。');
+      if (generation !== NearbyPreloadService.cacheGeneration) throw new Error('推荐请求已失效。');
       if (generation === NearbyPreloadService.cacheGeneration) {
         const entry: NextPageCacheEntry = {
           requestKey,
@@ -316,11 +315,11 @@ export class NearbyPreloadService {
     }
   }
 
-  static async loadNextPage(context: common.UIAbilityContext, location: RoundedLocation,
+  static async loadNextPage(context: common.UIAbilityContext, category: string,
     pageToken: string): Promise<NearbyCardsResponse> {
-    const scope: NearbyRequestScope = NearbyPreloadService.captureScope();
+    const scope: NearbyRequestScope = NearbyPreloadService.captureScope(category);
     await NearbyPreloadService.ensureEligible(context, scope);
-    const requestKey: string = NearbyPreloadService.nextPageRequestKeyFor(location, pageToken);
+    const requestKey: string = NearbyPreloadService.nextPageRequestKeyFor(category, pageToken);
     const cached: NextPageCacheEntry | undefined = NearbyPreloadService.nextPageCache;
     if (cached !== undefined && cached.requestKey === requestKey && cached.expiresAt > Date.now()) {
       NearbyPerformanceTrace.record('next_page', 'hit');
@@ -335,7 +334,7 @@ export class NearbyPreloadService {
     }
     NearbyPerformanceTrace.record('next_page', 'miss');
     const request: Promise<NearbyCardsResponse> = NearbyPreloadService.requestNextPage(
-      context, location, pageToken, requestKey, scope);
+      context, pageToken, requestKey, scope);
     NearbyPreloadService.nextPageRequest = request;
     NearbyPreloadService.nextPageRequestKey = requestKey;
     try {
@@ -348,8 +347,8 @@ export class NearbyPreloadService {
     }
   }
 
-  static prefetchNextPage(context: common.UIAbilityContext, location: RoundedLocation, pageToken: string): void {
+  static prefetchNextPage(context: common.UIAbilityContext, category: string, pageToken: string): void {
     if (pageToken.length === 0) return;
-    void NearbyPreloadService.loadNextPage(context, location, pageToken).catch((): void => {});
+    void NearbyPreloadService.loadNextPage(context, category, pageToken).catch((): void => {});
   }
 }

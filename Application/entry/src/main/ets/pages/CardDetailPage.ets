@@ -9,7 +9,7 @@ import { categoryLabel } from '../components/FoodCover';
 import { AuthService } from '../service/AuthService';
 import { CardVisitStore } from '../service/CardVisitStore';
 import { cardPriceText } from '../model/CardPrice';
-import { MediaServiceUnavailableError } from '../service/CloudGateway';
+import { CloudGateway, MediaServiceUnavailableError } from '../service/CloudGateway';
 import { MediaPriority, PhotoUploadService } from '../service/PhotoUploadService';
 import { NearbyPerformanceTrace, PreloadMetricState } from '../service/NearbyPerformanceTrace';
 import { cardAppLink } from '../service/CardAppLink';
@@ -43,6 +43,8 @@ function fallbackPhoto(card: FoodCard): CardPhoto {
 export struct CardDetailPage {
   @State detailWidthVp: number = 0;
   @Prop card: FoodCard = emptyCard();
+  @Prop @Watch('onSessionChanged') loggedIn: boolean = false;
+  onRequireLogin: (message: string) => void = (_message: string): void => {};
   onShareToFriend: (card: FoodCard) => void = (_card: FoodCard): void => {};
   @State detailPhotos: Array<CardPhoto> = [];
   @State photoFailures: Array<number> = [];
@@ -101,6 +103,17 @@ export struct CardDetailPage {
     this.detailGeneration += 1;
     this.finishPrimaryImage('cancelled');
     this.stopKnockShare('');
+  }
+
+  private onSessionChanged(): void {
+    void this.loadDetail();
+  }
+
+  private requireAccount(): boolean {
+    if (this.loggedIn && AuthService.profile() !== undefined && CloudGateway.hasSession()) return true;
+    this.closeActionMenu();
+    this.onRequireLogin('登录后可点赞、收藏、评论和与好友分享。');
+    return false;
   }
 
   private finishPrimaryImage(state: PreloadMetricState): void {
@@ -488,6 +501,7 @@ export struct CardDetailPage {
   }
 
   private shareToFriend(): void {
+    if (!this.requireAccount()) return;
     this.closeActionMenu();
     this.onShareToFriend(this.card);
   }
@@ -499,6 +513,7 @@ export struct CardDetailPage {
   }
 
   private async report(): Promise<void> {
+    if (!this.requireAccount()) return;
     try {
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
       await this.repository.report(context, this.card.id, this.reportReason);
@@ -510,6 +525,7 @@ export struct CardDetailPage {
   }
 
   private async toggleCardAction(action: CardActionType): Promise<void> {
+    if (!this.requireAccount()) return;
     if (this.interactionBusy) return;
     this.interactionBusy = true;
     try {
@@ -527,6 +543,7 @@ export struct CardDetailPage {
   }
 
   private replyTo(comment: CardComment): void {
+    if (!this.requireAccount()) return;
     if (comment.deleted) {
       this.status = '该评论已删除，不能回复。';
       return;
@@ -550,6 +567,7 @@ export struct CardDetailPage {
   }
 
   private async publishComment(): Promise<void> {
+    if (!this.requireAccount()) return;
     if (this.commentBusy) return;
     if (this.commentInput.trim().length === 0) {
       this.status = '请输入评论内容后再发布。';
@@ -572,6 +590,7 @@ export struct CardDetailPage {
   }
 
   private async toggleCommentReaction(comment: CardComment, reaction: CommentReactionType): Promise<void> {
+    if (!this.requireAccount()) return;
     if (this.commentBusy || comment.deleted) return;
     this.commentBusy = true;
     try {

@@ -195,7 +195,9 @@ export class CloudGateway {
         raw = await CloudGateway.invokeMedia('upload-card-photo', envelope, mediaGeneration);
         break;
       case 'get-public-media':
-        raw = await CloudGateway.invokeMedia('get-public-media', envelope, mediaGeneration);
+        raw = authenticated
+          ? await CloudGateway.invokeMedia('get-public-media', envelope, mediaGeneration)
+          : await (CloudGateway.serviceObject as ShikeService).getPublicMedia(envelope);
         break;
       case 'publish-card':
       case 'publish-cards':

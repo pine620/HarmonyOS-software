@@ -59,8 +59,8 @@ CloudProgram/
 | 文件 | 职责 |
 | --- | --- |
 | `entryability/EntryAbility.ets` | 主 Ability 生命周期、窗口与页加载、Want/分享入口、后台清理及接续 |
-| `Index.ets` | 主容器、隐私/登录门槛、五页签、Navigation 路由、待处理分享/通知入口 |
-| `NearbyPage.ets` | 附近推荐、分类、分页、封面与预加载结果 |
+| `Index.ets` | 主容器、隐私门槛、游客浏览与按需登录、五页签、Navigation 路由、待处理分享/通知入口 |
+| `NearbyPage.ets` | 不依赖定位的全部公开推荐、云端分类、分页、封面与预加载结果 |
 | `CreateCardPage.ets` | 手动录入商品/价格/评分、照片准备、定位、权利声明与发布 |
 | `CardDetailPage.ets` | 详情/图片/评价、评论回复、点赞收藏、举报删除及系统/近场分享生命周期 |
 | `ShareCardPage.ets` | 单独的卡片分享页面和公开分享展示 |
@@ -83,7 +83,7 @@ CloudProgram/
 
 | 文件 | 职责 |
 | --- | --- |
-| `repository/CardRepository.ets` | 资料、卡片发布、附近/榜单、详情/互动、举报/删除业务封装 |
+| `repository/CardRepository.ets` | 公开推荐/游客详情、卡片发布、附近/榜单、互动、举报/删除业务封装 |
 | `repository/FriendRepository.ets` | 用户搜索/资料、好友关系、私信与群聊业务封装 |
 | `repository/NotificationRepository.ets` | 通知列表、已读、全部已读和目标解析 |
 | `service/AuthService.ets` | 邮箱登录、华为兼容授权、绑定、退出/切换与销户流程协调 |
@@ -92,8 +92,8 @@ CloudProgram/
 | `service/CloudGateway.ets` | Cloud Foundation 初始化、方法分发、业务信封、响应错误处理与媒体故障隔离 |
 | `service/LocationService.ets` | 双位置权限、单次定位、E3 舍入、行政区反查和短时定位缓存 |
 | `service/ImagePreparationService.ets` | JPEG 重编码、缩放、去 EXIF/GPS、摘要计算与头像裁剪 |
-| `service/PhotoUploadService.ets` | 鉴权媒体上传/读取、Base64 到本机文件、文件缓存与下载队列 |
-| `service/NearbyPreloadService.ets` | 附近首屏/下一页复用、快照/旧数据窗口、图片预热与代次隔离 |
+| `service/PhotoUploadService.ets` | 鉴权媒体上传、游客/账号媒体读取、Base64 到本机文件、文件缓存与下载队列 |
+| `service/NearbyPreloadService.ets` | 公开推荐首屏/下一页复用、快照/旧数据窗口、图片预热、账号/分类与代次隔离 |
 | `service/NearbyPerformanceTrace.ets` | 附近/详情的固定指标与 trace，供人工采样 |
 | `service/FriendRankingPreloadService.ets` | 好友榜短时缓存、请求复用与关系 revision 失效 |
 | `service/CardVisitStore.ets` | 按账号保存访问历史与数量控制 |

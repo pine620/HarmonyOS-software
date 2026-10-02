@@ -63,6 +63,8 @@ String 字段有 200 字符上限，正文/长链接采用 Text。UserProfile.ni
 
 部署 DB 会由 IDE 下载/更新 schema。若对象在控制台改动，按平台导出并对齐工程快照；本项目端侧通过云对象访问业务数据，不能为解决 schema 差异而开放直接读写。官方明确已有字段类型等不能直接改；有数据的对象/存储区不采用“删除重建”作为修复方案。参见[部署云数据库](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/agc-harmonyos-clouddev-deploydatabase)。
 
+游客首页需要将 FoodCard 的新增索引 `status_createdAt_desc`、`status_category_createdAt` 同步部署并确认生效，保留所有已有数据和索引。对象权限仍只开放 Administrator，由云对象筛选 APPROVED 数据，不开放客户端直接读取。
+
 ## 3. 准备云对象环境变量
 
 环境变量只放入对应 AGC 云对象配置，秘密使用秘密变量。以下按名称列出必需配置，值由管理员在控制台填写或通过安全渠道交接；仓库不保存环境文件。接手已有后端时先核对当前配置，不覆盖已有的完整变量集。
@@ -113,6 +115,8 @@ String 字段有 200 字符上限，正文/长链接采用 Text。UserProfile.ni
 6. 按根 README 生成签名、注册模拟器凭据，由成员验证邮箱登录、图片、附近与发布；控制台部署成功不等于端云联调已成功。
 
 批量 `cloudfunctions > Deploy Cloud Functions`会部署目录内全部对象；`CloudProgram > Deploy Cloud Program`还涉及整套云资源。团队已有数据时优先有范围的单对象部署。**Sync '对象' / Sync Cloud Functions / Sync Cloud Program 是从云端下载，Overwrite 会覆盖本地源码并生成备份，不是上传发布。**确需同步时先保存 Git 改动、对比云端版本，再选择 Skip/Overwrite；同步 DB 当前支持对象类型，不是业务数据备份。
+
+本次游客首页改动只需更新上述 FoodCard 索引并部署 `shike-service`；`shike-media` 继续提供已有的内部签名读取。首页复用 `listNearbyCards` 方法，业务信封 payload 增加 `scope: 'all'`、`category`、`pageToken`、`pageSize`，不传坐标；未改导出方法或代理签名，无需重生成调用接口。缺少 scope 的旧请求继续走原来的登录及附近查询。游客详情只返回公开卡片，游客图片读取校验所属公开卡片或当前公开头像；发布、互动、好友和个人数据接口仍要求有效账号。
 
 以上操作参见官方[部署云对象](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/agc-harmonyos-clouddev-deploycloudobj)、[生成调用代理](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/agc-harmonyos-clouddev-invokecloudobj)、[整工程部署](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/agc-harmonyos-clouddev-deploy)与[同步云端代码](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/agc-harmonyos-clouddev-sync)。
 

@@ -256,8 +256,9 @@ export class PhotoUploadService {
       if (mayContinue !== undefined && !await mayContinue()) return '';
       if (generation !== PhotoUploadService.cacheGeneration) return '';
       try {
-        const media: PublicMediaResponse = await CloudGateway.callAuthenticated<PublicMediaResponse>(
-          'get-public-media', request);
+        const media: PublicMediaResponse = CloudGateway.hasSession()
+          ? await CloudGateway.callAuthenticated<PublicMediaResponse>('get-public-media', request)
+          : await CloudGateway.callPublic<PublicMediaResponse>('get-public-media', request);
         if (mayContinue !== undefined && !await mayContinue()) return '';
         if (generation !== PhotoUploadService.cacheGeneration) return '';
         return PhotoUploadService.writeCachedMedia(context, filePath, media);

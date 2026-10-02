@@ -3,7 +3,7 @@ import {
   CardActionResponse, CardComment, CardIdRequest, CardPhoto, CommentReactionResponse, CreateCardCommentRequest,
   DeleteCardCommentRequest, EmptyRequest, FoodCard, FriendRankingsResponse, MyCardsResponse, NearbyCardsRequest, NearbyCardsResponse,
   OperationResponse, PrepareCardPhotoRequest, PrepareCardPhotoResponse, PublishCardRequest,
-  PublishCardResponse, ReceivedCommentItem, ReceivedCommentsRequest, ReceivedCommentsResponse, ReportCardRequest,
+  PublishCardResponse, PublicCardsRequest, ReceivedCommentItem, ReceivedCommentsRequest, ReceivedCommentsResponse, ReportCardRequest,
   ToggleCardActionRequest, ToggleCommentReactionRequest
 } from '../model/CloudContracts';
 import { AuthService } from '../service/AuthService';
@@ -17,6 +17,20 @@ import { MediaPriority, MediaRequestGuard, PhotoUploadService } from '../service
 const NEARBY_MEDIA_URL_CONCURRENCY: number = 2;
 
 export class CardRepository {
+  async listRecommendationsMetadata(request: PublicCardsRequest,
+    mayContinue: () => boolean = (): boolean => true): Promise<NearbyCardsResponse> {
+    if (!mayContinue()) throw new Error('推荐请求已失效。');
+    const traceTaskId: number = NearbyPerformanceTrace.start('shike.nearby.cloud_list');
+    try {
+      // Reuse the generated method; scope=all selects the public feed server-side.
+      const response: NearbyCardsResponse = await CloudGateway.callPublic<NearbyCardsResponse>('list-nearby-cards', request);
+      if (!mayContinue()) throw new Error('推荐请求已失效。');
+      return response;
+    } finally {
+      NearbyPerformanceTrace.finish('shike.nearby.cloud_list', traceTaskId);
+    }
+  }
+
   private async resolvePhotoUrl(context: common.Context, photo: CardPhoto,
     priority: MediaPriority = 'normal', mayContinue?: MediaRequestGuard): Promise<void> {
     if (photo.path.length === 0 || photo.bucket.length === 0) {
@@ -194,11 +208,14 @@ export class CardRepository {
   }
 
   async detail(context: common.Context, cardId: string): Promise<FoodCard> {
-    await AuthService.ensureSession(context);
     const request: CardIdRequest = { cardId };
     const traceTaskId: number = NearbyPerformanceTrace.start('shike.detail.metadata');
     try {
-      return await CloudGateway.callAuthenticated<FoodCard>('get-card-detail', request);
+      if (AuthService.profile() !== undefined && CloudGateway.hasSession()) {
+        await AuthService.ensureSession(context);
+        return await CloudGateway.callAuthenticated<FoodCard>('get-card-detail', request);
+      }
+      return await CloudGateway.callPublic<FoodCard>('get-card-detail', request);
     } finally {
       NearbyPerformanceTrace.finish('shike.detail.metadata', traceTaskId);
     }

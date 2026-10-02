@@ -49,6 +49,7 @@ struct Index {
   @State privacyChecked: boolean = false;
   @State showFullPrivacy: boolean = false;
   @State loggedIn: boolean = false;
+  @State loginRequested: boolean = false;
   @State loginBusy: boolean = false;
   @State loginMessage: string = '';
   @State emailAddress: string = '';
@@ -104,6 +105,29 @@ struct Index {
     }
   }
 
+  onBackPress(): boolean {
+    if (!this.loginRequested) return false;
+    if (this.registerDialogVisible) {
+      this.closeRegisterDialog();
+    } else {
+      this.continueBrowsing();
+    }
+    return true;
+  }
+
+  private requestLogin(message: string = '登录后可发布、收藏、评论和使用好友功能。'): void {
+    if (this.loggedIn) return;
+    this.loginMessage = message;
+    this.loginRequested = true;
+  }
+
+  private continueBrowsing(): void {
+    if (this.loginBusy || this.codeBusy || this.registerBusy || this.registerCodeBusy) return;
+    this.registerDialogVisible = false;
+    this.loginRequested = false;
+    this.loginMessage = '';
+  }
+
   private warmNearby(context: common.UIAbilityContext): void {
     void NearbyPreloadService.warmIfEligible(context);
   }
@@ -114,7 +138,7 @@ struct Index {
       this.privacyAccepted = await PrivacyStore.hasConsent(context);
       this.privacyChecked = this.privacyAccepted;
       if (this.privacyAccepted) {
-        this.profile = await AuthService.restore(context);
+        this.profile = await AuthService.restore(context, false);
         this.loggedIn = this.profile !== undefined;
         if (this.profile !== undefined) {
           PhotoUploadService.setCacheOwner(this.profile.uid);
@@ -185,8 +209,10 @@ struct Index {
   private async finishLogin(context: common.UIAbilityContext, profile: UserProfile): Promise<void> {
     this.profile = profile;
     this.loggedIn = true;
+    this.loginRequested = false;
     PhotoUploadService.setCacheOwner(profile.uid);
-    this.warmNearby(context);
+    NearbyPreloadService.clear();
+    this.recommendationRevision += 1;
     FriendRankingPreloadService.warm(context, profile.uid, this.friendRelationshipRevision);
     // Push and service-card registration are opt-in enhancements. They must
     // never delay the post-authentication transition to the home page.
@@ -334,10 +360,13 @@ struct Index {
     const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
     PhotoUploadService.clearCachedMedia(context);
     this.loggedIn = false;
+    this.loginRequested = false;
     this.profile = undefined;
     this.emailAddress = '';
     this.verifyCode = '';
     this.loginMessage = message;
+    this.selectedTab = 0;
+    this.recommendationRevision += 1;
     ContinuationState.clearPending();
     ContinuationState.showTab(0);
   }
@@ -369,7 +398,11 @@ struct Index {
   private async openPendingSystemEntry(): Promise<void> {
     const route: string = this.pendingSystemEntryRoute.trim();
     if (this.openingSystemEntry || route.length === 0 || !this.ready
-      || !this.privacyAccepted || !this.loggedIn) return;
+      || !this.privacyAccepted) return;
+    if (!this.loggedIn && route !== 'card' && (route !== 'tab' || this.pendingSystemEntryTab !== 0)) {
+      this.requestLogin('登录后可打开这条通知或好友页面。');
+      return;
+    }
     this.openingSystemEntry = true;
     try {
       if (route === 'notification') {
@@ -452,18 +485,18 @@ struct Index {
   /**
    * App Linking may wake the app before its consent gate and login restoration
    * complete. Hold the opaque card ID in AppStorage, then load the same
-   * authenticated detail surface used by every in-app card tap.
+   * public detail surface used by every in-app card tap.
    */
   private async openPendingSharedCard(): Promise<void> {
     const cardId = this.pendingSharedCardId.trim();
     if (this.openingSharedCard || cardId.length === 0 || !this.ready
-      || !this.privacyAccepted || !this.loggedIn) return;
+      || !this.privacyAccepted) return;
     const generation: number = this.sharedCardGeneration;
     this.openingSharedCard = true;
     try {
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
       const card: FoodCard = await this.cardRepository.detail(context, cardId);
-      if (generation === this.sharedCardGeneration && this.privacyAccepted && this.loggedIn
+      if (generation === this.sharedCardGeneration && this.privacyAccepted
         && this.pendingSharedCardId === cardId) {
         clearPendingSharedCard();
         if (card.status !== 'APPROVED') {
@@ -474,7 +507,7 @@ struct Index {
         this.openCard(card);
       }
     } catch (error) {
-      if (generation === this.sharedCardGeneration && this.privacyAccepted && this.loggedIn
+      if (generation === this.sharedCardGeneration && this.privacyAccepted
         && this.pendingSharedCardId === cardId) {
         clearPendingSharedCard();
         const detail = error as LoginErrorInfo;
@@ -518,6 +551,10 @@ struct Index {
   }
 
   private shareCardToFriend(card: FoodCard): void {
+    if (!this.loggedIn) {
+      this.requestLogin('登录后可将卡片分享给食刻好友。');
+      return;
+    }
     this.selectedCard = card;
     ContinuationState.showCard(card.id);
     this.pathStack.pushPathByName('share-card', null);
@@ -569,6 +606,8 @@ struct Index {
     if (routeName === 'card-detail' && this.selectedCard !== undefined) {
       CardDetailPage({
         card: this.selectedCard,
+        loggedIn: this.loggedIn,
+        onRequireLogin: (message: string): void => this.requestLogin(message),
         onShareToFriend: (card: FoodCard): void => {
           this.shareCardToFriend(card);
         }
@@ -682,9 +721,9 @@ struct Index {
           Text('我们只会在功能需要时使用必要数据。')
             .fontSize(13).fontColor($r('app.color.muted')).width('100%')
 
-          this.privacyNoticeRow('账号认证', '支持 AGC Auth 邮箱验证码注册/登录，并保留华为账号兼容入口。邮箱仅用于认证，不写入食刻资料。')
+          this.privacyNoticeRow('账号认证', '无需登录即可浏览公开推荐；发布和互动时支持 AGC Auth 邮箱验证码注册/登录，并保留华为账号兼容入口。邮箱仅用于认证，不写入食刻资料。')
           Divider().strokeWidth(1).color($r('app.color.line'))
-          this.privacyNoticeRow('位置', '打开推荐或发布时按需使用精确位置，离开设备前舍入到约 100 米；附近推荐的坐标仅保留在内存中，预取最多短暂复用约 90 秒，不写入本地存储。')
+          this.privacyNoticeRow('位置', '浏览推荐无需定位；仅发布时按需使用精确位置，离开设备前舍入到约 100 米。')
           Divider().strokeWidth(1).color($r('app.color.line'))
           this.privacyNoticeRow('图片', '使用系统图片选择器；你主动发布时，实拍图会先在本机移除 EXIF/GPS，再上传到 AGC 云存储。')
           Divider().strokeWidth(1).color($r('app.color.line'))
@@ -699,7 +738,7 @@ struct Index {
             .fontColor($r('app.color.ink')).border({ width: 1, color: $r('app.color.line') })
             .onClick(() => this.showFullPrivacy = !this.showFullPrivacy)
           if (this.showFullPrivacy) {
-            Text('食刻使用 AGC Auth 处理邮箱验证码注册/登录；邮箱只用于认证，不写入 UserProfile、名片、好友或私信，也不会收集或保存邮箱密码。华为账号只作为兼容入口，登录后会换成 AGC 会话。昵称和头像只会在你主动保存资料时处理，头像先在本机重编码并移除 EXIF/GPS。三位小数位置仅用于 20 km 推荐，均只保留在内存；附近预取最多短暂复用约 90 秒，不写入本地存储或云端。你主动发布时，实拍图、公开商品字段、约 100 米精度的位置以及后续主动提交的评论和互动记录会进入 AGC 云端。好友功能会保存食刻号、好友申请、好友关系、一对一和群聊会话的未读数，以及你主动发送的文字和卡片标识；粘贴的链接会作为普通文字消息保存。站内通知会记录好友、消息、评论与回复的事件类型及已读状态，不保存正文；系统 Push 默认关闭，你主动开启后，设备 Push Token 会在食刻云端加密保存，系统通知正文不包含私信或评论内容。桌面服务卡片只在本机缓存一条公开推荐摘要；跨设备接续只传页签、商品卡 ID 或好友 ID，不传聊天正文和账号凭据。移除好友时会话从双方页面移除，并同步清理全部一对一私信。正式上架前必须根据平台要求补充内容审核方案，并在 AGC 配置同内容的 HTTPS 隐私政策地址。')
+            Text('食刻使用 AGC Auth 处理邮箱验证码注册/登录；邮箱只用于认证，不写入 UserProfile、名片、好友或私信，也不会收集或保存邮箱密码。华为账号只作为兼容入口，登录后会换成 AGC 会话。昵称和头像只会在你主动保存资料时处理，头像先在本机重编码并移除 EXIF/GPS。首页推荐不限距离，浏览时不读取定位。你主动发布时，实拍图、公开商品字段、约 100 米精度的位置以及后续主动提交的评论和互动记录会进入 AGC 云端。好友功能会保存食刻号、好友申请、好友关系、一对一和群聊会话的未读数，以及你主动发送的文字和卡片标识；粘贴的链接会作为普通文字消息保存。站内通知会记录好友、消息、评论与回复的事件类型及已读状态，不保存正文；系统 Push 默认关闭，你主动开启后，设备 Push Token 会在食刻云端加密保存，系统通知正文不包含私信或评论内容。桌面服务卡片只在本机缓存一条公开推荐摘要；跨设备接续只传页签、商品卡 ID 或好友 ID，不传聊天正文和账号凭据。移除好友时会话从双方页面移除，并同步清理全部一对一私信。正式上架前必须根据平台要求补充内容审核方案，并在 AGC 配置同内容的 HTTPS 隐私政策地址。')
               .fontSize(13).lineHeight(21).fontColor($r('app.color.muted')).width('100%')
               .padding(14).backgroundColor($r('app.color.canvas')).borderRadius(14)
           }
@@ -818,6 +857,12 @@ struct Index {
             .accessibilityText('注册新的食刻账号').onClick(() => this.openRegisterDialog())
         }.margin({ top: 16 }).justifyContent(FlexAlign.Center)
 
+        Button('继续游客浏览').width('88%').height(48).margin({ top: 8 })
+          .enabled(!this.loginBusy && !this.codeBusy && !this.registerBusy && !this.registerCodeBusy)
+          .backgroundColor($r('app.color.surface')).fontColor($r('app.color.accent_action'))
+          .accessibilityText('关闭登录，继续浏览当前页面')
+          .onClick((): void => this.continueBrowsing())
+
         Blank().height(18)
         Text('继续即表示你已同意启动页中的《隐私说明》')
           .fontSize(12).lineHeight(18).fontColor($r('app.color.muted'))
@@ -918,8 +963,35 @@ struct Index {
   }
 
   @Builder
+  private guestAccountPage(title: string, description: string) {
+    Column({ space: 16 }) {
+      Text(title).fontSize(24).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'))
+      Text(description).fontSize(14).lineHeight(22).fontColor($r('app.color.muted'))
+        .textAlign(TextAlign.Center).width('86%')
+      Button('登录 / 注册').height(48).width('80%')
+        .backgroundColor($r('app.color.accent_action')).fontColor($r('app.color.on_accent_action'))
+        .onClick((): void => this.requestLogin(description))
+      Button('继续看推荐').height(48).width('80%')
+        .backgroundColor($r('app.color.surface')).fontColor($r('app.color.accent_action'))
+        .onClick((): void => {
+          this.tabsController.changeIndex(0);
+          this.selectTab(0);
+        })
+    }.width('100%').height('100%').justifyContent(FlexAlign.Center)
+      .backgroundColor($r('app.color.canvas'))
+  }
+
+  @Builder
   private mainTabs() {
     Column({ space: 0 }) {
+      if (!this.loggedIn) {
+        Row({ space: 12 }) {
+          Text('游客浏览 · 无需定位').fontSize(13).fontColor($r('app.color.muted')).layoutWeight(1)
+          Button('登录 / 注册').height(48).fontSize(14)
+            .backgroundColor($r('app.color.accent_soft')).fontColor($r('app.color.accent_action'))
+            .onClick((): void => this.requestLogin())
+        }.width('100%').padding({ left: 16, right: 16 }).backgroundColor($r('app.color.surface'))
+      }
       if (this.sharedLinkMessage.length > 0) {
         Row({ space: 10 }) {
           Text(this.sharedLinkMessage).fontSize(12).lineHeight(18).fontColor($r('app.color.warning'))
@@ -943,41 +1015,56 @@ struct Index {
           TabContent() {
             NearbyPage({
               onOpenCard: (card: FoodCard): void => this.openCard(card),
+              loggedIn: this.loggedIn,
               revision: this.recommendationRevision
             })
           }.tabBar('推荐')
           TabContent() {
-            RankingPage({
-              onOpenCard: (card: FoodCard): void => this.openCard(card),
-              revision: this.recommendationRevision + this.friendRelationshipRevision
-            })
+            if (this.loggedIn) {
+              RankingPage({
+                onOpenCard: (card: FoodCard): void => this.openCard(card),
+                revision: this.recommendationRevision + this.friendRelationshipRevision
+              })
+            } else {
+              this.guestAccountPage('好友榜单', '登录后查看你和好友的推荐榜单。')
+            }
           }.tabBar('榜单')
           TabContent() {
-            FriendsPage({
-              onOpenChat: (friend: SocialUser): void => {
-                this.openChat(friend);
-              },
-              onOpenProfile: (friend: SocialUser): void => {
-                this.openFriendProfile(friend);
-              },
-              onOpenGroup: (group: GroupConversationSummary): void => {
-                this.openGroupChat(group);
-              },
-              onOpenAddFriend: (): void => {
-                this.openAddFriend();
-              },
-              onOpenNotifications: (): void => {
-                this.pathStack.pushPathByName('notification-inbox', null);
-              }
-            })
+            if (this.loggedIn) {
+              FriendsPage({
+                onOpenChat: (friend: SocialUser): void => {
+                  this.openChat(friend);
+                },
+                onOpenProfile: (friend: SocialUser): void => {
+                  this.openFriendProfile(friend);
+                },
+                onOpenGroup: (group: GroupConversationSummary): void => {
+                  this.openGroupChat(group);
+                },
+                onOpenAddFriend: (): void => {
+                  this.openAddFriend();
+                },
+                onOpenNotifications: (): void => {
+                  this.pathStack.pushPathByName('notification-inbox', null);
+                }
+              })
+            } else {
+              this.guestAccountPage('好友', '登录后添加好友、聊天和查看通知。')
+            }
           }.tabBar('好友')
           TabContent() {
-            CreateCardPage({ onPublished: (): void => this.cardPublished() })
+            if (this.loggedIn) {
+              CreateCardPage({ onPublished: (): void => this.cardPublished() })
+            } else {
+              this.guestAccountPage('制作推荐卡片', '登录后发布你的美食推荐与实拍图片。')
+            }
           }.tabBar('制作')
           TabContent() {
-            ProfilePage({
-              revision: this.profileRevision
-            })
+            if (this.loggedIn) {
+              ProfilePage({ revision: this.profileRevision })
+            } else {
+              this.guestAccountPage('我的', '登录后管理资料、收藏和浏览记录。')
+            }
           }.tabBar('我的')
             .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
         }
@@ -998,26 +1085,27 @@ struct Index {
       }.width('100%').height('100%').justifyContent(FlexAlign.Center).backgroundColor($r('app.color.canvas'))
     } else if (!this.privacyAccepted) {
       this.privacyPage()
-    } else if (!this.loggedIn) {
+    } else {
       Stack({ alignContent: Alignment.Center }) {
-        this.loginPage()
-        if (this.registerDialogVisible) {
-          Column() {}
-            .width('100%').height('100%').backgroundColor($r('app.color.ink')).opacity(0.38)
-          this.registerDialog()
+        Navigation(this.pathStack) { this.mainTabs() }
+          .hideTitleBar(true).navDestination(this.pathMap).mode(NavigationMode.Stack)
+          .width('100%').height('100%')
+          .onAreaChange((_oldArea: Area, newArea: Area): void => {
+            const width: number = Number(newArea.width);
+            if (Number.isFinite(width) && width > 0) {
+              const breakpoint: LayoutBreakpoint = BreakpointSystem.fromWidth(width);
+              if (this.windowBreakpoint !== breakpoint) this.windowBreakpoint = breakpoint;
+            }
+          })
+        if (this.loginRequested && !this.loggedIn) {
+          this.loginPage()
+          if (this.registerDialogVisible) {
+            Column() {}
+              .width('100%').height('100%').backgroundColor($r('app.color.ink')).opacity(0.38)
+            this.registerDialog()
+          }
         }
       }.width('100%').height('100%')
-    } else {
-      Navigation(this.pathStack) { this.mainTabs() }
-        .hideTitleBar(true).navDestination(this.pathMap).mode(NavigationMode.Stack)
-        .width('100%').height('100%')
-        .onAreaChange((_oldArea: Area, newArea: Area): void => {
-          const width: number = Number(newArea.width);
-          if (Number.isFinite(width) && width > 0) {
-            const breakpoint: LayoutBreakpoint = BreakpointSystem.fromWidth(width);
-            if (this.windowBreakpoint !== breakpoint) this.windowBreakpoint = breakpoint;
-          }
-        })
     }
   }
 }
