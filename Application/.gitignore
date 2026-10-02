@@ -1,0 +1,22 @@
+.idea/
+.hvigor/
+**/build/
+**/oh_modules/
+**/node_modules/
+*.log
+.DS_Store
+local.properties
+entry/src/main/resources/rawfile/agconnect-services.json
+*.p12
+*.p7b
+*.cer
+*.key
+*.pem
+*.jks
+*.keystore
+.env
+.env.*
+clouddev/secrets.local.json
+
+# Local DevEco signing/build profiles may contain machine paths or credentials.
+**/build-profile.json5

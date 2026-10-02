@@ -1,0 +1,26 @@
+{
+  "objectTypeName": "Conversation",
+  "fields": [
+    { "fieldName": "id", "fieldType": "String", "notNull": true, "belongPrimaryKey": true },
+    { "fieldName": "memberAUid", "fieldType": "String", "notNull": true, "defaultValue": "" },
+    { "fieldName": "memberBUid", "fieldType": "String", "notNull": true, "defaultValue": "" },
+    { "fieldName": "lastMessageId", "fieldType": "String", "notNull": true, "defaultValue": "" },
+    { "fieldName": "lastMessageKind", "fieldType": "String", "notNull": true, "defaultValue": "TEXT" },
+    { "fieldName": "lastMessagePreview", "fieldType": "Text", "notNull": true, "defaultValue": "" },
+    { "fieldName": "lastMessageAt", "fieldType": "Long", "notNull": true, "defaultValue": 0 },
+    { "fieldName": "unreadA", "fieldType": "Integer", "notNull": true, "defaultValue": 0 },
+    { "fieldName": "unreadB", "fieldType": "Integer", "notNull": true, "defaultValue": 0 },
+    { "fieldName": "createdAt", "fieldType": "Long", "notNull": true, "defaultValue": 0 },
+    { "fieldName": "updatedAt", "fieldType": "Long", "notNull": true, "defaultValue": 0 }
+  ],
+  "indexes": [
+    { "indexName": "memberAUid", "indexList": [{ "fieldName": "memberAUid", "sortType": "ASC" }] },
+    { "indexName": "memberBUid", "indexList": [{ "fieldName": "memberBUid", "sortType": "ASC" }] }
+  ],
+  "permissions": [
+    { "role": "World", "rights": [] },
+    { "role": "Authenticated", "rights": [] },
+    { "role": "Creator", "rights": [] },
+    { "role": "Administrator", "rights": ["Read", "Upsert", "Delete"] }
+  ]
+}

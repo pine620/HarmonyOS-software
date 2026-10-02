@@ -1,0 +1,37 @@
+# DevEco Studio and Hvigor generated state
+**/.idea/
+**/.hvigor/
+**/.preview/
+**/build/
+**/oh_modules/
+**/node_modules/
+*.log
+.DS_Store
+
+# Local machine configuration and generated distribution artifacts
+local.properties
+*.hap
+*.app
+*.hsp
+*.har
+
+# Never version signing material, AGC project configuration with local secrets,
+# or cloud-function environment files.
+**/build-profile.json5
+**/agconnect-services.json
+**/clouddev/secrets.local.json
+**/.env
+**/.env.*
+*.p12
+*.p7b
+*.cer
+*.key
+*.pem
+*.jks
+*.keystore
+
+# Local cloud association and private workspace instructions
+**/cloud-config.json
+/AGENTS.md
+/.github-publish/
+**/__pycache__/

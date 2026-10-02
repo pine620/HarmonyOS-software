@@ -1,0 +1,93 @@
+{
+  "objectTypeName": "UserProfile",
+  "fields": [
+    {
+      "fieldName": "uid",
+      "fieldType": "String",
+      "notNull": true,
+      "belongPrimaryKey": true
+    },
+    {
+      "fieldName": "nickname",
+      "fieldType": "String",
+      "isSensitive": true
+    },
+    {
+      "fieldName": "avatarUrl",
+      "fieldType": "String",
+      "isSensitive": true
+    },
+    {
+      "fieldName": "nicknameValue",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "avatarMediaId",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "avatarStorageUid",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "coverMediaId",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "coverStorageUid",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "friendCode",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "accountStatus",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": "ACTIVE"
+    },
+    {
+      "fieldName": "publishCount",
+      "fieldType": "Integer",
+      "notNull": true,
+      "defaultValue": 0
+    },
+    {
+      "fieldName": "createdAt",
+      "fieldType": "Long",
+      "notNull": true,
+      "defaultValue": 0
+    },
+    {
+      "fieldName": "updatedAt",
+      "fieldType": "Long",
+      "notNull": true,
+      "defaultValue": 0
+    }
+  ],
+  "indexes": [
+    { "indexName": "nicknameValue", "indexList": [{ "fieldName": "nicknameValue", "sortType": "ASC" }] },
+    { "indexName": "friendCode", "indexList": [{ "fieldName": "friendCode", "sortType": "ASC" }] }
+  ],
+  "permissions": [
+    {
+      "role": "World",
+      "rights": []
+    },
+    {
+      "role": "Authenticated",
+      "rights": []
+    },
+    {
+      "role": "Creator",
+      "rights": []
+    },
+    {
+      "role": "Administrator",
+      "rights": ["Read", "Upsert", "Delete"]
+    }
+  ]
+}

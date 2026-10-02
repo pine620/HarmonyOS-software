@@ -1,0 +1,22 @@
+{
+  "objectTypeName": "GroupMember",
+  "fields": [
+    { "fieldName": "id", "fieldType": "String", "notNull": true, "belongPrimaryKey": true },
+    { "fieldName": "groupId", "fieldType": "String", "notNull": true, "defaultValue": "" },
+    { "fieldName": "memberUid", "fieldType": "String", "notNull": true, "defaultValue": "" },
+    { "fieldName": "role", "fieldType": "String", "notNull": true, "defaultValue": "MEMBER" },
+    { "fieldName": "unreadCount", "fieldType": "Integer", "notNull": true, "defaultValue": 0 },
+    { "fieldName": "joinedAt", "fieldType": "Long", "notNull": true, "defaultValue": 0 },
+    { "fieldName": "updatedAt", "fieldType": "Long", "notNull": true, "defaultValue": 0 }
+  ],
+  "indexes": [
+    { "indexName": "groupId", "indexList": [{ "fieldName": "groupId", "sortType": "ASC" }] },
+    { "indexName": "memberUid", "indexList": [{ "fieldName": "memberUid", "sortType": "ASC" }] }
+  ],
+  "permissions": [
+    { "role": "World", "rights": [] },
+    { "role": "Authenticated", "rights": [] },
+    { "role": "Creator", "rights": [] },
+    { "role": "Administrator", "rights": ["Read", "Upsert", "Delete"] }
+  ]
+}

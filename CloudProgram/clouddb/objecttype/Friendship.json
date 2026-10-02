@@ -1,0 +1,25 @@
+{
+  "objectTypeName": "Friendship",
+  "fields": [
+    { "fieldName": "id", "fieldType": "String", "notNull": true, "belongPrimaryKey": true },
+    { "fieldName": "memberAUid", "fieldType": "String", "notNull": true, "defaultValue": "" },
+    { "fieldName": "memberBUid", "fieldType": "String", "notNull": true, "defaultValue": "" },
+    { "fieldName": "requesterUid", "fieldType": "String", "notNull": true, "defaultValue": "" },
+    { "fieldName": "addresseeUid", "fieldType": "String", "notNull": true, "defaultValue": "" },
+    { "fieldName": "status", "fieldType": "String", "notNull": true, "defaultValue": "PENDING" },
+    { "fieldName": "createdAt", "fieldType": "Long", "notNull": true, "defaultValue": 0 },
+    { "fieldName": "updatedAt", "fieldType": "Long", "notNull": true, "defaultValue": 0 }
+  ],
+  "indexes": [
+    { "indexName": "memberAUid", "indexList": [{ "fieldName": "memberAUid", "sortType": "ASC" }] },
+    { "indexName": "memberBUid", "indexList": [{ "fieldName": "memberBUid", "sortType": "ASC" }] },
+    { "indexName": "requesterUid", "indexList": [{ "fieldName": "requesterUid", "sortType": "ASC" }] },
+    { "indexName": "addresseeUid", "indexList": [{ "fieldName": "addresseeUid", "sortType": "ASC" }] }
+  ],
+  "permissions": [
+    { "role": "World", "rights": [] },
+    { "role": "Authenticated", "rights": [] },
+    { "role": "Creator", "rights": [] },
+    { "role": "Administrator", "rights": ["Read", "Upsert", "Delete"] }
+  ]
+}

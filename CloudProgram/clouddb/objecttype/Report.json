@@ -1,0 +1,73 @@
+{
+  "objectTypeName": "Report",
+  "fields": [
+    {
+      "fieldName": "id",
+      "fieldType": "String",
+      "notNull": true,
+      "belongPrimaryKey": true
+    },
+    {
+      "fieldName": "reporterUid",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "cardId",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "reason",
+      "fieldType": "String",
+      "isSensitive": true
+    },
+    {
+      "fieldName": "status",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": "PENDING"
+    },
+    {
+      "fieldName": "createdAt",
+      "fieldType": "Long",
+      "notNull": true,
+      "defaultValue": 0
+    }
+  ],
+  "indexes": [
+    {
+      "indexName": "cardId",
+      "indexList": [
+        {"fieldName": "cardId", "sortType": "ASC"}
+      ]
+    },
+    {
+      "indexName": "reporterUid_createdAt",
+      "indexList": [
+        {"fieldName": "reporterUid", "sortType": "ASC"},
+        {"fieldName": "createdAt", "sortType": "DESC"}
+      ]
+    }
+  ],
+  "permissions": [
+    {
+      "role": "World",
+      "rights": []
+    },
+    {
+      "role": "Authenticated",
+      "rights": []
+    },
+    {
+      "role": "Creator",
+      "rights": []
+    },
+    {
+      "role": "Administrator",
+      "rights": ["Read", "Upsert", "Delete"]
+    }
+  ]
+}

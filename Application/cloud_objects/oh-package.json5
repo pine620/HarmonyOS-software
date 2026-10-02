@@ -1,0 +1,8 @@
+{
+  "name": "@shike/cloud-objects",
+  "version": "1.0.0",
+  "description": "食刻端云调用契约",
+  "main": "Index.ets",
+  "dependencies": {}
+}
+

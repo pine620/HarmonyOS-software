@@ -1,0 +1,28 @@
+{
+  "objectTypeName": "AuthMigrationTicket",
+  "fields": [
+    { "fieldName": "id", "fieldType": "String", "notNull": true, "belongPrimaryKey": true },
+    { "fieldName": "kind", "fieldType": "String", "notNull": true, "defaultValue": "LEGACY_LOGIN" },
+    { "fieldName": "canonicalUid", "fieldType": "String", "notNull": true, "defaultValue": "" },
+    { "fieldName": "sourceProviderUid", "fieldType": "String", "notNull": true, "defaultValue": "" },
+    { "fieldName": "targetProviderUid", "fieldType": "String", "notNull": true, "defaultValue": "" },
+    { "fieldName": "status", "fieldType": "String", "notNull": true, "defaultValue": "CONSUMED" },
+    { "fieldName": "createdAt", "fieldType": "Long", "notNull": true, "defaultValue": 0 },
+    { "fieldName": "expiresAt", "fieldType": "Long", "notNull": true, "defaultValue": 0 },
+    { "fieldName": "usedAt", "fieldType": "Long", "notNull": true, "defaultValue": 0 }
+  ],
+  "indexes": [
+    { "indexName": "canonicalUid", "indexList": [
+      { "fieldName": "canonicalUid", "sortType": "ASC" }
+    ] },
+    { "indexName": "expiresAt", "indexList": [
+      { "fieldName": "expiresAt", "sortType": "ASC" }
+    ] }
+  ],
+  "permissions": [
+    { "role": "World", "rights": [] },
+    { "role": "Authenticated", "rights": [] },
+    { "role": "Creator", "rights": [] },
+    { "role": "Administrator", "rights": ["Read", "Upsert", "Delete"] }
+  ]
+}

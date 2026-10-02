@@ -1,0 +1,25 @@
+{
+  "objectTypeName": "GroupConversation",
+  "fields": [
+    { "fieldName": "id", "fieldType": "String", "notNull": true, "belongPrimaryKey": true },
+    { "fieldName": "ownerUid", "fieldType": "String", "notNull": true, "defaultValue": "" },
+    { "fieldName": "name", "fieldType": "String", "notNull": true, "defaultValue": "" },
+    { "fieldName": "memberCount", "fieldType": "Integer", "notNull": true, "defaultValue": 0 },
+    { "fieldName": "lastMessageId", "fieldType": "String", "notNull": true, "defaultValue": "" },
+    { "fieldName": "lastMessageKind", "fieldType": "String", "notNull": true, "defaultValue": "TEXT" },
+    { "fieldName": "lastMessagePreview", "fieldType": "Text", "notNull": true, "defaultValue": "" },
+    { "fieldName": "lastMessageAt", "fieldType": "Long", "notNull": true, "defaultValue": 0 },
+    { "fieldName": "createdAt", "fieldType": "Long", "notNull": true, "defaultValue": 0 },
+    { "fieldName": "updatedAt", "fieldType": "Long", "notNull": true, "defaultValue": 0 }
+  ],
+  "indexes": [
+    { "indexName": "ownerUid", "indexList": [{ "fieldName": "ownerUid", "sortType": "ASC" }] },
+    { "indexName": "lastMessageAt", "indexList": [{ "fieldName": "lastMessageAt", "sortType": "DESC" }] }
+  ],
+  "permissions": [
+    { "role": "World", "rights": [] },
+    { "role": "Authenticated", "rights": [] },
+    { "role": "Creator", "rights": [] },
+    { "role": "Administrator", "rights": ["Read", "Upsert", "Delete"] }
+  ]
+}

@@ -1,0 +1,203 @@
+{
+  "objectTypeName": "FoodCard",
+  "fields": [
+    {
+      "fieldName": "id",
+      "fieldType": "String",
+      "notNull": true,
+      "belongPrimaryKey": true
+    },
+    {
+      "fieldName": "ownerUid",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "productName",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "brand",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "priceFen",
+      "fieldType": "Integer",
+      "notNull": true,
+      "defaultValue": 0
+    },
+    {
+      "fieldName": "priceLabel",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "originalPriceFen",
+      "fieldType": "Integer",
+      "notNull": true,
+      "defaultValue": 0
+    },
+    {
+      "fieldName": "specification",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "shop",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "sellingPointsJson",
+      "fieldType": "Text",
+      "notNull": true,
+      "defaultValue": "[]"
+    },
+    {
+      "fieldName": "publicOffersJson",
+      "fieldType": "Text",
+      "notNull": true,
+      "defaultValue": "[]"
+    },
+    {
+      "fieldName": "reviewText",
+      "fieldType": "Text",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "tasteScore",
+      "fieldType": "Integer",
+      "notNull": true,
+      "defaultValue": 0
+    },
+    {
+      "fieldName": "sourceLink",
+      "fieldType": "Text",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "category",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": "other"
+    },
+    {
+      "fieldName": "mediaId",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "latE3",
+      "fieldType": "Integer",
+      "notNull": true,
+      "defaultValue": 0
+    },
+    {
+      "fieldName": "lonE3",
+      "fieldType": "Integer",
+      "notNull": true,
+      "defaultValue": 0
+    },
+    {
+      "fieldName": "district",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "geohash",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "status",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": "PENDING"
+    },
+    {
+      "fieldName": "createdAt",
+      "fieldType": "Long",
+      "notNull": true,
+      "defaultValue": 0
+    },
+    {
+      "fieldName": "updatedAt",
+      "fieldType": "Long",
+      "notNull": true,
+      "defaultValue": 0
+    }
+  ],
+  "indexes": [
+    {
+      "indexName": "ownerUid_createdAt",
+      "indexList": [
+        {"fieldName": "ownerUid", "sortType": "ASC"},
+        {"fieldName": "createdAt", "sortType": "DESC"}
+      ]
+    },
+    {
+      "indexName": "ownerUid_status_createdAt",
+      "indexList": [
+        {"fieldName": "ownerUid", "sortType": "ASC"},
+        {"fieldName": "status", "sortType": "ASC"},
+        {"fieldName": "createdAt", "sortType": "DESC"}
+      ]
+    },
+    {
+      "indexName": "status_location_createdAt",
+      "indexList": [
+        {"fieldName": "status", "sortType": "ASC"},
+        {"fieldName": "latE3", "sortType": "ASC"},
+        {"fieldName": "lonE3", "sortType": "ASC"},
+        {"fieldName": "createdAt", "sortType": "DESC"}
+      ]
+    },
+    {
+      "indexName": "status_createdAt",
+      "indexList": [
+        {"fieldName": "status", "sortType": "ASC"},
+        {"fieldName": "createdAt", "sortType": "ASC"}
+      ]
+    },
+    {
+      "indexName": "owner_status_score_time",
+      "indexList": [
+        {"fieldName": "ownerUid", "sortType": "ASC"},
+        {"fieldName": "status", "sortType": "ASC"},
+        {"fieldName": "tasteScore", "sortType": "DESC"},
+        {"fieldName": "createdAt", "sortType": "DESC"}
+      ]
+    }
+  ],
+  "permissions": [
+    {
+      "role": "World",
+      "rights": []
+    },
+    {
+      "role": "Authenticated",
+      "rights": []
+    },
+    {
+      "role": "Creator",
+      "rights": []
+    },
+    {
+      "role": "Administrator",
+      "rights": ["Read", "Upsert", "Delete"]
+    }
+  ]
+}

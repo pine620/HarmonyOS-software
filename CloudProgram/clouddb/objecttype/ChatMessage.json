@@ -1,0 +1,29 @@
+{
+  "objectTypeName": "ChatMessage",
+  "fields": [
+    { "fieldName": "id", "fieldType": "String", "notNull": true, "belongPrimaryKey": true },
+    { "fieldName": "conversationId", "fieldType": "String", "notNull": true, "defaultValue": "" },
+    { "fieldName": "senderUid", "fieldType": "String", "notNull": true, "defaultValue": "" },
+    { "fieldName": "recipientUid", "fieldType": "String", "notNull": true, "defaultValue": "" },
+    { "fieldName": "kind", "fieldType": "String", "notNull": true, "defaultValue": "TEXT" },
+    { "fieldName": "text", "fieldType": "Text", "notNull": true, "defaultValue": "" },
+    { "fieldName": "link", "fieldType": "Text", "notNull": true, "defaultValue": "" },
+    { "fieldName": "cardId", "fieldType": "String", "notNull": true, "defaultValue": "" },
+    { "fieldName": "createdAt", "fieldType": "Long", "notNull": true, "defaultValue": 0 },
+    { "fieldName": "readAt", "fieldType": "Long", "notNull": true, "defaultValue": 0 }
+  ],
+  "indexes": [
+    { "indexName": "conversationId_createdAt", "indexList": [
+      { "fieldName": "conversationId", "sortType": "ASC" },
+      { "fieldName": "createdAt", "sortType": "DESC" }
+    ] },
+    { "indexName": "senderUid", "indexList": [{ "fieldName": "senderUid", "sortType": "ASC" }] },
+    { "indexName": "recipientUid", "indexList": [{ "fieldName": "recipientUid", "sortType": "ASC" }] }
+  ],
+  "permissions": [
+    { "role": "World", "rights": [] },
+    { "role": "Authenticated", "rights": [] },
+    { "role": "Creator", "rights": [] },
+    { "role": "Administrator", "rights": ["Read", "Upsert", "Delete"] }
+  ]
+}

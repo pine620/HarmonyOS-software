@@ -1,0 +1,23 @@
+{
+  "objectTypeName": "CardAction",
+  "fields": [
+    { "fieldName": "id", "fieldType": "String", "notNull": true, "belongPrimaryKey": true },
+    { "fieldName": "actorUid", "fieldType": "String", "notNull": true, "defaultValue": "" },
+    { "fieldName": "cardId", "fieldType": "String", "notNull": true, "defaultValue": "" },
+    { "fieldName": "kind", "fieldType": "String", "notNull": true, "defaultValue": "LIKE" },
+    { "fieldName": "createdAt", "fieldType": "Long", "notNull": true, "defaultValue": 0 }
+  ],
+  "indexes": [
+    { "indexName": "cardId", "indexList": [{ "fieldName": "cardId", "sortType": "ASC" }] },
+    { "indexName": "actorUid_createdAt", "indexList": [
+      { "fieldName": "actorUid", "sortType": "ASC" },
+      { "fieldName": "createdAt", "sortType": "DESC" }
+    ] }
+  ],
+  "permissions": [
+    { "role": "World", "rights": [] },
+    { "role": "Authenticated", "rights": [] },
+    { "role": "Creator", "rights": [] },
+    { "role": "Administrator", "rights": ["Read", "Upsert", "Delete"] }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "objectTypeName": "FriendReport",
+  "fields": [
+    { "fieldName": "id", "fieldType": "String", "notNull": true, "belongPrimaryKey": true },
+    { "fieldName": "reporterUid", "fieldType": "String", "notNull": true, "defaultValue": "" },
+    { "fieldName": "targetUid", "fieldType": "String", "notNull": true, "defaultValue": "" },
+    { "fieldName": "reason", "fieldType": "String", "isSensitive": true },
+    { "fieldName": "status", "fieldType": "String", "notNull": true, "defaultValue": "PENDING" },
+    { "fieldName": "createdAt", "fieldType": "Long", "notNull": true, "defaultValue": 0 }
+  ],
+  "indexes": [
+    { "indexName": "targetUid", "indexList": [{ "fieldName": "targetUid", "sortType": "ASC" }] },
+    { "indexName": "reporterUid", "indexList": [{ "fieldName": "reporterUid", "sortType": "ASC" }] }
+  ],
+  "permissions": [
+    { "role": "World", "rights": [] },
+    { "role": "Authenticated", "rights": [] },
+    { "role": "Creator", "rights": [] },
+    { "role": "Administrator", "rights": ["Read", "Upsert", "Delete"] }
+  ]
+}

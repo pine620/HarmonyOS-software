@@ -1,0 +1,13 @@
+{
+  "name": "shike-auth",
+  "version": "1.0.0",
+  "private": true,
+  "engines": {
+    "node": "20.x"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "20.19.17",
+    "typescript": "5.9.2"
+  }
+}

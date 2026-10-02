@@ -1,0 +1,28 @@
+{
+  "objectTypeName": "WidgetRegistration",
+  "fields": [
+    { "fieldName": "id", "fieldType": "String", "notNull": true, "belongPrimaryKey": true },
+    { "fieldName": "ownerUid", "fieldType": "String", "notNull": true, "defaultValue": "" },
+    { "fieldName": "deviceId", "fieldType": "String", "notNull": true, "defaultValue": "" },
+    { "fieldName": "formId", "fieldType": "String", "notNull": true, "defaultValue": "" },
+    { "fieldName": "token", "fieldType": "Text", "notNull": true, "defaultValue": "" },
+    { "fieldName": "updateVersion", "fieldType": "Long", "notNull": true, "defaultValue": 0 },
+    { "fieldName": "pushDay", "fieldType": "String", "notNull": true, "defaultValue": "" },
+    { "fieldName": "pushCount", "fieldType": "Integer", "notNull": true, "defaultValue": 0 },
+    { "fieldName": "createdAt", "fieldType": "Long", "notNull": true, "defaultValue": 0 },
+    { "fieldName": "updatedAt", "fieldType": "Long", "notNull": true, "defaultValue": 0 }
+  ],
+  "indexes": [
+    { "indexName": "ownerUid", "indexList": [{ "fieldName": "ownerUid", "sortType": "ASC" }] },
+    { "indexName": "ownerUid_deviceId", "indexList": [
+      { "fieldName": "ownerUid", "sortType": "ASC" },
+      { "fieldName": "deviceId", "sortType": "ASC" }
+    ] }
+  ],
+  "permissions": [
+    { "role": "World", "rights": [] },
+    { "role": "Authenticated", "rights": [] },
+    { "role": "Creator", "rights": [] },
+    { "role": "Administrator", "rights": ["Read", "Upsert", "Delete"] }
+  ]
+}

@@ -1,0 +1,108 @@
+{
+  "objectTypeName": "NotificationEvent",
+  "fields": [
+    {
+      "fieldName": "id",
+      "fieldType": "String",
+      "notNull": true,
+      "belongPrimaryKey": true
+    },
+    {
+      "fieldName": "recipientUid",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "actorUid",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "kind",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "sourceId",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "targetId",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "createdAt",
+      "fieldType": "Long",
+      "notNull": true,
+      "defaultValue": 0
+    },
+    {
+      "fieldName": "readAt",
+      "fieldType": "Long",
+      "notNull": true,
+      "defaultValue": 0
+    }
+  ],
+  "indexes": [
+    {
+      "indexName": "recipientUid",
+      "indexList": [
+        {
+          "fieldName": "recipientUid",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "recipientUid_createdAt",
+      "indexList": [
+        {
+          "fieldName": "recipientUid",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "createdAt",
+          "sortType": "DESC"
+        }
+      ]
+    },
+    {
+      "indexName": "actorUid",
+      "indexList": [
+        {
+          "fieldName": "actorUid",
+          "sortType": "ASC"
+        }
+      ]
+    }
+  ],
+  "permissions": [
+    {
+      "role": "World",
+      "rights": []
+    },
+    {
+      "role": "Authenticated",
+      "rights": []
+    },
+    {
+      "role": "Creator",
+      "rights": []
+    },
+    {
+      "role": "Administrator",
+      "rights": [
+        "Read",
+        "Upsert",
+        "Delete"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,121 @@
+{
+  "objectTypeName": "CardMedia",
+  "fields": [
+    {
+      "fieldName": "id",
+      "fieldType": "String",
+      "notNull": true,
+      "belongPrimaryKey": true
+    },
+    {
+      "fieldName": "cardId",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "ownerUid",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "storageUid",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "objectKey",
+      "fieldType": "String",
+      "isSensitive": true
+    },
+    {
+      "fieldName": "sha256",
+      "fieldType": "String",
+      "isSensitive": true
+    },
+    {
+      "fieldName": "preparedSha256",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "mimeType",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": "image/jpeg"
+    },
+    {
+      "fieldName": "byteSize",
+      "fieldType": "Integer",
+      "notNull": true,
+      "defaultValue": 0
+    },
+    {
+      "fieldName": "width",
+      "fieldType": "Integer",
+      "notNull": true,
+      "defaultValue": 0
+    },
+    {
+      "fieldName": "height",
+      "fieldType": "Integer",
+      "notNull": true,
+      "defaultValue": 0
+    },
+    {
+      "fieldName": "status",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": "PENDING"
+    },
+    {
+      "fieldName": "createdAt",
+      "fieldType": "Long",
+      "notNull": true,
+      "defaultValue": 0
+    }
+  ],
+  "indexes": [
+    {
+      "indexName": "cardId",
+      "indexList": [
+        {"fieldName": "cardId", "sortType": "ASC"}
+      ]
+    },
+    {
+      "indexName": "cardId_createdAt",
+      "indexList": [
+        {"fieldName": "cardId", "sortType": "ASC"},
+        {"fieldName": "createdAt", "sortType": "ASC"}
+      ]
+    },
+    {
+      "indexName": "ownerUid_createdAt",
+      "indexList": [
+        {"fieldName": "ownerUid", "sortType": "ASC"},
+        {"fieldName": "createdAt", "sortType": "DESC"}
+      ]
+    }
+  ],
+  "permissions": [
+    {
+      "role": "World",
+      "rights": []
+    },
+    {
+      "role": "Authenticated",
+      "rights": []
+    },
+    {
+      "role": "Creator",
+      "rights": []
+    },
+    {
+      "role": "Administrator",
+      "rights": ["Read", "Upsert", "Delete"]
+    }
+  ]
+}
