@@ -18,5 +18,4 @@ entry/src/main/resources/rawfile/agconnect-services.json
 .env.*
 clouddev/secrets.local.json
 
-# Local DevEco signing/build profiles may contain machine paths or credentials.
-**/build-profile.json5
+# Shared build profiles must remain free of local signing paths and credentials.

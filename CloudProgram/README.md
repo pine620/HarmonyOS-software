@@ -21,7 +21,7 @@
 
 ### 打开和核对 CloudDev
 
-在 DevEco 打开外层 shikeclouddev，进入 `Tools > CloudDev`，使用已加入团队的个人账号 `Sign in`。从面板 `Serverless > Cloud Functions / Cloud DB > Go to console`打开对应服务，核对项目/应用。客户端独立运行窗口仍打开 Application。
+首次克隆先按第 1 节补齐 `CloudProgram/cloud-config.json`，再在 DevEco 打开外层 shikeclouddev，进入 `Tools > CloudDev`，使用已加入团队的个人账号 `Sign in`。从面板 `Serverless > Cloud Functions / Cloud DB > Go to console`打开对应服务，核对项目/应用。客户端独立运行窗口仍打开 Application。
 
 `cloud-config.json`里 appSelected 的 appId/projectId 和 teamId 应与负责人提供的身份一致。这份本地关联配置不上传 GitHub。首次接手可由管理员通过安全渠道提供测试项目的配置，也可使用下面官方创建向导关联同一应用并生成；成员登录/权限由平台处理，不手写 uid 来授权。
 

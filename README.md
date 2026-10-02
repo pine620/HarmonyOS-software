@@ -69,55 +69,25 @@ AGC 团队成员权限、应用用户登录、GitHub 仓库权限是三件事，
 
 以上参照官方[团队账号说明](https://developer.huawei.com/consumer/cn/Team-account/)与[管理团队帐号](https://developer.huawei.com/consumer/cn/doc/app/agc-help-manageaccount-0000002306610129)。云开发协议若尚未签署，须由**账号持有者或法务角色**完成；开发成员的项目授权不能替代签约。参见[关联云开发资源](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/agc-harmonyos-create-appproject)。
 
-## 4. 补齐客户端配置，打开工程
+## 4. 打开客户端工程，补齐 AGC 配置
 
-签名与 SDK 应用配置不在 Git 中共享。首次拉取时需要补齐三个被忽略的 build profile；**已有文件不要覆盖**。
+仓库已经包含不带签名信息的三个 `build-profile.json5`，用于声明 SDK、产品和 entry/cloud_objects 模块。首次下载无需手工创建这些文件；每位成员随后在 IDE 中配置自己的调试签名，提交前检查构建配置差异，移除证书路径、口令和本机签名信息。
 
-<details>
-<summary>首次拉取代码：三个 build-profile.json5 的最小内容</summary>
+**使用 GitHub Download ZIP 时：**完整解压后，选择解压目录中的 `Application`，例如 `HarmonyOS-software-main/Application`。外层目录用于端云资源管理，`entry` 是模块目录，首次客户端导入请选择包含下列文件的 `Application`：
 
-`Application/build-profile.json5`：
-
-```json
-{
-  "app": {
-    "signingConfigs": [],
-    "products": [{
-      "name": "default",
-      "compatibleSdkVersion": "6.1.1(24)",
-      "targetSdkVersion": "26.0.0",
-      "runtimeOS": "HarmonyOS"
-    }],
-    "buildModeSet": [{ "name": "debug" }, { "name": "release" }]
-  },
-  "modules": [
-    { "name": "entry", "srcPath": "./entry", "targets": [{ "name": "default", "applyToProducts": ["default"] }] },
-    { "name": "cloud_objects", "srcPath": "./cloud_objects", "targets": [{ "name": "default", "applyToProducts": ["default"] }] }
-  ]
-}
+```text
+Application/
+├── build-profile.json5
+├── hvigorfile.ts
+├── oh-package.json5
+├── AppScope/
+├── entry/
+│   └── build-profile.json5
+└── cloud_objects/
+    └── build-profile.json5
 ```
 
-`Application/entry/build-profile.json5`：
-
-```json
-{
-  "apiType": "stageMode",
-  "buildOption": {},
-  "targets": [{ "name": "default" }]
-}
-```
-
-`Application/cloud_objects/build-profile.json5`：
-
-```json
-{
-  "apiType": "stageMode",
-  "buildOption": { "resOptions": { "copyCodeResource": { "enable": false } } },
-  "targets": [{ "name": "default" }]
-}
-```
-
-</details>
+如果使用旧 ZIP 缺少上述三个 build profile，请重新下载仓库的最新 main 分支；无需重新创建应用或复制其他成员的签名文件。
 
 1. `File > Open`选择 **`shikeclouddev/Application`**，作为客户端运行窗口。
 2. 等待工程同步和 OHPM 安装完成，确认识别 `entry`、`cloud_objects`。未自动同步时使用工具栏工程同步按钮；只执行终端 `npm install`不能替代端侧 OHPM 同步。
@@ -138,7 +108,7 @@ AGC 团队成员权限、应用用户登录、GitHub 仓库权限是三件事，
 
 **接手团队已有后端：**复用约定测试项目，不要求每位成员部署一套资源。管理员需先确认已开通邮箱认证、Cloud DB、Cloud Storage，并部署四个项目云对象。
 
-1. 需要查看/开发云端时，再用 `File > Open`打开外层 **`shikeclouddev/`**，可选 `New Window`保留客户端窗口。确认能看到 `Application`、`CloudProgram`两个目录。
+1. 客户端先打开 `Application`。需要查看/开发云端时，先取得本节第 3 步的 `CloudProgram/cloud-config.json` 关联配置，再用 `File > Open`打开外层 **`shikeclouddev/`**，可选 `New Window`保留客户端窗口。确认能看到 `Application`、`CloudProgram`两个目录。
 2. `Tools > CloudDev`打开云开发管理面板；未登录时点击 `Sign in`，使用已获团队授权的账号。通过 `Serverless > Cloud Functions > Go to console`或面板中的控制台入口进入资源页。
 3. 首次克隆没有 `CloudProgram/cloud-config.json`。由管理员通过安全渠道提供目标测试项目的关联配置，或按 [云端指南](CloudProgram/README.md#1-创建-agc-项目与应用)的向导关联已有应用并生成配置；不需要另建个人后端。补齐后，在自己的界面核对 `CloudProgram/cloud-config.json`的 `teamId`、`appSelected.projectId`、`appSelected.appId`，与管理员给出的团队、项目和应用相符。该文件是 IDE 生成的关联元数据，不是团队授权或运行 Token，不通过手写 ID/uid 来“加入团队”。
 4. 控制台应有 `shike-auth`、`shike-media`、`shike-service`、`shike-location`；Cloud DB 存储区应为 `shike`。确认配置、生效版本和服务端秘密已由负责人设置，再继续客户端联调。
@@ -193,7 +163,8 @@ AGC 团队成员权限、应用用户登录、GitHub 仓库权限是三件事，
 | 现象 | 优先检查 |
 | --- | --- |
 | 克隆后没有客户端 | 是否克隆完整仓库并切到正确分支；仓库根目录应有 Application 与 CloudProgram |
-| 工程不识别/没有 entry | 客户端窗口是否打开 Application，三个 build profile 是否齐全，SDK 与 OHPM 是否同步 |
+| 提示“目录不包含项目” | 完整解压后打开 Application；确认三个 build-profile.json5 存在，旧 ZIP 请重新下载最新 main |
+| 工程已打开但没有 entry/同步失败 | SDK 是否与工程要求配套，OHPM 同步是否成功；保留首条同步错误 |
 | AGC/IDE 找不到团队或应用 | 被添加的个人账号、团队切换、项目/应用授权范围和有效期；签名 Team 与包名 |
 | 签名按钮报无权限 | 调试证书/Profile 权限；由管理员授予或完成操作 |
 | CloudDev 资源页与约定不同 | 外层工程、cloud-config 关联、登录团队、应用所属项目与中国数据处理位置 |

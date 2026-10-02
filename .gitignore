@@ -17,7 +17,6 @@ local.properties
 
 # Never version signing material, AGC project configuration with local secrets,
 # or cloud-function environment files.
-**/build-profile.json5
 **/agconnect-services.json
 **/clouddev/secrets.local.json
 **/.env

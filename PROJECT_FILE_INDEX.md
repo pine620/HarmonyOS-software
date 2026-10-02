@@ -2,7 +2,7 @@
 
 按 2026-10-02 的现有文件结构整理，重点覆盖 `Application` 与 `CloudProgram`。先看下面的职责说明，完整文件清单在文末。首次运行见 [README](README.md)，后端操作见 [云端指南](CloudProgram/README.md)。
 
-路径从项目根目录起算。GitHub 仓库包含 Application 与 CloudProgram 的源码；本地生成的签名、SDK 和云工程关联配置另列，不提交配置值。
+路径从项目根目录起算。GitHub 仓库包含 Application 与 CloudProgram 的源码；三个不含签名的 build profile 随源码共享；本地签名、SDK 和云工程关联配置另列，不提交配置值。
 
 ## 整体框架
 
@@ -46,10 +46,10 @@ CloudProgram/
 | `cloud_objects/oh-package.json5`、`cloud_objects/hvigorfile.ts`、`cloud_objects/src/main/module.json5` | 代理 HAR 的包声明、构建与模块配置 |
 | `cloud_objects/Index.ets` | 四个云对象代理、importObject、CloudEnvelope 公共导出 |
 | `cloud_objects/BuildProfile.ets` | 构建生成的 HAR 版本/模式常量，不是业务配置源 |
-| `.gitignore` | 忽略签名、SDK 配置、build profile、依赖和产物 |
+| `.gitignore` | 忽略签名文件、SDK 配置、依赖和产物；共享 build profile 中不提交个人签名信息 |
 | `package-lock.json` | 历史 npm 锁文件；客户端业务依赖以 OHPM 为准，不能用 npm install 替代 |
 
-以上路径相对于 `Application/`。首次搭建需生成的三个 build-profile.json5 和 rawfile/agconnect-services.json 单独说明于 README；索引只列路径，不提供本机签名或配置值。
+以上路径相对于 `Application/`。三个 build-profile.json5 是共享的工程/模块构建配置，默认不带签名；首次需要下载的 rawfile/agconnect-services.json 单独说明于 README。
 
 ## Application：页面与生命周期
 
@@ -191,10 +191,10 @@ CloudProgram/
 
 ## 完整文件清单
 
-以下按当前源码重新生成，排除依赖、构建产物、缓存、日志和本地配置。克隆 GitHub 仓库可获得下列文件；首次需补齐的五个配置路径单独列在末尾。
+以下按当前源码重新生成，排除依赖、构建产物、缓存、日志和本地配置。克隆 GitHub 仓库可获得下列文件；首次需补齐的两个 AGC 配置路径单独列在末尾。
 
 <details>
-<summary>Application：121 个文件</summary>
+<summary>Application：124 个文件</summary>
 
 ```text
 Application/.gitignore
@@ -202,8 +202,10 @@ Application/AppScope/app.json5
 Application/AppScope/resources/base/element/string.json
 Application/AppScope/resources/base/media/app_icon.png
 Application/AppScope/resources/rawfile/schema.json
+Application/build-profile.json5
 Application/cloud_objects/BuildProfile.ets
 Application/cloud_objects/Index.ets
+Application/cloud_objects/build-profile.json5
 Application/cloud_objects/hvigorfile.ts
 Application/cloud_objects/oh-package.json5
 Application/cloud_objects/src/main/ets/ImportObject.ts
@@ -212,6 +214,7 @@ Application/cloud_objects/src/main/ets/shike-location/ShikeLocation.ts
 Application/cloud_objects/src/main/ets/shike-media/ShikeMedia.ts
 Application/cloud_objects/src/main/ets/shike-service/ShikeService.ts
 Application/cloud_objects/src/main/module.json5
+Application/entry/build-profile.json5
 Application/entry/hvigorfile.ts
 Application/entry/oh-package-lock.json5
 Application/entry/oh-package.json5
@@ -383,8 +386,5 @@ CloudProgram/package.json
 
 | 路径 | 获取方式 |
 | --- | --- |
-| `Application/build-profile.json5` | 按根 README 的最小配置创建，再在 IDE 关联应用生成签名 |
-| `Application/entry/build-profile.json5` | 按根 README 创建 HAP 构建配置 |
-| `Application/cloud_objects/build-profile.json5` | 按根 README 创建 HAR 构建配置 |
 | `Application/entry/src/main/resources/rawfile/agconnect-services.json` | 从目标 AGC 应用下载 |
 | `CloudProgram/cloud-config.json` | 云开发向导关联目标应用生成，或由管理员安全提供测试项目的配置 |
