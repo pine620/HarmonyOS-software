@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="448" viewBox="0 0 1040 448" role="img" aria-labelledby="title desc">
+  <title id="title">模拟器云服务联调：签名、AGC 配置文件和调试凭据</title>
+  <desc id="desc">先使用关联食刻应用的调试签名，再加入 agconnect-services.json，最后在 HiLog 无过滤器模式下搜索 clouddevelopproxy.debugToken，并在 AGC 注册凭据。图中的凭据为占位值。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8" fill="#68788e"/></marker>
+  </defs>
+  <rect width="1040" height="448" rx="18" fill="#f5f7fb"/>
+  <g font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif">
+    <text x="32" y="42" font-size="24" font-weight="700" fill="#172b4d">模拟器云服务联调：三项配置</text>
+    <text x="32" y="70" font-size="15" fill="#53647b">均对应同一 AGC 团队与应用 · com.wyq.shike</text>
+
+    <rect x="32" y="96" width="300" height="134" rx="12" fill="#ffffff" stroke="#d7dfeb"/>
+    <circle cx="58" cy="123" r="13" fill="#2864da"/>
+    <text x="58" y="128" text-anchor="middle" font-size="15" font-weight="700" fill="#ffffff">1</text>
+    <text x="80" y="129" font-size="18" font-weight="700" fill="#172b4d">调试签名</text>
+    <text x="50" y="158" font-size="15" fill="#344563">调试证书 + debug Profile</text>
+    <text x="50" y="183" font-size="15" fill="#344563">关联注册应用 com.wyq.shike</text>
+    <text x="50" y="208" font-size="15" fill="#344563">当前 product 引用该签名配置</text>
+
+    <path d="M342 162H359" stroke="#68788e" stroke-width="2" marker-end="url(#arrow)"/>
+    <rect x="370" y="96" width="300" height="134" rx="12" fill="#ffffff" stroke="#d7dfeb"/>
+    <circle cx="396" cy="123" r="13" fill="#2864da"/>
+    <text x="396" y="128" text-anchor="middle" font-size="15" font-weight="700" fill="#ffffff">2</text>
+    <text x="418" y="129" font-size="18" font-weight="700" fill="#172b4d">AGC 配置文件</text>
+    <text x="388" y="158" font-size="15" fill="#344563">Application/</text>
+    <text x="388" y="183" font-size="14" fill="#344563">AppScope/resources/rawfile/</text>
+    <text x="388" y="208" font-size="15" font-weight="600" fill="#2864da">agconnect-services.json</text>
+
+    <path d="M680 162H697" stroke="#68788e" stroke-width="2" marker-end="url(#arrow)"/>
+    <rect x="708" y="96" width="300" height="134" rx="12" fill="#ffffff" stroke="#d7dfeb"/>
+    <circle cx="734" cy="123" r="13" fill="#2864da"/>
+    <text x="734" y="128" text-anchor="middle" font-size="15" font-weight="700" fill="#ffffff">3</text>
+    <text x="756" y="129" font-size="18" font-weight="700" fill="#172b4d">模拟器调试凭据</text>
+    <text x="726" y="158" font-size="15" fill="#344563">刷新首页 → 获取 debugToken</text>
+    <text x="726" y="183" font-size="15" fill="#344563">AGC → 模拟器调试凭据 → 注册</text>
+    <text x="726" y="208" font-size="15" fill="#344563">绑定应用 com.wyq.shike</text>
+
+    <text x="32" y="263" font-size="16" font-weight="700" fill="#172b4d">HiLog 查找示意</text>
+    <rect x="32" y="277" width="976" height="109" rx="10" fill="#202630"/>
+    <rect x="48" y="292" width="155" height="28" rx="5" fill="#333d4d"/>
+    <text x="60" y="311" font-size="13" fill="#edf3ff">设备：当前模拟器</text>
+    <rect x="213" y="292" width="203" height="28" rx="5" fill="#333d4d"/>
+    <text x="225" y="311" font-size="13" fill="#edf3ff">No filters / 无过滤器</text>
+    <rect x="426" y="292" width="566" height="28" rx="5" fill="#333d4d"/>
+    <text x="438" y="311" font-size="13" fill="#edf3ff">搜索：clouddevelopproxy.debugToken</text>
+    <text x="50" y="351" font-size="15" font-family="Menlo, Consolas, monospace" fill="#bce3c5">[clouddevelopproxy.debugToken=YOUR_DEBUG_TOKEN]</text>
+    <text x="50" y="373" font-size="13" fill="#c4cfdf">只复制等号后的凭据内容；YOUR_DEBUG_TOKEN 为示意占位值。</text>
+    <text x="32" y="422" font-size="16" font-weight="600" fill="#2864da">注册后重新打开应用 → 刷新首页 → 验证邮箱登录和用户资料读取</text>
+  </g>
+</svg>

@@ -97,8 +97,10 @@ DevEco Studio 26.0.0.821 的打开对话框会先检查工程目录，再检查 
 4. AGC → **开发与服务 → 约定项目 → 约定应用 → 项目设置**，下载 `agconnect-services.json`，放到：
 
    ```text
-   Application/entry/src/main/resources/rawfile/agconnect-services.json
+   Application/AppScope/resources/rawfile/agconnect-services.json
    ```
+
+   当前 `@hw-agconnect/core-ohos` 默认通过初始化时传入的 Context 的资源管理器读取 rawfile，本项目按 SDK 说明将配置放在 `AppScope/resources/rawfile`。每次新克隆或新解压工程都要补齐该文件，并确认本次生成的 HAP 包含它；另一份工程已有配置不能替代这一步。配置缺失时，获取邮箱验证码可能出现 `9001005 / GetRawFileContent failed`。该配置包含本地凭据，继续由 Git 忽略。
 
 5. 保持项目现有依赖：entry 的 AGC SDK 与 `@shike/cloud-objects`本地 HAR 由 OHPM 安装；不要把云端 Node.js 依赖装进客户端。若下载时开启“不包含密钥”，SDK 还需要额外初始化配置；当前工程没有这条手动注入流程，首次联调不能仅去掉字段而不调整初始化。
 
@@ -128,7 +130,7 @@ DevEco Studio 26.0.0.821 的打开对话框会先检查工程目录，再检查 
 3. 在 Device Manager 启动模拟器，等待进入系统桌面，确认 IDE 顶部设备列表能选到它。新版也可从预置/已创建设备列表一键启动。
 4. 在客户端窗口进入 `File > Project Structure > Project > Signing Configs`，选择 **`Associate with registered application`**，点击 `Sign In`登录成员账号。
 5. 在 `Team`下拉框选约定团队；IDE 按 `com.wyq.shike`查询同包名注册应用。选择正确应用，按提示完成签名；需要时由管理员确认 Location/Account 等开放能力，Push 留待相应能力联调。
-6. 保存后检查 Profile 的包名、有效期与当前模拟器；确认 product `default`使用生成的签名。若提示找不到应用，先排查团队、包名、应用授权；若提示无权创建证书/Profile，返回第 3 步补授权。
+6. 保存后检查**调试 Profile** 的包名、有效期与当前模拟器；确认 product `default` 的 `signingConfig` 引用这套调试签名。构建模式 debug 与签名配置是两个设置；配置名叫 default 或 release 也不能代替检查 Profile 的实际类型。若提示找不到应用，先排查团队、包名、应用授权；若提示无权创建证书/Profile，返回第 3 步补授权。
 
 普通模拟器页面调试可能无需签名，但本项目 Cloud Foundation 云调用要求**关联注册应用的自动签名或匹配应用的手动签名**。不要只勾未关联应用的自动签名，也不要复制其他成员的证书路径/口令。系统时间异常时，按官方签名指引校准。
 
@@ -141,11 +143,11 @@ DevEco Studio 26.0.0.821 的打开对话框会先检查工程目录，再检查 
 3. 打开 IDE 底部 **HiLog**，选对应设备，切换为 **`No filters`**，搜索 **`clouddevelopproxy.debugToken`**。应用日志过滤可能把系统输出的凭据隐藏掉。
 4. 找到 `[clouddevelopproxy.debugToken=xxx]`，只复制其中 `xxx`。
 5. AGC → **证书、APP ID和Profile → 模拟器调试凭据 → 注册凭据**：选择应用名称，确认自动填充包名为 `com.wyq.shike`，粘贴调试凭据，填写备注，点击“注册”。成员没有入口时交由管理员在控制台登记，凭据不要放到 GitHub。
-6. 注册成功后重新运行应用或刷新首页。应能以游客身份读取全部公开推荐及图片；没有公开数据时允许为空。随后通过“登录 / 注册”使用测试邮箱验证账号功能。
+6. 注册成功后重新运行应用或刷新首页。应能以游客身份读取全部公开推荐及图片；没有公开数据时允许为空。游客导航仅保留“推荐、我的”，随后通过“我的 → 登录 / 注册”使用测试邮箱验证账号功能；登录后恢复“推荐、榜单、好友、制作、我的”五个页签。
 
 找不到凭据：检查模拟器网络、签名方式，并确保触发了 Cloud Foundation **业务云调用**；只发邮箱验证码不能代替该调用。401/403 或 `create http task error`：检查是否未注册、绑定错应用、团队/签名/SDK 配置不一致。绑定错应用时，删除错误凭据、重新绑定，按官方要求等待 30 分钟再试。新建模拟器或重置后重新检查实际凭据，不假定已登记其他模拟器就自动生效。
 
-参见官方[使用模拟器调试云服务](https://developer.huawei.com/consumer/cn/doc/doccenter-capabilities/cloudfoundation-emulator)和[注册模拟器调试凭据](https://developer.huawei.com/consumer/cn/doc/app/agc-help-add-credential-0000002415343501)。
+参见官方[使用模拟器调试云服务](https://developer.huawei.com/consumer/cn/doc/doccenter-capabilities/cloudfoundation-emulator)和[注册模拟器调试凭据](https://developer.huawei.com/consumer/cn/doc/doccenter-getting-started/agc-help-add-credential-0000002415343501)。
 
 ## 8. 设置测试位置，进行断点调试
 
@@ -160,6 +162,47 @@ DevEco Studio 26.0.0.821 的打开对话框会先检查工程目录，再检查 
 
 参考官方[GPS 扩展能力](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/ide-emulator-more-features)、[ArkTS debug 调试](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/ide-debug-arkts-debug)、[模拟器与真机差异](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/ide-emulator-specification)。也可观看官方[HarmonyOS 第一课：DevEco Studio 的使用](https://developer.huawei.com/consumer/cn/training/course/slightMooc/C101717494752698457?pathId=101667550095504391)中的环境搭建、模拟器与真机调试章节。
 
+## 9. 模拟器云服务联调：三项关键配置
+
+本次邮箱登录和首页加载问题，通过完成下面三项配置解决。**签名、SDK 配置文件、模拟器调试凭据缺一不可，且都要对应同一团队下的食刻应用 `com.wyq.shike`。**
+
+![模拟器云服务联调配置与 HiLog 凭据查找示意](docs/images/emulator-cloud-setup.svg)
+
+### 9.1 使用调试签名
+
+- `File > Project Structure > Project > Signing Configs`：使用**调试证书和 debug 类型的 Profile**，自动签名选择 `Associate with registered application`，关联正确团队的 `com.wyq.shike`。
+- 在工程级 `Application/build-profile.json5` 中，让当前 product 的 `signingConfig` 引用这套调试签名。例如，调试签名配置名为 `default` 时，使用 `"signingConfig": "default"`。
+- IDE 构建模式选择 debug，不代表签名也自动切到调试类型。使用发布类型 Profile 时，本次曾出现“无法验证应用，需要先联网验证”启动拦截。
+
+### 9.2 加入 AGC 配置文件
+
+从目标 AGC 应用的项目设置下载完整的 `agconnect-services.json`，放到**实际在 DevEco Studio 中运行的那份工程**：
+
+```text
+Application/AppScope/resources/rawfile/agconnect-services.json
+```
+
+该文件由 Git 忽略，**每次新克隆或解压 ZIP 后都要补齐**。缺失会导致验证码发送报 `9001005 / GetRawFileContent failed`。补齐后由使用者重新构建安装，确保本次 HAP 包含该文件。
+
+### 9.3 注册 AGC 模拟器调试凭据
+
+1. 运行应用并刷新游客首页，触发一次云调用。
+2. HiLog 选当前模拟器，切换为 **No filters / 无过滤器**，搜索 `clouddevelopproxy.debugToken`。
+3. 找到 `[clouddevelopproxy.debugToken=xxx]`，复制其中的 `xxx`。
+4. AGC → **证书、APP ID和Profile → 模拟器调试凭据 → 注册凭据**，选择正确的食刻应用，确认包名为 `com.wyq.shike`，粘贴凭据并注册。
+5. 注册后重新打开应用，刷新首页，再尝试邮箱登录。预期首页能显示列表或正常空状态，登录后能读取用户资料，且不再出现 `401:205525007:verify signature failed`。
+
+邮箱已认证但提示“食刻资料初始化失败”，以及首页云调用签名失败，都应先检查这项登记。签名配置完成、能收到验证码，都不能代替注册模拟器调试凭据。
+
+**补充提醒：**
+
+- 改过签名后若报 `9568332 / install sign info inconsistent`，卸载模拟器里的旧应用且不保留数据，再安装；卸载会清除本地数据和登录状态。
+- 报 `9568320 / no signature file` 时，检查当前 product 的签名绑定，以及 Run 实际部署的是否为本次生成的签名包。
+- 只有原凭据绑定错应用、删除后重新绑定的情况，按官方要求等待 **30 分钟**再调试。更换或重置模拟器后，重新核对实际凭据。
+- 找不到凭据时，确认已触发云调用且使用无过滤器；只发送邮箱验证码不会触发这项云调用。仍失败时提供对应操作前后约 10 秒的日志，并遮盖凭据与业务 Token。
+
+官方说明：[使用模拟器调试云服务](https://developer.huawei.com/consumer/cn/doc/doccenter-capabilities/cloudfoundation-emulator)、[注册模拟器调试凭据](https://developer.huawei.com/consumer/cn/doc/doccenter-getting-started/agc-help-add-credential-0000002415343501)。
+
 ## 常见问题与反馈
 
 | 现象 | 优先检查 |
@@ -169,9 +212,13 @@ DevEco Studio 26.0.0.821 的打开对话框会先检查工程目录，再检查 
 | 工程已打开但没有 entry/同步失败 | SDK 是否与工程要求配套，OHPM 同步是否成功；保留首条同步错误 |
 | AGC/IDE 找不到团队或应用 | 被添加的个人账号、团队切换、项目/应用授权范围和有效期；签名 Team 与包名 |
 | 签名按钮报无权限 | 调试证书/Profile 权限；由管理员授予或完成操作 |
+| 安装失败 `9568320 / no signature file` | 当前 product 的签名绑定、SignHap 任务和实际安装包路径；见第 9.1 节及补充提醒 |
+| 安装失败 `9568332 / install sign info inconsistent` | 切换签名后旧应用仍保留，或模块间签名不一致；卸载不保留数据后重装，见补充提醒 |
+| 系统弹出“无法验证应用，需要先联网验证” | 实际 Profile 是否为调试类型、当前产品的签名绑定；见第 9.1 节 |
 | CloudDev 资源页与约定不同 | 外层工程、cloud-config 关联、登录团队、应用所属项目与中国数据处理位置 |
 | SDK 配置读取失败 | rawfile 文件是否来自正确 AGC 应用，文件名与位置是否准确 |
 | 云调用 401/403 | 凭据注册/绑定、关联应用签名、网络；同时检查业务用户 Token 是否有效 |
+| 邮箱登录提示“食刻资料初始化失败”且 `401 ... verify signature failed` | 已进入邮箱认证后的云端资料读取阶段，先核对模拟器调试凭据登记和应用绑定；见第 9.3 节 |
 | 邮箱无验证码 | AGC 邮箱认证开关、邮箱/反垃圾、发送间隔；和云对象调试凭据分别排查 |
 | 附近空/定位失败 | GPS、系统定位开关、双权限、20km 内公开带图测试数据；位置缓存 90 秒，改位置后刷新或等过期 |
 | 图片上传/详情失败 | shike-media 云版本、runtime 同级打包和生产依赖；不要用 Sync 当作部署修复 |

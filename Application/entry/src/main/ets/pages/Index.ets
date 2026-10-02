@@ -591,8 +591,17 @@ struct Index {
     }
   }
 
+  private tabPosition(index: number): number {
+    return this.loggedIn ? index : index === 4 ? 1 : 0;
+  }
+
+  private onTabPositionChanged(position: number): void {
+    this.selectTab(this.loggedIn ? position : position === 1 ? 4 : 0);
+  }
+
   private selectTab(index: number): void {
-    const safeIndex: number = index >= 0 && index <= 4 ? index : 0;
+    const safeIndex: number = this.loggedIn
+      ? (index >= 0 && index <= 4 ? index : 0) : (index === 4 ? 4 : 0);
     this.selectedTab = safeIndex;
     ContinuationState.showTab(safeIndex);
     if (safeIndex === 2) {
@@ -940,7 +949,7 @@ struct Index {
     .backgroundColor(this.selectedTab === index ? $r('app.color.accent_soft') : $r('app.color.surface'))
     .accessibilityText(label).accessibilitySelected(this.selectedTab === index)
     .onClick((): void => {
-      if (this.selectedTab !== index) this.tabsController.changeIndex(index);
+      if (this.selectedTab !== index) this.tabsController.changeIndex(this.tabPosition(index));
     });
   }
 
@@ -951,9 +960,11 @@ struct Index {
         Text('食刻').fontSize(22).fontWeight(FontWeight.Bold).fontColor($r('app.color.accent_action'))
           .margin({ bottom: 16 }).accessibilityLevel('no');
         this.navigationRailItem(0, '推荐', $r('app.media.nav_recommend'));
-        this.navigationRailItem(1, '榜单', $r('app.media.nav_ranking'));
-        this.navigationRailItem(2, '好友', $r('app.media.nav_friends'));
-        this.navigationRailItem(3, '制作', $r('app.media.nav_create'));
+        if (this.loggedIn) {
+          this.navigationRailItem(1, '榜单', $r('app.media.nav_ranking'));
+          this.navigationRailItem(2, '好友', $r('app.media.nav_friends'));
+          this.navigationRailItem(3, '制作', $r('app.media.nav_create'));
+        }
         this.navigationRailItem(4, '我的', $r('app.media.nav_profile'));
       }.width('100%').padding({ left: 10, right: 10, top: 22, bottom: 22 });
     }
@@ -984,14 +995,6 @@ struct Index {
   @Builder
   private mainTabs() {
     Column({ space: 0 }) {
-      if (!this.loggedIn) {
-        Row({ space: 12 }) {
-          Text('游客浏览 · 无需定位').fontSize(13).fontColor($r('app.color.muted')).layoutWeight(1)
-          Button('登录 / 注册').height(48).fontSize(14)
-            .backgroundColor($r('app.color.accent_soft')).fontColor($r('app.color.accent_action'))
-            .onClick((): void => this.requestLogin())
-        }.width('100%').padding({ left: 16, right: 16 }).backgroundColor($r('app.color.surface'))
-      }
       if (this.sharedLinkMessage.length > 0) {
         Row({ space: 10 }) {
           Text(this.sharedLinkMessage).fontSize(12).lineHeight(18).fontColor($r('app.color.warning'))
@@ -1011,7 +1014,7 @@ struct Index {
         }
         // The same Tabs subtree survives breakpoint changes; only its bar is
         // hidden on lg. Drafts, list state and tab lifecycle stay with each page.
-        Tabs({ barPosition: BarPosition.End, index: this.selectedTab, controller: this.tabsController }) {
+        Tabs({ barPosition: BarPosition.End, index: this.tabPosition(this.selectedTab), controller: this.tabsController }) {
           TabContent() {
             NearbyPage({
               onOpenCard: (card: FoodCard): void => this.openCard(card),
@@ -1019,46 +1022,28 @@ struct Index {
               revision: this.recommendationRevision
             })
           }.tabBar('推荐')
-          TabContent() {
-            if (this.loggedIn) {
+          if (this.loggedIn) {
+            TabContent() {
               RankingPage({
                 onOpenCard: (card: FoodCard): void => this.openCard(card),
                 revision: this.recommendationRevision + this.friendRelationshipRevision
               })
-            } else {
-              this.guestAccountPage('好友榜单', '登录后查看你和好友的推荐榜单。')
-            }
-          }.tabBar('榜单')
-          TabContent() {
-            if (this.loggedIn) {
+            }.tabBar('榜单')
+            TabContent() {
               FriendsPage({
-                onOpenChat: (friend: SocialUser): void => {
-                  this.openChat(friend);
-                },
-                onOpenProfile: (friend: SocialUser): void => {
-                  this.openFriendProfile(friend);
-                },
-                onOpenGroup: (group: GroupConversationSummary): void => {
-                  this.openGroupChat(group);
-                },
-                onOpenAddFriend: (): void => {
-                  this.openAddFriend();
-                },
+                onOpenChat: (friend: SocialUser): void => this.openChat(friend),
+                onOpenProfile: (friend: SocialUser): void => this.openFriendProfile(friend),
+                onOpenGroup: (group: GroupConversationSummary): void => this.openGroupChat(group),
+                onOpenAddFriend: (): void => this.openAddFriend(),
                 onOpenNotifications: (): void => {
                   this.pathStack.pushPathByName('notification-inbox', null);
                 }
               })
-            } else {
-              this.guestAccountPage('好友', '登录后添加好友、聊天和查看通知。')
-            }
-          }.tabBar('好友')
-          TabContent() {
-            if (this.loggedIn) {
+            }.tabBar('好友')
+            TabContent() {
               CreateCardPage({ onPublished: (): void => this.cardPublished() })
-            } else {
-              this.guestAccountPage('制作推荐卡片', '登录后发布你的美食推荐与实拍图片。')
-            }
-          }.tabBar('制作')
+            }.tabBar('制作')
+          }
           TabContent() {
             if (this.loggedIn) {
               ProfilePage({ revision: this.profileRevision })
@@ -1068,7 +1053,7 @@ struct Index {
           }.tabBar('我的')
             .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
         }
-        .onChange((index: number): void => this.selectTab(index))
+        .onChange((position: number): void => this.onTabPositionChanged(position))
         .layoutWeight(1).height('100%').barHeight(this.windowBreakpoint === 'lg' ? 0 : 58)
         .scrollable(this.windowBreakpoint !== 'lg').backgroundColor($r('app.color.canvas'))
         .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM]);

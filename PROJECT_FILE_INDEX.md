@@ -59,7 +59,7 @@ CloudProgram/
 | 文件 | 职责 |
 | --- | --- |
 | `entryability/EntryAbility.ets` | 主 Ability 生命周期、窗口与页加载、Want/分享入口、后台清理及接续 |
-| `Index.ets` | 主容器、隐私门槛、游客浏览与按需登录、五页签、Navigation 路由、待处理分享/通知入口 |
+| `Index.ets` | 主容器、隐私门槛、游客双页签/我的登录入口、账号五页签、Navigation 路由、待处理分享/通知入口 |
 | `NearbyPage.ets` | 不依赖定位的全部公开推荐、云端分类、分页、封面与预加载结果 |
 | `CreateCardPage.ets` | 手动录入商品/价格/评分、照片准备、定位、权利声明与发布 |
 | `CardDetailPage.ets` | 详情/图片/评价、评论回复、点赞收藏、举报删除及系统/近场分享生命周期 |
@@ -181,6 +181,13 @@ CloudProgram/
 | NotificationEvent | 通知来源/对象/接收者/已读，不存正文 |
 
 对象均只开放 Administrator 直读写。线上若有历史 CardRating，先保留数据；不能因为当前目录没有该定义而直接删线上对象。
+
+## 协作说明与示意图
+
+| 路径 | 用途 |
+| --- | --- |
+| `README.md` | 从零获取代码、加入团队、配置签名与模拟器云联调 |
+| `docs/images/emulator-cloud-setup.svg` | README 使用的签名、AGC 配置和模拟器调试凭据示意图；仅含占位值 |
 
 ## 修改入口与维护
 
@@ -388,5 +395,5 @@ CloudProgram/package.json
 
 | 路径 | 获取方式 |
 | --- | --- |
-| `Application/entry/src/main/resources/rawfile/agconnect-services.json` | 从目标 AGC 应用下载 |
+| `Application/AppScope/resources/rawfile/agconnect-services.json` | 从目标 AGC 应用下载；当前 AGC SDK 默认从应用级 rawfile 读取 |
 | `CloudProgram/cloud-config.json` | 云开发向导关联目标应用生成，或由管理员安全提供测试项目的配置 |

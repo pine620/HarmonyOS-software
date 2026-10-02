@@ -7,7 +7,7 @@
 *.log
 .DS_Store
 local.properties
-entry/src/main/resources/rawfile/agconnect-services.json
+**/agconnect-services.json
 *.p12
 *.p7b
 *.cer
