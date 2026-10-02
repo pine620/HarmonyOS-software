@@ -21,7 +21,7 @@
 
 ### 打开和核对 CloudDev
 
-首次克隆先按第 1 节补齐 `CloudProgram/cloud-config.json`，再在 DevEco 打开外层 shikeclouddev，进入 `Tools > CloudDev`，使用已加入团队的个人账号 `Sign in`。从面板 `Serverless > Cloud Functions / Cloud DB > Go to console`打开对应服务，核对项目/应用。客户端独立运行窗口仍打开 Application。
+首次客户端运行打开 `Application`。本仓库外层含 README 和索引，不满足 DevEco Studio 26.0.0.821 的端云双目录识别条件；不要仅补一个 cloud-config.json 后就打开外层。需要 IDE 内云端开发/部署时，按第 1 节创建或按官方流程迁移规范端云工程，保留外层仅有 `Application`、`CloudProgram` 两个非隐藏条目的结构，再引入本项目源码并关联团队已有应用。进入 `Tools > CloudDev`，用个人团队账号 `Sign in`，通过 `Serverless > Cloud Functions / Cloud DB > Go to console`核对项目。
 
 `cloud-config.json`里 appSelected 的 appId/projectId 和 teamId 应与负责人提供的身份一致。这份本地关联配置不上传 GitHub。首次接手可由管理员通过安全渠道提供测试项目的配置，也可使用下面官方创建向导关联同一应用并生成；成员登录/权限由平台处理，不手写 uid 来授权。
 

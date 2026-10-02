@@ -1,5 +1,8 @@
 # DevEco Studio and Hvigor generated state
 **/.idea/
+!/Application/.idea/
+/Application/.idea/*
+!/Application/.idea/.gitignore
 **/.hvigor/
 **/.preview/
 **/build/

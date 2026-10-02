@@ -1,0 +1,4 @@
+# Keep this directory for DevEco Studio project selection.
+# Personal IDE state and generated caches remain untracked.
+*
+!.gitignore

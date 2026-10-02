@@ -36,7 +36,7 @@ shikeclouddev/
 │   ├── entry/           # 要运行的 HAP 模块
 │   ├── cloud_objects/   # 调用云对象的代理 HAR
 │   └── hvigorfile.ts
-└── CloudProgram/        # 云开发工程：开发云端时打开外层目录
+└── CloudProgram/        # AGC 云端源码；端云工程导入条件见第 5 节
     ├── README.md
     ├── cloud-config.json # 本地生成的 AGC 关联配置
     ├── cloudfunctions/
@@ -73,10 +73,12 @@ AGC 团队成员权限、应用用户登录、GitHub 仓库权限是三件事，
 
 仓库已经包含不带签名信息的三个 `build-profile.json5`，用于声明 SDK、产品和 entry/cloud_objects 模块。首次下载无需手工创建这些文件；每位成员随后在 IDE 中配置自己的调试签名，提交前检查构建配置差异，移除证书路径、口令和本机签名信息。
 
-**使用 GitHub Download ZIP 时：**完整解压后，选择解压目录中的 `Application`，例如 `HarmonyOS-software-main/Application`。外层目录用于端云资源管理，`entry` 是模块目录，首次客户端导入请选择包含下列文件的 `Application`：
+**使用 GitHub Download ZIP 时：**完整解压后，选择解压目录中的 `Application`，例如 `HarmonyOS-software-main/Application`。本仓库外层还包含 README 和索引，不作为首次客户端导入目录；`entry` 是模块目录。请选择包含下列文件的 `Application`：
 
 ```text
 Application/
+├── .idea/
+│   └── .gitignore        # 仅保留工程目录，不包含个人 IDE 配置
 ├── build-profile.json5
 ├── hvigorfile.ts
 ├── oh-package.json5
@@ -87,7 +89,7 @@ Application/
     └── build-profile.json5
 ```
 
-如果使用旧 ZIP 缺少上述三个 build profile，请重新下载仓库的最新 main 分支；无需重新创建应用或复制其他成员的签名文件。
+DevEco Studio 26.0.0.821 的打开对话框会先检查工程目录，再检查 Hvigor 配置。本仓库仅共享 `Application/.idea/.gitignore`，确保 ZIP 解压后保留 `.idea`；其余 IDE 配置、缓存和签名均不共享。若旧 ZIP 缺少 `.idea/.gitignore` 或三个 build profile，请重新下载最新 main，并解压到一个新目录后打开 `Application`。不要把新 ZIP 覆盖到已打开过的旧目录。
 
 1. `File > Open`选择 **`shikeclouddev/Application`**，作为客户端运行窗口。
 2. 等待工程同步和 OHPM 安装完成，确认识别 `entry`、`cloud_objects`。未自动同步时使用工具栏工程同步按钮；只执行终端 `npm install`不能替代端侧 OHPM 同步。
@@ -108,7 +110,7 @@ Application/
 
 **接手团队已有后端：**复用约定测试项目，不要求每位成员部署一套资源。管理员需先确认已开通邮箱认证、Cloud DB、Cloud Storage，并部署四个项目云对象。
 
-1. 客户端先打开 `Application`。需要查看/开发云端时，先取得本节第 3 步的 `CloudProgram/cloud-config.json` 关联配置，再用 `File > Open`打开外层 **`shikeclouddev/`**，可选 `New Window`保留客户端窗口。确认能看到 `Application`、`CloudProgram`两个目录。
+1. 客户端先打开 `Application`。不要直接将仓库外层当作端云工程打开：26.0.0.821 的端云识别逻辑要求外层只有 `Application` 与 `CloudProgram` 两个非隐藏条目，本仓库外层的 README 和索引会影响该识别。需要 IDE 内云端开发/部署时，按 [云端指南](CloudProgram/README.md#1-创建-agc-项目与应用)先创建或迁移一个规范端云工程，再引入本项目源码、关联团队已有应用；仅补齐 cloud-config.json 不能解决目录识别。
 2. `Tools > CloudDev`打开云开发管理面板；未登录时点击 `Sign in`，使用已获团队授权的账号。通过 `Serverless > Cloud Functions > Go to console`或面板中的控制台入口进入资源页。
 3. 首次克隆没有 `CloudProgram/cloud-config.json`。由管理员通过安全渠道提供目标测试项目的关联配置，或按 [云端指南](CloudProgram/README.md#1-创建-agc-项目与应用)的向导关联已有应用并生成配置；不需要另建个人后端。补齐后，在自己的界面核对 `CloudProgram/cloud-config.json`的 `teamId`、`appSelected.projectId`、`appSelected.appId`，与管理员给出的团队、项目和应用相符。该文件是 IDE 生成的关联元数据，不是团队授权或运行 Token，不通过手写 ID/uid 来“加入团队”。
 4. 控制台应有 `shike-auth`、`shike-media`、`shike-service`、`shike-location`；Cloud DB 存储区应为 `shike`。确认配置、生效版本和服务端秘密已由负责人设置，再继续客户端联调。

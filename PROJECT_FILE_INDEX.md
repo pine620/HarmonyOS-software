@@ -46,6 +46,7 @@ CloudProgram/
 | `cloud_objects/oh-package.json5`、`cloud_objects/hvigorfile.ts`、`cloud_objects/src/main/module.json5` | 代理 HAR 的包声明、构建与模块配置 |
 | `cloud_objects/Index.ets` | 四个云对象代理、importObject、CloudEnvelope 公共导出 |
 | `cloud_objects/BuildProfile.ets` | 构建生成的 HAR 版本/模式常量，不是业务配置源 |
+| `.idea/.gitignore` | 保留工程目录，供 DevEco 26.0 打开对话框识别；不共享 workspace、缓存或个人设置 |
 | `.gitignore` | 忽略签名文件、SDK 配置、依赖和产物；共享 build profile 中不提交个人签名信息 |
 | `package-lock.json` | 历史 npm 锁文件；客户端业务依赖以 OHPM 为准，不能用 npm install 替代 |
 
@@ -186,7 +187,7 @@ CloudProgram/
 - 改接口：runtime + TS 导出 → 正式生成代理 → CloudGateway → DTO/Repository → 页面和人工验收。
 - 改图片链路：ImagePreparationService/PhotoUploadService → media runtime → service 媒体状态确认 → CardMedia/Storage。
 - 改账号边界：PrivacyStore/AuthSessionStore/AuthService → auth/service → IdentityBinding/票据/清理流程。
-- 新增、移动或删除文件后更新本索引；完整清单不包含 .git、.idea、.hvigor、依赖、构建、日志、证书和系统缓存。
+- 新增、移动或删除文件后更新本索引；完整清单仅保留 .idea/.gitignore 工程目录占位文件，不包含 .git、其他 .idea 文件、.hvigor、依赖、构建、日志、证书和系统缓存。
 
 
 ## 完整文件清单
@@ -194,10 +195,11 @@ CloudProgram/
 以下按当前源码重新生成，排除依赖、构建产物、缓存、日志和本地配置。克隆 GitHub 仓库可获得下列文件；首次需补齐的两个 AGC 配置路径单独列在末尾。
 
 <details>
-<summary>Application：124 个文件</summary>
+<summary>Application：125 个文件</summary>
 
 ```text
 Application/.gitignore
+Application/.idea/.gitignore
 Application/AppScope/app.json5
 Application/AppScope/resources/base/element/string.json
 Application/AppScope/resources/base/media/app_icon.png
