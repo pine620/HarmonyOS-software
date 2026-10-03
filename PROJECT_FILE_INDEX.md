@@ -1,6 +1,6 @@
 # 项目文件索引
 
-按 2026-10-02 的现有文件结构整理，重点覆盖 `Application` 与 `CloudProgram`。先看下面的职责说明，完整文件清单在文末。首次运行见 [README](README.md)，后端操作见 [云端指南](CloudProgram/README.md)。
+按 2026-10-03 的现有文件结构整理，重点覆盖 `Application` 与 `CloudProgram`。先看下面的职责说明，完整文件清单在文末。首次运行见 [README](README.md)，后端操作见 [云端指南](CloudProgram/README.md)。
 
 路径从项目根目录起算。GitHub 仓库包含 Application 与 CloudProgram 的源码；三个不含签名的 build profile 随源码共享；本地签名、SDK 和云工程关联配置另列，不提交配置值。
 
@@ -181,13 +181,6 @@ CloudProgram/
 | NotificationEvent | 通知来源/对象/接收者/已读，不存正文 |
 
 对象均只开放 Administrator 直读写。线上若有历史 CardRating，先保留数据；不能因为当前目录没有该定义而直接删线上对象。
-
-## 协作说明与示意图
-
-| 路径 | 用途 |
-| --- | --- |
-| `README.md` | 从零获取代码、加入团队、配置签名与模拟器云联调 |
-| `docs/images/emulator-cloud-setup.svg` | README 使用的签名、AGC 配置和模拟器调试凭据示意图；仅含占位值 |
 
 ## 修改入口与维护
 

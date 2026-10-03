@@ -4,15 +4,13 @@
 
 这份说明用于新协作者从零获取代码、加入团队并完成**手机模拟器端云联调**。先按下面顺序操作，源码职责另查 [文件索引](PROJECT_FILE_INDEX.md)。
 
-> 官方资料核对日期：2026-10-02。下文保留官方英文菜单名，中文界面的名称可能略有不同。SDK/包名按项目要求使用，IDE 的新版本号不等于项目 targetSdkVersion。
+> 项目配置与联调说明核对日期：2026-10-03。下文保留官方英文菜单名，中文界面的名称可能略有不同。SDK/包名按项目要求使用，IDE 的新版本号不等于项目 targetSdkVersion。
 
 ## 1. 安装开发工具
 
 1. 安装 Git。
-2. 到华为 [DevEco Studio 下载中心](https://developer.huawei.com/consumer/cn/download/deveco-studio)登录华为账号，按电脑系统和 CPU 架构下载安装包，选择能支持本项目 `26.0.0` SDK 的版本。Windows 运行安装向导；macOS 将应用拖入 Applications。
-3. 新版 DevEco Studio 已打包 HarmonyOS SDK、Node.js、Hvigor、OHPM 和模拟器平台，**无需照旧教程单独下载 HarmonyOS SDK**；模拟器镜像仍需要下载。首次启动不迁移他人的设置。
-4. 在欢迎页点 `Diagnose`，或打开工程后进入 `Help > Diagnostic Tools > Diagnose Development Environment`，按提示处理网络与工具环境问题。需要代理时，Windows 从 `File > Settings`、macOS 从 `DevEco Studio > Preferences/Settings`进入配置；IDE HTTP、NPM、OHPM 和模拟器网络分别排查。
-5. 注册自己的华为开发者账号并实名认证。当前官方云开发准备要求账号注册地为中国境内（不含港澳台）；确认符合条件后由管理员加入团队。AGC、IDE 都使用这个成员账号登录。
+2. 到华为 [DevEco Studio 下载中心](https://developer.huawei.com/consumer/cn/download/deveco-studio)登录华为账号，按电脑系统和 CPU 架构下载安装包，选择能支持本项目 `26.0.0` SDK 的版本。Windows 运行安装向导；macOS 将应用拖入 Applications。新版 DevEco Studio 已打包 HarmonyOS SDK、Node.js、Hvigor、OHPM 和模拟器平台，无需单独下载 HarmonyOS SDK；模拟器镜像仍需要下载。首次启动不迁移他人的设置。
+3. 注册自己的华为开发者账号并实名认证。当前官方云开发准备要求账号注册地为中国境内（不含港澳台）；确认符合条件后由管理员加入团队。AGC、IDE 都使用这个成员账号登录。
 
 依据官方[安装教程](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/ide-software-install)、[网络配置](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/ide-environment-config)和[云开发账号准备](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/agc-harmonyos-clouddev-account)。硬件要求和可下载版本以下载页为准。
 
@@ -53,7 +51,7 @@ AGC 团队成员权限、应用用户登录、GitHub 仓库权限是三件事，
 
 ### 管理员操作
 
-1. 账号持有者或有“管理用户及访问权限”的成员登录 [AGC](https://developer.huawei.com/consumer/cn/service/josp/agc/index.html)，进入 `用户与权限 > 用户 > 所有用户 > 添加`，按提示前往开发者联盟团队账号页面。也可从开发者联盟管理中心的 `开发者中心 > 团队账号`进入。
+1. 账号持有者或有“管理用户及访问权限”的成员登录 [AGC](https://developer.huawei.com/consumer/cn/service/josp/agc/index.html)，进入 `用户与权限 > 用户 > 所有用户 > 添加`，按提示前往[开发者联盟团队账号页面](https://developer.huawei.com/consumer/cn/console/setting/teamAccountInfoList)。也可从开发者联盟管理中心的[团队账号](https://developer.huawei.com/consumer/cn/console/setting/teamAccountInfoList)进入。
 2. 添加协作者**自己的华为账号**，按页面填写成员信息与角色；无需分享持有者密码。成员收到邀请/确认提示时，完成相应确认。
 3. 回到 AGC 的该成员“编辑”页，在角色管理中按职责配置“开发”等角色，并检查实际权限；承担云端部署的成员必须有云开发服务相应操作权限。
 4. 在“项目与应用权限”里分别确认测试项目和 `com.wyq.shike` 应用的授权范围。**项目权限与应用权限独立**，不能仅凭看得到应用就认为能管理该项目的云资源。
@@ -61,6 +59,8 @@ AGC 团队成员权限、应用用户登录、GitHub 仓库权限是三件事，
 6. 保存，检查成员权限有效期。将团队标识、测试项目名称/ID、应用名称/APP ID/包名、数据处理位置、部署负责人交给成员；分享秘密值使用团队约定的安全渠道。
 
 ### 新成员操作
+
+**加入开发团队**：登录华为开发者联盟后，进入 [团队账号列表](https://developer.huawei.com/consumer/cn/console/setting/teamAccountInfoList)，确认能列出并切换到项目所属团队。若列表中还没有该团队，须先由管理员在 `开发者中心 > 团队账号` 中添加你的账号（见上文“管理员操作”），待收到邀请并确认后，该团队才会出现在你的列表中。
 
 1. 用被添加的账号登录 AGC，点击右上角账号菜单，**切换到项目所属团队**；控制台可能默认打开个人团队或上次访问的团队。
 2. 在“用户与权限”的个人信息中确认角色、项目/应用范围和有效期；进入“开发与服务”选择约定项目，核对应用包名 `com.wyq.shike`，数据处理位置含**中国**。
@@ -112,6 +112,8 @@ DevEco Studio 26.0.0.821 的打开对话框会先检查工程目录，再检查 
 
 **接手团队已有后端：**复用约定测试项目，不要求每位成员部署一套资源。管理员需先确认已开通邮箱认证、Cloud DB、Cloud Storage，并部署四个项目云对象。
 
+**仅做客户端模拟器联调：**管理员确认团队后端已经部署可用后，补齐第 4 节的 SDK 配置，直接按第 6～8 节继续。无需为每位成员新建后端，也无需先取得 `cloud-config.json`；下面的端云工程关联步骤供需要在 IDE 中开发或部署云端的成员使用。
+
 1. 客户端先打开 `Application`。不要直接将仓库外层当作端云工程打开：26.0.0.821 的端云识别逻辑要求外层只有 `Application` 与 `CloudProgram` 两个非隐藏条目，本仓库外层的 README 和索引会影响该识别。需要 IDE 内云端开发/部署时，按 [云端指南](CloudProgram/README.md#1-创建-agc-项目与应用)先创建或迁移一个规范端云工程，再引入本项目源码、关联团队已有应用；仅补齐 cloud-config.json 不能解决目录识别。
 2. `Tools > CloudDev`打开云开发管理面板；未登录时点击 `Sign in`，使用已获团队授权的账号。通过 `Serverless > Cloud Functions > Go to console`或面板中的控制台入口进入资源页。
 3. 首次克隆没有 `CloudProgram/cloud-config.json`。由管理员通过安全渠道提供目标测试项目的关联配置，或按 [云端指南](CloudProgram/README.md#1-创建-agc-项目与应用)的向导关联已有应用并生成配置；不需要另建个人后端。补齐后，在自己的界面核对 `CloudProgram/cloud-config.json`的 `teamId`、`appSelected.projectId`、`appSelected.appId`，与管理员给出的团队、项目和应用相符。该文件是 IDE 生成的关联元数据，不是团队授权或运行 Token，不通过手写 ID/uid 来“加入团队”。
@@ -130,9 +132,9 @@ DevEco Studio 26.0.0.821 的打开对话框会先检查工程目录，再检查 
 3. 在 Device Manager 启动模拟器，等待进入系统桌面，确认 IDE 顶部设备列表能选到它。新版也可从预置/已创建设备列表一键启动。
 4. 在客户端窗口进入 `File > Project Structure > Project > Signing Configs`，选择 **`Associate with registered application`**，点击 `Sign In`登录成员账号。
 5. 在 `Team`下拉框选约定团队；IDE 按 `com.wyq.shike`查询同包名注册应用。选择正确应用，按提示完成签名；需要时由管理员确认 Location/Account 等开放能力，Push 留待相应能力联调。
-6. 保存后检查**调试 Profile** 的包名、有效期与当前模拟器；确认 product `default` 的 `signingConfig` 引用这套调试签名。构建模式 debug 与签名配置是两个设置；配置名叫 default 或 release 也不能代替检查 Profile 的实际类型。若提示找不到应用，先排查团队、包名、应用授权；若提示无权创建证书/Profile，返回第 3 步补授权。
+6. 保存后检查**调试 Profile** 的包名、有效期与当前模拟器；确认 product `default` 的 `signingConfig` 引用这套调试签名。构建模式 debug 与签名配置是两个设置；配置名叫 default 或 release 也不能代替检查 Profile 的实际类型。使用发布类型 Profile 时可能出现“无法验证应用，需要先联网验证”的启动拦截。若提示找不到应用，先排查团队、包名、应用授权；若提示无权创建证书/Profile，返回第 3 步补授权。
 
-普通模拟器页面调试可能无需签名，但本项目 Cloud Foundation 云调用要求**关联注册应用的自动签名或匹配应用的手动签名**。不要只勾未关联应用的自动签名，也不要复制其他成员的证书路径/口令。系统时间异常时，按官方签名指引校准。
+普通模拟器页面调试可能无需签名，但本项目 Cloud Foundation 云调用要求**关联注册应用的自动签名或匹配应用的手动签名**。不要只勾未关联应用的自动签名，也不要复制其他成员的证书路径/口令。系统时间异常时，按[官方签名指引](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/ide-signing-auto)校准。
 
 参见官方[创建模拟器](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/ide-emulator-create)、[自动签名](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/ide-signing-auto)。
 
@@ -147,6 +149,13 @@ DevEco Studio 26.0.0.821 的打开对话框会先检查工程目录，再检查 
 
 找不到凭据：检查模拟器网络、签名方式，并确保触发了 Cloud Foundation **业务云调用**；只发邮箱验证码不能代替该调用。401/403 或 `create http task error`：检查是否未注册、绑定错应用、团队/签名/SDK 配置不一致。绑定错应用时，删除错误凭据、重新绑定，按官方要求等待 30 分钟再试。新建模拟器或重置后重新检查实际凭据，不假定已登记其他模拟器就自动生效。
 
+**补充提醒：**
+
+- 改过签名后若报 `9568332 / install sign info inconsistent`，卸载模拟器里的旧应用且不保留数据，再安装；卸载会清除本地数据和登录状态。
+- 报 `9568320 / no signature file` 时，检查当前 product 的签名绑定，以及 Run 实际部署的是否为本次生成的签名包。
+- 只有原凭据绑定错应用、删除后重新绑定的情况，按[官方要求](https://developer.huawei.com/consumer/cn/doc/doccenter-getting-started/agc-help-add-credential-0000002415343501)等待 **30 分钟**再调试。更换或重置模拟器后，重新核对实际凭据。
+- 找不到凭据时，确认已触发云调用且使用无过滤器；只发送邮箱验证码不会触发这项云调用。仍失败时提供对应操作前后约 10 秒的日志，并遮盖凭据与业务 Token。
+
 参见官方[使用模拟器调试云服务](https://developer.huawei.com/consumer/cn/doc/doccenter-capabilities/cloudfoundation-emulator)和[注册模拟器调试凭据](https://developer.huawei.com/consumer/cn/doc/doccenter-getting-started/agc-help-add-credential-0000002415343501)。
 
 ## 8. 设置测试位置，进行断点调试
@@ -158,69 +167,29 @@ DevEco Studio 26.0.0.821 的打开对话框会先检查工程目录，再检查 
 5. 触发对应操作；暂停后看 **Frames/Variables**，使用 Step Over/Step Into/Resume 检查流程。Run 只启动应用，要命中调试断点需启动 Debug 会话。
 6. 客户端错误看 HiLog/Build Output；云对象错误到 CloudDev/AGC 查看对应函数和生效版本的日志。端侧断点不会暂停 AGC 远端 runtime；云对象本地/远程调用调试见云端 README。
 
-第一轮完成标志：**同步/安装成功 → 邮箱登录和资料读取成功 → 定位权限与测试位置有效 → 测试卡片列表、图片和详情可用 → 目标断点可暂停**。近场分享、跨设备、真实性能需按平台能力用真机验证。
+第一轮客户端联调完成标志：**同步/安装成功 → 注册模拟器调试凭据 → 游客列表与图片/详情可用（无数据时允许正常空状态）→ 邮箱登录和资料读取成功 → 目标断点可暂停**。验证发布或附近口碑榜时再配置定位；近场分享、跨设备、真实性能需按平台能力用真机验证。
 
 参考官方[GPS 扩展能力](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/ide-emulator-more-features)、[ArkTS debug 调试](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/ide-debug-arkts-debug)、[模拟器与真机差异](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/ide-emulator-specification)。也可观看官方[HarmonyOS 第一课：DevEco Studio 的使用](https://developer.huawei.com/consumer/cn/training/course/slightMooc/C101717494752698457?pathId=101667550095504391)中的环境搭建、模拟器与真机调试章节。
-
-## 9. 模拟器云服务联调：三项关键配置
-
-本次邮箱登录和首页加载问题，通过完成下面三项配置解决。**签名、SDK 配置文件、模拟器调试凭据缺一不可，且都要对应同一团队下的食刻应用 `com.wyq.shike`。**
-
-![模拟器云服务联调配置与 HiLog 凭据查找示意](docs/images/emulator-cloud-setup.svg)
-
-### 9.1 使用调试签名
-
-- `File > Project Structure > Project > Signing Configs`：使用**调试证书和 debug 类型的 Profile**，自动签名选择 `Associate with registered application`，关联正确团队的 `com.wyq.shike`。
-- 在工程级 `Application/build-profile.json5` 中，让当前 product 的 `signingConfig` 引用这套调试签名。例如，调试签名配置名为 `default` 时，使用 `"signingConfig": "default"`。
-- IDE 构建模式选择 debug，不代表签名也自动切到调试类型。使用发布类型 Profile 时，本次曾出现“无法验证应用，需要先联网验证”启动拦截。
-
-### 9.2 加入 AGC 配置文件
-
-从目标 AGC 应用的项目设置下载完整的 `agconnect-services.json`，放到**实际在 DevEco Studio 中运行的那份工程**：
-
-```text
-Application/AppScope/resources/rawfile/agconnect-services.json
-```
-
-该文件由 Git 忽略，**每次新克隆或解压 ZIP 后都要补齐**。缺失会导致验证码发送报 `9001005 / GetRawFileContent failed`。补齐后由使用者重新构建安装，确保本次 HAP 包含该文件。
-
-### 9.3 注册 AGC 模拟器调试凭据
-
-1. 运行应用并刷新游客首页，触发一次云调用。
-2. HiLog 选当前模拟器，切换为 **No filters / 无过滤器**，搜索 `clouddevelopproxy.debugToken`。
-3. 找到 `[clouddevelopproxy.debugToken=xxx]`，复制其中的 `xxx`。
-4. AGC → **证书、APP ID和Profile → 模拟器调试凭据 → 注册凭据**，选择正确的食刻应用，确认包名为 `com.wyq.shike`，粘贴凭据并注册。
-5. 注册后重新打开应用，刷新首页，再尝试邮箱登录。预期首页能显示列表或正常空状态，登录后能读取用户资料，且不再出现 `401:205525007:verify signature failed`。
-
-邮箱已认证但提示“食刻资料初始化失败”，以及首页云调用签名失败，都应先检查这项登记。签名配置完成、能收到验证码，都不能代替注册模拟器调试凭据。
-
-**补充提醒：**
-
-- 改过签名后若报 `9568332 / install sign info inconsistent`，卸载模拟器里的旧应用且不保留数据，再安装；卸载会清除本地数据和登录状态。
-- 报 `9568320 / no signature file` 时，检查当前 product 的签名绑定，以及 Run 实际部署的是否为本次生成的签名包。
-- 只有原凭据绑定错应用、删除后重新绑定的情况，按官方要求等待 **30 分钟**再调试。更换或重置模拟器后，重新核对实际凭据。
-- 找不到凭据时，确认已触发云调用且使用无过滤器；只发送邮箱验证码不会触发这项云调用。仍失败时提供对应操作前后约 10 秒的日志，并遮盖凭据与业务 Token。
-
-官方说明：[使用模拟器调试云服务](https://developer.huawei.com/consumer/cn/doc/doccenter-capabilities/cloudfoundation-emulator)、[注册模拟器调试凭据](https://developer.huawei.com/consumer/cn/doc/doccenter-getting-started/agc-help-add-credential-0000002415343501)。
 
 ## 常见问题与反馈
 
 | 现象 | 优先检查 |
 | --- | --- |
 | 克隆后没有客户端 | 是否克隆完整仓库并切到正确分支；仓库根目录应有 Application 与 CloudProgram |
-| 提示“目录不包含项目” | 完整解压后打开 Application；确认三个 build-profile.json5 存在，旧 ZIP 请重新下载最新 main |
+| 提示“目录不包含项目” | 完整解压后打开 Application；确认 `.idea/.gitignore` 和三个 build-profile.json5 存在，旧 ZIP 请重新下载最新 main |
 | 工程已打开但没有 entry/同步失败 | SDK 是否与工程要求配套，OHPM 同步是否成功；保留首条同步错误 |
 | AGC/IDE 找不到团队或应用 | 被添加的个人账号、团队切换、项目/应用授权范围和有效期；签名 Team 与包名 |
 | 签名按钮报无权限 | 调试证书/Profile 权限；由管理员授予或完成操作 |
-| 安装失败 `9568320 / no signature file` | 当前 product 的签名绑定、SignHap 任务和实际安装包路径；见第 9.1 节及补充提醒 |
-| 安装失败 `9568332 / install sign info inconsistent` | 切换签名后旧应用仍保留，或模块间签名不一致；卸载不保留数据后重装，见补充提醒 |
-| 系统弹出“无法验证应用，需要先联网验证” | 实际 Profile 是否为调试类型、当前产品的签名绑定；见第 9.1 节 |
+| 安装失败 `9568320 / no signature file` | 当前 product 的签名绑定、SignHap 任务和实际安装包路径；见第 6 节及第 7 节补充提醒 |
+| 安装失败 `9568332 / install sign info inconsistent` | 切换签名后旧应用仍保留，或模块间签名不一致；卸载不保留数据后重装，见第 7 节补充提醒 |
+| 系统弹出“无法验证应用，需要先联网验证” | 实际 Profile 是否为调试类型、当前产品的签名绑定；见第 6 节 |
 | CloudDev 资源页与约定不同 | 外层工程、cloud-config 关联、登录团队、应用所属项目与中国数据处理位置 |
 | SDK 配置读取失败 | rawfile 文件是否来自正确 AGC 应用，文件名与位置是否准确 |
 | 云调用 401/403 | 凭据注册/绑定、关联应用签名、网络；同时检查业务用户 Token 是否有效 |
-| 邮箱登录提示“食刻资料初始化失败”且 `401 ... verify signature failed` | 已进入邮箱认证后的云端资料读取阶段，先核对模拟器调试凭据登记和应用绑定；见第 9.3 节 |
+| 邮箱登录提示“食刻资料初始化失败”且 `401 ... verify signature failed` | 已进入邮箱认证后的云端资料读取阶段，先核对模拟器调试凭据登记和应用绑定；见第 7 节 |
 | 邮箱无验证码 | AGC 邮箱认证开关、邮箱/反垃圾、发送间隔；和云对象调试凭据分别排查 |
-| 附近空/定位失败 | GPS、系统定位开关、双权限、20km 内公开带图测试数据；位置缓存 90 秒，改位置后刷新或等过期 |
+| 游客首页列表为空 | 先区分正常空状态与加载错误；确认 shike-service 为最新版、FoodCard 公开状态及两个公开列表索引，参见云端指南；首页无需定位 |
+| 附近口碑榜空/定位失败 | GPS、系统定位开关、双权限、20km 内公开带图测试数据；位置缓存 90 秒，改位置后刷新或等过期 |
 | 图片上传/详情失败 | shike-media 云版本、runtime 同级打包和生产依赖；不要用 Sync 当作部署修复 |
 | 断点没停 | 是否 Debug、可执行代码行、正确模块/设备；云端代码需单独调试 |
 
@@ -232,3 +201,52 @@ Application/AppScope/resources/rawfile/agconnect-services.json
 | --- | --- |
 | [PROJECT_FILE_INDEX.md](PROJECT_FILE_INDEX.md) | 当前 Application/CloudProgram 的目录、文件职责和修改入口 |
 | [CloudProgram/README.md](CloudProgram/README.md) | 新建测试后端、云开发部署/调试与环境变量 |
+
+## 官方资料速查
+
+以下按主题汇总本文引用的华为官方文档与控制台入口，便于直接跳转核对。
+
+### 开发工具与账号
+
+| 资料 | 链接 |
+| --- | --- |
+| DevEco Studio 下载中心 | https://developer.huawei.com/consumer/cn/download/deveco-studio |
+| 安装教程 | https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/ide-software-install |
+| 网络配置 | https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/ide-environment-config |
+| 云开发账号准备 | https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/agc-harmonyos-clouddev-account |
+| 团队账号列表（加入团队） | https://developer.huawei.com/consumer/cn/console/setting/teamAccountInfoList |
+| 团队账号说明 | https://developer.huawei.com/consumer/cn/Team-account/ |
+| 管理团队帐号 | https://developer.huawei.com/consumer/cn/doc/app/agc-help-manageaccount-0000002306610129 |
+| AGC 控制台 | https://developer.huawei.com/consumer/cn/service/josp/agc/index.html |
+
+### 客户端工程与 AGC 配置
+
+| 资料 | 链接 |
+| --- | --- |
+| 获取 HarmonyOS SDK 配置信息 | https://developer.huawei.com/consumer/cn/doc/AppGallery-connect-Guides/harmony-api6-obtain-files-0000001553463638 |
+
+### 端云工程与云开发
+
+| 资料 | 链接 |
+| --- | --- |
+| CloudDev 管理面板 | https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/agc-harmonyos-clouddev-console |
+| 创建/关联端云工程 | https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/agc-harmonyos-create-appproject |
+| 关联云开发资源 | https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/agc-harmonyos-create-appproject |
+
+### 模拟器、签名与云调试凭据
+
+| 资料 | 链接 |
+| --- | --- |
+| 创建模拟器 | https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/ide-emulator-create |
+| 自动签名 | https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/ide-signing-auto |
+| 使用模拟器调试云服务 | https://developer.huawei.com/consumer/cn/doc/doccenter-capabilities/cloudfoundation-emulator |
+| 注册模拟器调试凭据 | https://developer.huawei.com/consumer/cn/doc/doccenter-getting-started/agc-help-add-credential-0000002415343501 |
+| GPS 扩展能力 | https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/ide-emulator-more-features |
+| ArkTS debug 调试 | https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/ide-debug-arkts-debug |
+| 模拟器与真机差异 | https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/ide-emulator-specification |
+
+### 学习资源
+
+| 资料 | 链接 |
+| --- | --- |
+| HarmonyOS 第一课：DevEco Studio 的使用 | https://developer.huawei.com/consumer/cn/training/course/slightMooc/C101717494752698457?pathId=101667550095504391 |

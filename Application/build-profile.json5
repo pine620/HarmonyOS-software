@@ -16,6 +16,12 @@
       {
         "name": "release"
       }
+    ],
+    "capabilities": [
+      {
+        "bundleName": "com.wyq.shike",
+        "config": []
+      }
     ]
   },
   "modules": [
