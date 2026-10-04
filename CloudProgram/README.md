@@ -118,6 +118,8 @@ String 字段有 200 字符上限，正文/长链接采用 Text。UserProfile.ni
 
 本次游客首页改动只需更新上述 FoodCard 索引并部署 `shike-service`；`shike-media` 继续提供已有的内部签名读取。首页复用 `listNearbyCards` 方法，业务信封 payload 增加 `scope: 'all'`、`category`、`pageToken`、`pageSize`，不传坐标；未改导出方法或代理签名，无需重生成调用接口。缺少 scope 的旧请求继续走原来的登录及附近查询。游客详情只返回公开卡片，游客图片读取校验所属公开卡片或当前公开头像；发布、互动、好友和个人数据接口仍要求有效账号。
 
+服务卡片的 2×4 封面同步需要部署本次更新的 `shike-service/runtime.js`。远端仅新增 `photoPath`、`photoBucket` 图片身份字段；封面由应用前台缓存并通过 Form Kit 绑定。应用关闭时收到未缓存的新图会显示占位，桌面刷新按钮只重绘已有缓存，不下载新图。本次未变更 Cloud DB schema 或生成的云对象接口。
+
 以上操作参见官方[部署云对象](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/agc-harmonyos-clouddev-deploycloudobj)、[生成调用代理](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/agc-harmonyos-clouddev-invokecloudobj)、[整工程部署](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/agc-harmonyos-clouddev-deploy)与[同步云端代码](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/agc-harmonyos-clouddev-sync)。
 
 <details>

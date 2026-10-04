@@ -1,6 +1,6 @@
 # 项目文件索引
 
-按 2026-10-03 的现有文件结构整理，重点覆盖 `Application` 与 `CloudProgram`。先看下面的职责说明，完整文件清单在文末。首次运行见 [README](README.md)，后端操作见 [云端指南](CloudProgram/README.md)。
+按 2026-10-04 的现有文件结构整理，重点覆盖 `Application` 与 `CloudProgram`。先看下面的职责说明，完整文件清单在文末。首次运行见 [README](README.md)，后端操作见 [云端指南](CloudProgram/README.md)。
 
 路径从项目根目录起算。GitHub 仓库包含 Application 与 CloudProgram 的源码；三个不含签名的 build profile 随源码共享；本地签名、SDK 和云工程关联配置另列，不提交配置值。
 
@@ -100,9 +100,10 @@ CloudProgram/
 | `service/CardAppLink.ets` | 受控 HTTPS 卡片链接生成/解析、cardId 校验、待处理状态 |
 | `service/ContinuationState.ets` | 最小接续上下文、Want 路由参数与待处理通知；不迁移 Token |
 | `service/PushNotificationService.ets` | 系统通知同意、Token/安装标识、云登记/解绑及重试 |
-| `service/ServiceCardStore.ets` | 本地公开摘要与服务卡片实例绑定 |
+| `service/ServiceCardStore.ets` | 本地公开摘要、两种尺寸、封面身份匹配与 Form Kit 图片绑定 |
+| `service/ServiceCardCoverCache.ets` | 前台准备受限大小的 JPEG 封面、缓存校验与过期清理 |
 | `service/ServiceCardRemoteSyncService.ets` | 远程同步单独同意、Token/实例登记、更新和关闭清理 |
-| `service/ServiceCardInteraction.ets` | 服务卡片本地刷新消息常量 |
+| `service/ServiceCardInteraction.ets` | 服务卡片本地刷新消息常量与 JSON 事件解析 |
 | `model/CloudContracts.ets` | 用户、认证、卡片、媒体、位置与服务卡片主要 DTO |
 | `model/FriendModels.ets` | 好友、会话、私信和群聊模型 |
 | `model/NotificationModels.ets` | 通知项、分页、已读和目标响应模型 |
@@ -112,7 +113,7 @@ CloudProgram/
 | `components/social/SocialDisplay.ets` | 好友/聊天共用头像 |
 | `components/FoodCover.ets` | 分类封面资源与标签映射 |
 | `common/BreakpointSystem.ets`、`common/ErrorKit.ets` | 窗口断点状态和统一错误文本 |
-| `servicecard/ServiceCardFormAbility.ets` | FormExtensionAbility 创建/更新/删除/刷新，只绑定本地摘要 |
+| `servicecard/ServiceCardFormAbility.ets`、`ServiceCardPresentation.ets`、`pages/ServiceCard.ets` | 卡片生命周期、尺寸回调、路由/展示格式和双规格布局 |
 | `servicecard/pages/ServiceCard.ets` | 桌面卡片布局、刷新与打开操作 |
 
 ## Application：代理、资源与脚本
@@ -122,7 +123,7 @@ CloudProgram/
 | `cloud_objects/src/main/ets/ImportObject.ts` | 生成的 importObject 与代理调用包装 |
 | `cloud_objects/src/main/ets/shike-*/Shike*.ts` | auth/media/service/location 四类调用代理；Generated/DO NOT EDIT 文件通过 Generate Invoke Interface 更新 |
 | `entry/src/main/resources/base/profile/main_pages.json` | 普通应用入口，Index 内管理子页面导航 |
-| `entry/src/main/resources/base/profile/form_config.json` | 2×2 服务卡片和数据代理配置 |
+| `entry/src/main/resources/base/profile/form_config.json` | 2×2 摘要、2×4 封面服务卡片、尺寸调整与数据代理配置 |
 | `entry/src/main/resources/base/element/`、`entry/src/main/resources/dark/element/` | 字符串、亮/暗色主题颜色 |
 | `entry/src/main/resources/base/media/create_category_*.svg` | 制作页六种分类图标 |
 | `entry/src/main/resources/base/media/food_*.png` | 分类兜底封面；staple=米饭、bakery=汤粉、drink=饮品、snack=炸鸡、fresh=烧烤、other=其他，文件名为兼容保留 |
@@ -195,7 +196,7 @@ CloudProgram/
 以下按当前源码重新生成，排除依赖、构建产物、缓存、日志和本地配置。克隆 GitHub 仓库可获得下列文件；首次需补齐的两个 AGC 配置路径单独列在末尾。
 
 <details>
-<summary>Application：125 个文件</summary>
+<summary>Application：141 个文件</summary>
 
 ```text
 Application/.gitignore
@@ -216,6 +217,14 @@ Application/cloud_objects/src/main/ets/shike-location/ShikeLocation.ts
 Application/cloud_objects/src/main/ets/shike-media/ShikeMedia.ts
 Application/cloud_objects/src/main/ets/shike-service/ShikeService.ts
 Application/cloud_objects/src/main/module.json5
+Application/docs/service-card-redesign-20261003/IMPLEMENTATION.md
+Application/docs/service-card-redesign-20261003/PLAN.md
+Application/docs/service-card-redesign-20261003/direction-a-cover.png
+Application/docs/service-card-redesign-20261003/direction-a-cover.svg
+Application/docs/service-card-redesign-20261003/direction-a.png
+Application/docs/service-card-redesign-20261003/direction-a.svg
+Application/docs/service-card-redesign-20261003/direction-b.png
+Application/docs/service-card-redesign-20261003/direction-b.svg
 Application/entry/build-profile.json5
 Application/entry/hvigorfile.ts
 Application/entry/oh-package-lock.json5
@@ -266,10 +275,12 @@ Application/entry/src/main/ets/service/NearbyPreloadService.ets
 Application/entry/src/main/ets/service/PhotoUploadService.ets
 Application/entry/src/main/ets/service/PrivacyStore.ets
 Application/entry/src/main/ets/service/PushNotificationService.ets
+Application/entry/src/main/ets/service/ServiceCardCoverCache.ets
 Application/entry/src/main/ets/service/ServiceCardInteraction.ets
 Application/entry/src/main/ets/service/ServiceCardRemoteSyncService.ets
 Application/entry/src/main/ets/service/ServiceCardStore.ets
 Application/entry/src/main/ets/servicecard/ServiceCardFormAbility.ets
+Application/entry/src/main/ets/servicecard/ServiceCardPresentation.ets
 Application/entry/src/main/ets/servicecard/pages/ServiceCard.ets
 Application/entry/src/main/module.json5
 Application/entry/src/main/resources/base/element/color.json
@@ -301,6 +312,9 @@ Application/entry/src/main/resources/base/media/ic_profile_publish.svg
 Application/entry/src/main/resources/base/media/ic_profile_settings.svg
 Application/entry/src/main/resources/base/media/ic_profile_settings_light.svg
 Application/entry/src/main/resources/base/media/ic_send.svg
+Application/entry/src/main/resources/base/media/ic_service_card_chevron.svg
+Application/entry/src/main/resources/base/media/ic_service_card_photo.svg
+Application/entry/src/main/resources/base/media/ic_service_card_refresh.svg
 Application/entry/src/main/resources/base/media/nav_create.svg
 Application/entry/src/main/resources/base/media/nav_friends.svg
 Application/entry/src/main/resources/base/media/nav_profile.svg
@@ -318,6 +332,9 @@ Application/entry/src/main/resources/dark/media/ic_profile_privacy.svg
 Application/entry/src/main/resources/dark/media/ic_profile_publish.svg
 Application/entry/src/main/resources/dark/media/ic_profile_settings.svg
 Application/entry/src/main/resources/dark/media/ic_send.svg
+Application/entry/src/main/resources/dark/media/ic_service_card_chevron.svg
+Application/entry/src/main/resources/dark/media/ic_service_card_photo.svg
+Application/entry/src/main/resources/dark/media/ic_service_card_refresh.svg
 Application/hvigor/hvigor-config.json5
 Application/hvigorfile.ts
 Application/oh-package.json5

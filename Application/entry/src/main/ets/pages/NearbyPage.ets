@@ -253,7 +253,7 @@ export struct NearbyPage {
       // The recommendation surface remains available when a desktop service
       // card is absent or temporarily cannot be updated.
     }
-    if (!requestRemoteSync || !this.loggedIn) return '';
+    if (!requestRemoteSync || !this.loggedIn || ServiceCardStore.read(context).cardId !== card.id.trim()) return '';
     const remoteStatus = ServiceCardRemoteSyncService.status(context);
     if (!remoteStatus.supported) return '当前设备不支持桌面卡片远程同步。';
     if (!remoteStatus.optedIn) {

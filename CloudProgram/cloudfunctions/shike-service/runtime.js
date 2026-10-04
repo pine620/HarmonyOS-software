@@ -808,7 +808,7 @@ function serviceCardCategoryLabel(category) {
   return '其他';
 }
 
-function serviceCardFormData(card) {
+function serviceCardFormData(card, primaryPhoto = { path: '', bucket: '' }) {
   const priceFen = nonNegativeInteger(card.priceFen);
   const tasteScore = Number(card.tasteScore);
   return {
@@ -817,7 +817,11 @@ function serviceCardFormData(card) {
     scoreText: `${Number.isInteger(tasteScore) ? tasteScore : 0}/10 好味评分`,
     priceText: priceFen > 0 ? `¥${(priceFen / 100).toFixed(2)}` : '价格待补充',
     locationText: String(card.district || '').trim().slice(0, 24) || '20 km 内',
-    categoryText: serviceCardCategoryLabel(String(card.category || ''))
+    categoryText: serviceCardCategoryLabel(String(card.category || '')),
+    // Identity only: bytes stay in the app's approved-media cache and are bound
+    // through Form Kit. A remote change must not display an unrelated old cover.
+    photoPath: String(primaryPhoto.path || '').trim(),
+    photoBucket: String(primaryPhoto.bucket || '').trim()
   };
 }
 
@@ -901,7 +905,14 @@ async function pushServiceCardUpdate(uid, payload, env) {
   const now = Date.now();
   const day = serviceCardPushDay(now);
   const dailyLimit = serviceCardDailyPushLimit(env);
-  const formData = serviceCardFormData(card);
+  let photos = [];
+  try {
+    photos = await publicPhotos(card, env, true);
+  } catch (_error) {
+    // A metadata lookup failure may clear the cover but must not suppress text updates.
+    console.warn('service-card cover identity was unavailable.');
+  }
+  const formData = serviceCardFormData(card, photos[0]);
   for (const row of activeRows) {
     const previousCount = String(row.pushDay || '') === day ? nonNegativeInteger(row.pushCount) : 0;
     if (previousCount >= dailyLimit) {

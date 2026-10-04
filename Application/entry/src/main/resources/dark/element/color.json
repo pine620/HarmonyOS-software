@@ -10,6 +10,7 @@
     { "name": "muted", "value": "#C8B8AC" },
     { "name": "accent", "value": "#FF7B58" },
     { "name": "accent_action", "value": "#C8462C" },
+    { "name": "service_card_link", "value": "#FF7B58" },
     { "name": "on_accent_action", "value": "#FFFFFFFF" },
     { "name": "accent_soft", "value": "#3A241C" },
     { "name": "leaf", "value": "#8EB28A" },

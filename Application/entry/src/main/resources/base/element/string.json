@@ -6,6 +6,6 @@
     { "name": "location_permission_reason", "value": "用于发布时记录约 100 米精度的位置，并只展示 20 公里内的美食推荐。不会持续定位。" },
     { "name": "service_card_ability_label", "value": "食刻桌面服务卡片" },
     { "name": "service_card_display_name", "value": "食刻推荐" },
-    { "name": "service_card_desc", "value": "在桌面查看最近一条附近实拍推荐，并快速打开详情。" }
+    { "name": "service_card_desc", "value": "支持 2×2 摘要与 2×4 封面预览，在桌面查看最近一条附近推荐并打开详情。" }
   ]
 }
