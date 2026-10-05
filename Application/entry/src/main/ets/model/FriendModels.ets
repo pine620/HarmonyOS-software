@@ -15,6 +15,7 @@ export interface SocialUser {
   publishCount: number;
   friendshipState: FriendshipState;
   requestId: string;
+  friendshipUpdatedAt?: number;
 }
 
 export function emptySocialUser(): SocialUser {
@@ -77,14 +78,18 @@ export interface SendFriendRequestRequest {
 export interface RespondFriendRequestRequest {
   requestId: string;
   accept: boolean;
+  expectedCreatedAt?: number;
 }
 
 export interface RemoveFriendRequest {
   friendUid: string;
+  requestId?: string;
+  expectedFriendshipUpdatedAt?: number;
 }
 
 export interface CancelFriendRequest {
   requestId: string;
+  expectedCreatedAt?: number;
 }
 
 export interface UserIdRequest {

@@ -62,7 +62,7 @@ CloudProgram/
 | `Index.ets` | 主容器、隐私门槛、游客双页签/我的登录入口、账号五页签、Navigation 路由、待处理分享/通知入口 |
 | `NearbyPage.ets` | 不依赖定位的全部公开推荐、云端分类、分页、封面与预加载结果 |
 | `CreateCardPage.ets` | 手动录入商品/价格/评分、照片准备、定位、权利声明与发布 |
-| `CardDetailPage.ets` | 详情/图片/评价、评论回复、点赞收藏、举报删除及系统/近场分享生命周期 |
+| `CardDetailPage.ets` | 详情/图片/评价、点赞收藏、举报删除及系统/近场分享生命周期；评论入口已退场 |
 | `ShareCardPage.ets` | 单独的卡片分享页面和公开分享展示 |
 | `RankingPage.ets` | 附近/好友口味榜和分类筛选 |
 | `FriendsPage.ets` | 好友、申请、会话与群聊入口 |
@@ -74,7 +74,7 @@ CloudProgram/
 | `ProfileSubPages.ets` | MyPublishedPage、PermissionsPrivacyPage、ProfileSettingsPage、ProfileEditPage 四个子页 |
 | `FavoriteCardsPage.ets` | 本人收藏的公开卡片 |
 | `CardHistoryPage.ets` | 本机访问历史及卡片打开 |
-| `ReceivedCommentsPage.ets` | 本人收到的评论/回复 |
+| `ReceivedCommentsPage.ets` | 保留历史评论页面，当前导航入口已退场 |
 | `NotificationInboxPage.ets` | 通知分页、未读/已读、全部已读和目标跳转 |
 
 ## Application：业务封装、服务与模型
@@ -139,7 +139,7 @@ CloudProgram/
 | `cloud-config.json` | IDE 生成的团队、项目、应用、站点关联元数据；决定部署目标，不授予成员权限 |
 | `package.json`、`package-lock.json` | 云工程公共 TS/Node 类型依赖；test 是占位脚本，各对象另有独立依赖 |
 | `clouddb/db-config.json` | 默认存储区 shike 与位置 |
-| `AppScope/resources/rawfile/schema.json` | 历史 schema，含旧 CardRating、缺当前 NotificationEvent；通过平台流程更新 |
+| `AppScope/resources/rawfile/schema.json` | 平台生成 schema 快照；当前部署以 clouddb/objecttype 为准 |
 | `README.md` | 从零后端准备、部署/调试与变量说明 |
 
 云对象位于 `CloudProgram/cloudfunctions/`：
@@ -153,9 +153,11 @@ CloudProgram/
 
 每个目录均有 `runtime.js`（实际 JS 实现）、`function-config.json`（类型/handler/超时/鉴权）、`package.json` 与 `package-lock.json`（该对象独立依赖）、`tsconfig.json`（CommonJS 入口编译）。TS 导出负责包装响应，部署包必须带相邻 runtime 和生产依赖。media 另有 `check-deployment.mjs`供成员预检源码包/解包产物。
 
+service/media/location 各带一致的 `content-policy.js`，service 另带 `stage1-services.js`，部署时这些模块必须与 runtime 同包。`CloudProgram/scripts/package-cloud-object.mjs` 为部署成员准备编译入口、随包 JS 模块和独立依赖；不会自动部署 AGC。
+
 环境变量名称、用途及团队配置流程见云端指南；秘密只保存在 AGC 配置或团队约定的安全渠道。
 
-## CloudProgram：十九个当前数据库对象
+## CloudProgram：二十四个当前数据库对象
 
 均位于 `CloudProgram/clouddb/objecttype/<对象名>.json`，包含字段、主键、索引和权限。
 
@@ -165,7 +167,12 @@ CloudProgram/
 | FoodCard | 商品、价格、口味、E3 发布位置、归属和公开状态 |
 | CardMedia | 媒体归属/卡片关联、对象路径、摘要、尺寸与状态 |
 | Report | 卡片举报与下架治理 |
-| CardAction | 点赞/收藏关系 |
+| CardAction | 旧 LIKE 兼容与独立收藏关系 |
+| CardReaction | 新赞踩权威记录 |
+| FoodCardRevision | 待审编辑版本、基准与图片清单 |
+| FriendContentAccessGrant | 解除好友后的方向持续授权与撤销 |
+| PublishRequestRecord | 请求幂等回执 |
+| MaintenanceJob | 迁移、会话清理及生命周期任务 |
 | CardComment | 评论与回复关系 |
 | CommentReaction | 评论反应与用户去重 |
 | Friendship | 好友申请/关系状态 |
@@ -345,7 +352,7 @@ Application/scripts/summarize_preload_metrics.py
 </details>
 
 <details>
-<summary>CloudProgram：49 个文件</summary>
+<summary>CloudProgram：59 个文件</summary>
 
 ```text
 CloudProgram/AppScope/resources/rawfile/schema.json
@@ -355,17 +362,22 @@ CloudProgram/clouddb/objecttype/AuthMigrationTicket.json
 CloudProgram/clouddb/objecttype/CardAction.json
 CloudProgram/clouddb/objecttype/CardComment.json
 CloudProgram/clouddb/objecttype/CardMedia.json
+CloudProgram/clouddb/objecttype/CardReaction.json
 CloudProgram/clouddb/objecttype/ChatMessage.json
 CloudProgram/clouddb/objecttype/CommentReaction.json
 CloudProgram/clouddb/objecttype/Conversation.json
 CloudProgram/clouddb/objecttype/FoodCard.json
+CloudProgram/clouddb/objecttype/FoodCardRevision.json
+CloudProgram/clouddb/objecttype/FriendContentAccessGrant.json
 CloudProgram/clouddb/objecttype/FriendReport.json
 CloudProgram/clouddb/objecttype/Friendship.json
 CloudProgram/clouddb/objecttype/GroupConversation.json
 CloudProgram/clouddb/objecttype/GroupMember.json
 CloudProgram/clouddb/objecttype/GroupMessage.json
 CloudProgram/clouddb/objecttype/IdentityBinding.json
+CloudProgram/clouddb/objecttype/MaintenanceJob.json
 CloudProgram/clouddb/objecttype/NotificationEvent.json
+CloudProgram/clouddb/objecttype/PublishRequestRecord.json
 CloudProgram/clouddb/objecttype/PushRegistration.json
 CloudProgram/clouddb/objecttype/Report.json
 CloudProgram/clouddb/objecttype/UserProfile.json
@@ -376,6 +388,7 @@ CloudProgram/cloudfunctions/shike-auth/package.json
 CloudProgram/cloudfunctions/shike-auth/runtime.js
 CloudProgram/cloudfunctions/shike-auth/shikeAuth.ts
 CloudProgram/cloudfunctions/shike-auth/tsconfig.json
+CloudProgram/cloudfunctions/shike-location/content-policy.js
 CloudProgram/cloudfunctions/shike-location/function-config.json
 CloudProgram/cloudfunctions/shike-location/package-lock.json
 CloudProgram/cloudfunctions/shike-location/package.json
@@ -383,20 +396,24 @@ CloudProgram/cloudfunctions/shike-location/runtime.js
 CloudProgram/cloudfunctions/shike-location/shikeLocation.ts
 CloudProgram/cloudfunctions/shike-location/tsconfig.json
 CloudProgram/cloudfunctions/shike-media/check-deployment.mjs
+CloudProgram/cloudfunctions/shike-media/content-policy.js
 CloudProgram/cloudfunctions/shike-media/function-config.json
 CloudProgram/cloudfunctions/shike-media/package-lock.json
 CloudProgram/cloudfunctions/shike-media/package.json
 CloudProgram/cloudfunctions/shike-media/runtime.js
 CloudProgram/cloudfunctions/shike-media/shikeMedia.ts
 CloudProgram/cloudfunctions/shike-media/tsconfig.json
+CloudProgram/cloudfunctions/shike-service/content-policy.js
 CloudProgram/cloudfunctions/shike-service/function-config.json
 CloudProgram/cloudfunctions/shike-service/package-lock.json
 CloudProgram/cloudfunctions/shike-service/package.json
 CloudProgram/cloudfunctions/shike-service/runtime.js
 CloudProgram/cloudfunctions/shike-service/shikeService.ts
+CloudProgram/cloudfunctions/shike-service/stage1-services.js
 CloudProgram/cloudfunctions/shike-service/tsconfig.json
 CloudProgram/package-lock.json
 CloudProgram/package.json
+CloudProgram/scripts/package-cloud-object.mjs
 ```
 
 </details>

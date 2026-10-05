@@ -4,6 +4,8 @@
   "private": true,
   "description": "add shared dependencies for cloud functions",
   "scripts": {
+    "package:cloud": "node scripts/package-cloud-object.mjs",
+    "package:cloud:all": "node scripts/package-cloud-object.mjs --all",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "",

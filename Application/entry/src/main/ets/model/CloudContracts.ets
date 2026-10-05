@@ -1,5 +1,102 @@
 export type CardStatus = 'APPROVED' | 'REMOVED';
 export type FoodCategory = 'staple' | 'bakery' | 'drink' | 'snack' | 'fresh' | 'other';
+export type FoodConsumptionMode = 'UNSPECIFIED' | 'DELIVERY' | 'DINE_IN';
+export type FoodVisibility = 'PUBLIC' | 'FRIENDS';
+export type CardReviewState = 'LEGACY_APPROVED' | 'PENDING_POST_REVIEW' | 'APPROVED' | 'TAKEN_DOWN';
+export type CardReactionType = 'LIKE' | 'DISLIKE';
+export type CardRevisionStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'WITHDRAWN';
+export type MaintenanceJobType = 'PURGE_CARD' | 'DELETE_ACCOUNT' | 'BACKFILL_CARD' | 'MIGRATE_REACTION' | 'PURGE_CONVERSATION';
+export type MaintenanceJobStatus = 'PENDING' | 'RUNNING' | 'RETRY_WAIT' | 'DONE' | 'CANCELLED' | 'FAILED';
+
+/** Cloud DB Date values cross the JSON boundary as millisecond numbers. */
+export interface CardReactionRecord {
+  cardId: string;
+  uid: string;
+  reaction: CardReactionType;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** Storage contract; public card responses never include the access-grant row. */
+export interface FriendContentAccessGrantRecord {
+  authorUid: string;
+  viewerUid: string;
+  accessThroughAt: number;
+  accessThroughSequence: number;
+  revoked: boolean;
+  revokedAt?: number;
+  updatedAt: number;
+}
+
+export interface SetCardVisibilityRequest {
+  cardId: string;
+  visibility: FoodVisibility;
+  expectedModifiedAt?: number;
+}
+
+export interface SetCardVisibilityResponse {
+  success: boolean;
+  cardId: string;
+  visibility: FoodVisibility;
+  modifiedAt: number;
+  publishedAt?: number;
+  friendVisibilitySince?: number;
+  friendVisibilitySequence?: number;
+  lifecycleGeneration?: number;
+  unchanged: boolean;
+}
+
+export interface RevokeFriendContentAccessRequest {
+  viewerUid: string;
+}
+
+export interface FriendCleanupJobRequest {
+  jobId: string;
+}
+
+export interface PublishRequestRecord {
+  requestId: string;
+  uid: string;
+  operationType: string;
+  payloadHash: string;
+  resultEntityId?: string;
+  status: string;
+  createdAt: number;
+  expiresAt: number;
+}
+
+export interface FoodCardRevisionRecord {
+  revisionId: string;
+  cardId: string;
+  authorUid: string;
+  baseModifiedAt: number;
+  baseLifecycleGeneration: number;
+  payloadJson: string;
+  mediaManifestJson: string;
+  status: CardRevisionStatus;
+  submittedAt: number;
+  reviewedAt?: number;
+  reviewReason?: string;
+}
+
+/** Server-owned task metadata; clients do not access the database directly. */
+export interface MaintenanceJobRecord {
+  jobId: string;
+  jobType: MaintenanceJobType;
+  entityId: string;
+  ownerUid?: string;
+  generation: number;
+  status: MaintenanceJobStatus;
+  runAfterAt: number;
+  leaseUntilAt?: number;
+  leaseOwner?: string;
+  attemptCount: number;
+  cursor?: string;
+  checkpointJson?: string;
+  lastErrorCode?: string;
+  createdAt: number;
+  updatedAt: number;
+}
 
 export interface UserProfile {
   uid: string;
@@ -113,6 +210,136 @@ export interface CardIdRequest {
   cardId: string;
 }
 
+export interface CardDetailRequest extends CardIdRequest {
+  includeComments: boolean;
+}
+
+export interface SetCardReactionRequest extends CardIdRequest {
+  reaction: CardReactionType | 'NONE';
+}
+
+export interface CardRevisionChanges {
+  productName?: string;
+  brand?: string;
+  priceFen?: number;
+  priceLabel?: string;
+  originalPriceFen?: number;
+  specification?: string;
+  shop?: string;
+  sellingPoints?: Array<string>;
+  publicOffers?: Array<string>;
+  reviewText?: string;
+  tasteScore?: number;
+  sourceLink?: string;
+  category?: FoodCategory;
+  visibility?: FoodVisibility;
+}
+
+export interface SubmitCardRevisionRequest extends CardIdRequest {
+  requestId: string;
+  baseModifiedAt: number;
+  baseLifecycleGeneration: number;
+  changes: CardRevisionChanges;
+  mediaIds: Array<string>;
+}
+
+export interface CardRevisionIdRequest {
+  revisionId: string;
+}
+
+export interface ModerateCardRevisionRequest extends CardRevisionIdRequest {
+  action: 'APPROVE' | 'REJECT';
+  reason: string;
+}
+
+export interface RevisionMediaRequest extends CardRevisionIdRequest {
+  mediaId: string;
+}
+
+export interface StartMigrationJobRequest {
+  jobType: 'BACKFILL_CARD' | 'MIGRATE_REACTION';
+}
+
+export interface MaintenanceJobIdRequest {
+  jobId: string;
+}
+
+export interface MaintenanceJobsRequest {
+  status?: MaintenanceJobStatus;
+  pageToken: string;
+}
+
+export interface CardRevisionView {
+  revisionId: string;
+  cardId: string;
+  authorUid: string;
+  status: CardRevisionStatus;
+  baseModifiedAt: number;
+  baseLifecycleGeneration: number;
+  changes: CardRevisionChanges;
+  mediaIds: Array<string>;
+  submittedAt: number;
+  reviewedAt: number | null;
+  reviewReason: string;
+}
+
+export interface CardRevisionResponse {
+  success?: boolean;
+  alreadyProcessed?: boolean;
+  revision: CardRevisionView;
+}
+
+export interface ModerationRevisionsResponse {
+  revisions: Array<CardRevisionView>;
+  nextPageToken: string;
+}
+
+export interface MigrationCheckpoint {
+  anchorUid?: string;
+  baselineAt: number;
+  scanned: number;
+  migrated: number;
+  skipped: number;
+  failures: number;
+  failedEntityId: string;
+  coverageComplete: boolean;
+  verificationCursor: string;
+  verificationScanned: number;
+  verificationMissing: number;
+  phase: 'MIGRATE' | 'VERIFY';
+}
+
+export interface MaintenanceJobView {
+  jobId: string;
+  jobType: MaintenanceJobType;
+  entityId: string;
+  generation: number;
+  status: MaintenanceJobStatus;
+  attemptCount: number;
+  cursor: string;
+  lastErrorCode: string;
+  runAfterAt: number | null;
+  leaseUntilAt: number | null;
+  createdAt: number | null;
+  updatedAt: number | null;
+}
+
+export interface MigrationJobView extends MaintenanceJobView {
+  checkpoint: MigrationCheckpoint;
+}
+
+export interface MigrationJobResponse {
+  job: MigrationJobView;
+}
+
+export interface MigrationStatusResponse {
+  jobs: Array<MigrationJobView>;
+  cardCoverageComplete: boolean;
+  reactionCoverageComplete: boolean;
+  indexedQueryReady: boolean;
+  userQueryVerificationRequired: boolean;
+}
+
 export interface ReportCardRequest {
   cardId: string;
   reason: string;
@@ -201,6 +428,8 @@ export interface CardActionResponse {
   favoriteCount: number;
   viewerLiked: boolean;
   viewerFavorited: boolean;
+  dislikeCount?: number;
+  myReaction?: CardReactionType | '';
 }
 
 export interface CommentReactionResponse {
@@ -221,6 +450,36 @@ export interface RoundedLocation {
 
 export interface FoodCard {
   id: string;
+  // Optional while old deployments and historical rows retain their legacy shape.
+  schemaVersion?: number;
+  migrationSource?: string;
+  consumptionMode?: FoodConsumptionMode;
+  visibility?: FoodVisibility;
+  merchantId?: string;
+  merchantNameSnapshot?: string;
+  merchantAddressSnapshot?: string;
+  categoryV2?: string;
+  categoryVersion?: number;
+  // Unknown prices are omitted; a present zero represents an explicitly known zero.
+  itemPriceFen?: number;
+  dineInAvgFen?: number;
+  orderTotalFen?: number;
+  deliveryFeeFen?: number;
+  queryPriceFen?: number;
+  deliveryPlatformKey?: string;
+  deliveryPlatformLabelSnapshot?: string;
+  consumedAt?: number;
+  publishedAt?: number;
+  modifiedAt?: number;
+  edited?: boolean;
+  friendVisibilitySince?: number;
+  friendVisibilitySequence?: number;
+  reviewState?: CardReviewState;
+  deletedAt?: number;
+  purgeAt?: number;
+  lifecycleGeneration?: number;
+  dislikeCount?: number;
+  myReaction?: CardReactionType | '';
   productName: string;
   brand: string;
   priceFen: number;
@@ -339,6 +598,7 @@ export interface PublicMediaResponse {
 }
 
 export interface PublishCardRequest {
+  requestId?: string;
   productName: string;
   brand: string;
   priceFen: number;
@@ -371,4 +631,9 @@ export interface MyCardsResponse {
 
 export interface OperationResponse {
   success: boolean;
+}
+
+export interface DeleteAccountResponse extends OperationResponse {
+  cleanupPending: boolean;
+  jobId: string;
 }

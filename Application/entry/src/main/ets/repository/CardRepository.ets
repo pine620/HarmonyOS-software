@@ -1,6 +1,6 @@
 import { common } from '@kit.AbilityKit';
 import {
-  CardActionResponse, CardComment, CardIdRequest, CardPhoto, CommentReactionResponse, CreateCardCommentRequest,
+  CardActionResponse, CardComment, CardDetailRequest, CardIdRequest, CardPhoto, CommentReactionResponse, CreateCardCommentRequest,
   DeleteCardCommentRequest, EmptyRequest, FoodCard, FriendRankingsResponse, MyCardsResponse, NearbyCardsRequest, NearbyCardsResponse,
   OperationResponse, PrepareCardPhotoRequest, PrepareCardPhotoResponse, PublishCardRequest,
   PublishCardResponse, PublicCardsRequest, ReceivedCommentItem, ReceivedCommentsRequest, ReceivedCommentsResponse, ReportCardRequest,
@@ -208,7 +208,7 @@ export class CardRepository {
   }
 
   async detail(context: common.Context, cardId: string): Promise<FoodCard> {
-    const request: CardIdRequest = { cardId };
+    const request: CardDetailRequest = { cardId, includeComments: false };
     const traceTaskId: number = NearbyPerformanceTrace.start('shike.detail.metadata');
     try {
       if (AuthService.profile() !== undefined && CloudGateway.hasSession()) {

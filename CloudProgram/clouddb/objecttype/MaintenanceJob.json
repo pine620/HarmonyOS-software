@@ -1,0 +1,169 @@
+{
+  "objectTypeName": "MaintenanceJob",
+  "fields": [
+    {
+      "fieldName": "jobId",
+      "fieldType": "String",
+      "notNull": true,
+      "belongPrimaryKey": true
+    },
+    {
+      "fieldName": "jobType",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "entityId",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "ownerUid",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "generation",
+      "fieldType": "Long",
+      "notNull": true,
+      "defaultValue": 0
+    },
+    {
+      "fieldName": "status",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "runAfterAt",
+      "fieldType": "Date"
+    },
+    {
+      "fieldName": "leaseUntilAt",
+      "fieldType": "Date"
+    },
+    {
+      "fieldName": "leaseOwner",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "attemptCount",
+      "fieldType": "Integer",
+      "notNull": true,
+      "defaultValue": 0
+    },
+    {
+      "fieldName": "cursor",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "checkpointJson",
+      "fieldType": "Text"
+    },
+    {
+      "fieldName": "lastErrorCode",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "createdAt",
+      "fieldType": "Date"
+    },
+    {
+      "fieldName": "updatedAt",
+      "fieldType": "Date"
+    }
+  ],
+  "indexes": [
+    {
+      "indexName": "status_run_job",
+      "indexList": [
+        {
+          "fieldName": "status",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "runAfterAt",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "jobId",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "status_lease_job",
+      "indexList": [
+        {
+          "fieldName": "status",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "leaseUntilAt",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "jobId",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "owner_type_job",
+      "indexList": [
+        {
+          "fieldName": "ownerUid",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "jobType",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "jobId",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "entity_type_generation",
+      "indexList": [
+        {
+          "fieldName": "entityId",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "jobType",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "generation",
+          "sortType": "ASC"
+        }
+      ]
+    }
+  ],
+  "permissions": [
+    {
+      "role": "World",
+      "rights": []
+    },
+    {
+      "role": "Authenticated",
+      "rights": []
+    },
+    {
+      "role": "Creator",
+      "rights": []
+    },
+    {
+      "role": "Administrator",
+      "rights": [
+        "Read",
+        "Upsert",
+        "Delete"
+      ]
+    }
+  ]
+}

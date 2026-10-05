@@ -1,6 +1,8 @@
 'use strict';
 
 const { cloud } = require('@hw-agconnect/cloud-server');
+const crypto = require('crypto');
+const { createContentPolicy, policyModels, currentVisibility, accessError } = require('./content-policy');
 
 const MAX_DISTANCE_KM = 20.0;
 const MAX_PAGE_SIZE = 20;
@@ -40,6 +42,8 @@ FoodCard.fieldTypes = Object.freeze({
   shop: 'String',
   sellingPointsJson: 'Text',
   publicOffersJson: 'Text',
+  reviewText: 'Text',
+  tasteScore: 'Integer',
   sourceLink: 'Text',
   category: 'String',
   mediaId: 'String',
@@ -49,13 +53,44 @@ FoodCard.fieldTypes = Object.freeze({
   geohash: 'String',
   status: 'String',
   createdAt: 'Long',
-  updatedAt: 'Long'
+  updatedAt: 'Long',
+  schemaVersion: 'Integer',
+  migrationSource: 'String',
+  consumptionMode: 'String',
+  visibility: 'String',
+  merchantId: 'String',
+  merchantNameSnapshot: 'String',
+  merchantAddressSnapshot: 'Text',
+  categoryV2: 'String',
+  categoryVersion: 'Integer',
+  itemPriceFen: 'Long',
+  dineInAvgFen: 'Long',
+  orderTotalFen: 'Long',
+  deliveryFeeFen: 'Long',
+  queryPriceFen: 'Long',
+  deliveryPlatformKey: 'String',
+  deliveryPlatformLabelSnapshot: 'String',
+  consumedAt: 'Date',
+  publishedAt: 'Date',
+  modifiedAt: 'Date',
+  edited: 'Boolean',
+  friendVisibilitySince: 'Date',
+  friendVisibilitySequence: 'Long',
+  reviewState: 'String',
+  deletedAt: 'Date',
+  purgeAt: 'Date',
+  lifecycleGeneration: 'Long',
+  searchTextNormalized: 'Text'
 });
 FoodCard.primaryKeys = Object.freeze(['id']);
 FoodCard.indexes = Object.freeze([
+  'status,createdAt,id',
+  'status,category,createdAt,id',
   'ownerUid,createdAt',
+  'ownerUid,status,createdAt',
   'status,latE3,lonE3,createdAt',
-  'status,createdAt'
+  'status,createdAt',
+  'ownerUid,status,tasteScore,createdAt'
 ]);
 
 function safeLogError(error) {
@@ -96,9 +131,30 @@ function roundedLocation(payload) {
   return { latE3, lonE3 };
 }
 
-function collection(env) {
+function collection(env, name = 'FoodCard') {
   const zoneName = String(env.SHIKE_DB_ZONE || process.env.SHIKE_DB_ZONE || 'shike');
-  return cloud.database({ zoneName }).collection(FoodCard);
+  const models = { ...policyModels, FoodCard };
+  if (!models[name]) throw new Error('未知云数据库对象类型。');
+  return cloud.database({ zoneName }).collection(models[name]);
+}
+
+async function one(query) {
+  const rows = await query.limit(1).get();
+  return rows.length > 0 ? rows[0] : null;
+}
+
+function contentPolicy(env) {
+  return createContentPolicy((name) => collection(env, name), one);
+}
+
+async function verifiedUid(accessToken, env) {
+  const providerUid = await verifyAgcAccessToken(accessToken);
+  const id = crypto.createHash('sha256').update('shike-identity:AGC:' + providerUid).digest('hex');
+  const binding = await one(collection(env, 'IdentityBinding').query().equalTo('id', id));
+  if (binding && String(binding.status || 'ACTIVE') !== 'ACTIVE') throw accessError('账号身份已停用。', 'ACCOUNT_INACTIVE');
+  const uid = binding ? String(binding.canonicalUid || providerUid) : providerUid;
+  await contentPolicy(env).assertAccountActive(uid, true);
+  return uid;
 }
 
 function safeArray(value) {
@@ -149,7 +205,7 @@ function publicCard(row, distanceKm) {
 }
 
 async function checkLocation(input, env) {
-  await verifyAgcAccessToken(input.accessToken);
+  await verifiedUid(input.accessToken, env);
   roundedLocation(input.payload || {});
   return {
     authenticated: true,
@@ -159,7 +215,7 @@ async function checkLocation(input, env) {
 }
 
 async function listNearbyCards(input, env) {
-  await verifyAgcAccessToken(input.accessToken);
+  const uid = await verifiedUid(input.accessToken, env);
   const point = roundedLocation(input.payload || {});
   const latDelta = Math.ceil(MAX_DISTANCE_KM / 111.0 * 1000);
   const latitude = point.latE3 / 1000 * Math.PI / 180;
@@ -171,7 +227,13 @@ async function listNearbyCards(input, env) {
     .greaterThanOrEqualTo('lonE3', point.lonE3 - lonDelta)
     .lessThanOrEqualTo('lonE3', point.lonE3 + lonDelta)
     .limit(200).get();
-  const matched = approvedRows
+  const readableRows = [];
+  const policy = contentPolicy(env);
+  await policy.prepareCardReads(uid, approvedRows.filter((row) => currentVisibility(row) === 'PUBLIC'));
+  for (const row of approvedRows) {
+    if (currentVisibility(row) === 'PUBLIC' && await policy.canReadCard(uid, row)) readableRows.push(row);
+  }
+  const matched = readableRows
     .map((row) => ({ row, distanceKm: haversineKm(point.latE3, point.lonE3, row.latE3, row.lonE3) }))
     .filter((item) => item.distanceKm <= MAX_DISTANCE_KM)
     .sort((a, b) => itemOrder(a, b));

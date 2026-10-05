@@ -11,11 +11,13 @@ export interface NotificationItem {
 }
 
 export interface NotificationPageRequest {
+  includeComments?: boolean;
   pageToken: string;
   pageSize: number;
 }
 
 export interface NotificationIdRequest {
+  includeComments?: boolean;
   notificationId: string;
 }
 

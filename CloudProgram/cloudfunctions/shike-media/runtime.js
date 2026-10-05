@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const fs = require('fs/promises');
 const { cloud } = require('@hw-agconnect/cloud-server');
+const { createContentPolicy, policyModels, accessError } = require('./content-policy');
 const { AGCClient, CredentialParser } = require('@agconnect/common-server');
 const { AGCCloudStorage } = require('@agconnect/cloudstorage-server');
 
@@ -26,7 +27,7 @@ CardMedia.fieldTypes = Object.freeze({
   width: 'Integer', height: 'Integer', status: 'String', createdAt: 'Long'
 });
 CardMedia.primaryKeys = Object.freeze(['id']);
-CardMedia.indexes = Object.freeze(['ownerUid,createdAt', 'cardId']);
+CardMedia.indexes = Object.freeze(['cardId', 'cardId,createdAt', 'ownerUid,createdAt']);
 
 class IdentityBinding extends CloudDbModel {}
 IdentityBinding.fieldTypes = Object.freeze({
@@ -36,7 +37,7 @@ IdentityBinding.fieldTypes = Object.freeze({
 IdentityBinding.primaryKeys = Object.freeze(['id']);
 IdentityBinding.indexes = Object.freeze(['provider,providerUid', 'canonicalUid']);
 
-const OBJECT_TYPES = Object.freeze({ CardMedia, IdentityBinding });
+const OBJECT_TYPES = Object.freeze({ ...policyModels, CardMedia, IdentityBinding });
 
 function required(env, name) {
   const value = String((env || {})[name] || '').trim();
@@ -75,6 +76,10 @@ async function one(query) {
   return rows.length > 0 ? rows[0] : null;
 }
 
+function contentPolicy(env) {
+  return createContentPolicy((name) => collection(env, name), one);
+}
+
 function identityBindingId(provider, providerUid) {
   return crypto.createHash('sha256').update(`shike-identity:${String(provider)}:${String(providerUid)}`).digest('hex');
 }
@@ -92,8 +97,9 @@ async function verifiedIdentity(accessToken, env) {
   const bindings = collection(env, 'IdentityBinding');
   const id = identityBindingId('AGC', providerUid);
   const binding = await one(bindings.query().equalTo('id', id));
-  const canonicalUid = binding && String(binding.status || 'ACTIVE') === 'ACTIVE'
-    ? String(binding.canonicalUid || providerUid) : providerUid;
+  if (binding && String(binding.status || 'ACTIVE') !== 'ACTIVE') throw accessError('账号身份已停用。', 'ACCOUNT_INACTIVE');
+  const canonicalUid = binding ? String(binding.canonicalUid || providerUid) : providerUid;
+  await contentPolicy(env).assertAccountActive(canonicalUid, true);
   if (!binding) {
     const now = Date.now();
     await bindings.upsert({
@@ -197,6 +203,28 @@ async function writeApproved(payload, env) {
 async function readApproved(payload, env) {
   const key = validKey(payload && payload.key);
   if (!key.startsWith('public/approved/')) throw new Error('媒体读取路径无效。');
+  const mediaId = mediaIdFromApprovedObjectKey(key);
+  const media = mediaId && await one(collection(env, 'CardMedia').query().equalTo('id', mediaId));
+  if (!media || approvedObjectKey(String(media.storageUid || media.ownerUid), mediaId) !== key ||
+      !await contentPolicy(env).canReadMedia(String(payload && payload.viewerUid || ''), media)) {
+    throw accessError('图片不存在或当前不可访问。');
+  }
+  const bytes = await readFileBytes(storageBucket(env).file(key));
+  if (bytes.length === 0 || bytes.length > MAX_PHOTO_BYTES) throw new Error('图片内容无效或超过允许大小。');
+  return { dataBase64: bytes.toString('base64'), byteSize: bytes.length };
+}
+
+async function readRevision(payload, env) {
+  // This method is reachable only through a verified service HMAC envelope.
+  // Administrator is asserted by shike-service; current DB ownership/status is
+  // independently checked again here before Storage returns bytes.
+  const key = validKey(payload && payload.key);
+  if (!key.startsWith('public/approved/')) throw new Error('媒体读取路径无效。');
+  const id = mediaIdFromApprovedObjectKey(key);
+  const media = id && await one(collection(env, 'CardMedia').query().equalTo('id', id));
+  if (!media || approvedObjectKey(String(media.storageUid || media.ownerUid), id) !== key ||
+      !await contentPolicy(env).canReadRevisionMedia(String(payload.viewerUid || ''), media,
+        String(payload.revisionId || ''), payload.administrator === true)) throw accessError('编辑图片不可访问。');
   const bytes = await readFileBytes(storageBucket(env).file(key));
   if (bytes.length === 0 || bytes.length > MAX_PHOTO_BYTES) throw new Error('图片内容无效或超过允许大小。');
   return { dataBase64: bytes.toString('base64'), byteSize: bytes.length };
@@ -290,19 +318,15 @@ async function uploadCardPhoto(input, env) {
 }
 
 async function getPublicMedia(input, env) {
-  await verifiedIdentity(input && input.accessToken, env);
+  const identity = await verifiedIdentity(input && input.accessToken, env);
   const payload = input && input.payload || {};
   const bucketName = String(payload.bucketName || '').trim();
   const objectKey = String(payload.cloudPath || '').trim();
   if (bucketName !== required(env, 'SHIKE_STORAGE_BUCKET')) throw new Error('图片所属云存储实例无效。');
+  const response = await readApproved({ key: objectKey, viewerUid: identity.canonicalUid }, env);
   const mediaId = mediaIdFromApprovedObjectKey(objectKey);
-  if (!mediaId) throw new Error('图片路径无效。');
   const media = await one(collection(env, 'CardMedia').query().equalTo('id', mediaId));
-  if (!media || String(media.status || '') !== 'APPROVED' || approvedObjectKey(String(media.storageUid || media.ownerUid), mediaId) !== objectKey) {
-    throw new Error('图片不存在、尚未发布或路径不匹配。');
-  }
-  const response = await readApproved({ key: objectKey }, env);
-  return { mimeType: String(media.mimeType || 'image/jpeg'), ...response };
+  return { mimeType: String(media && media.mimeType || 'image/jpeg'), ...response };
 }
 
 async function execute(input, env) {
@@ -310,6 +334,7 @@ async function execute(input, env) {
   switch (request.action) {
     case 'write-approved': return writeApproved(request.payload, env);
     case 'read-approved': return readApproved(request.payload, env);
+    case 'read-revision': return readRevision(request.payload, env);
     case 'promote': return promote(request.payload, env);
     case 'remove': return remove(request.payload, env);
     default: throw new Error('未知的媒体服务操作。');

@@ -1,4 +1,5 @@
 import { common } from '@kit.AbilityKit';
+import util from '@ohos.util';
 import {
   FoodCategory, PrepareCardPhotoRequest, PublishCardRequest, RoundedLocation
 } from '../model/CloudContracts';
@@ -72,6 +73,15 @@ export struct CreateCardPage {
   private repository: CardRepository = new CardRepository();
   private preparedPhotos: Array<PreparedPhoto> = [];
   private photoPreparationRevision: number = 0;
+  private publicationRequestId: string = '';
+  private pendingPublication: PublishCardRequest | undefined = undefined;
+  private pendingFormFingerprint: string = '';
+
+  private publicationFingerprint(): string {
+    const fields: Array<string> = [this.productName.trim(), this.price.trim(), this.placeText.trim(),
+      this.sourceLink.trim(), this.reviewText.trim(), this.tasteScore.toString(), this.category];
+    return JSON.stringify(fields);
+  }
 
   private scoreLabel(score: number = this.tasteScore): string {
     return tasteScoreLabel(score);
@@ -95,6 +105,9 @@ export struct CreateCardPage {
 
   private resetForm(): void {
     this.photoPreparationRevision++;
+    this.publicationRequestId = '';
+    this.pendingPublication = undefined;
+    this.pendingFormFingerprint = '';
     this.productName = '';
     this.price = '';
     this.placeText = '';
@@ -131,6 +144,10 @@ export struct CreateCardPage {
   }
 
   private async chooseOwnedPhoto(): Promise<void> {
+    if (this.pendingPublication !== undefined) {
+      this.status = '请先重试确认上次发布结果，再更换照片。';
+      return;
+    }
     const revision: number = this.photoPreparationRevision + 1;
     this.photoPreparationRevision = revision;
     try {
@@ -170,50 +187,65 @@ export struct CreateCardPage {
     this.publishing = true;
     try {
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      this.status = '正在获取本次发布所需的位置…';
-      const location: RoundedLocation = await LocationService.getPreciseRoundedLocation(context);
-      const mediaIds: Array<string> = [];
-      for (let index = 0; index < this.preparedPhotos.length; index++) {
-        const photo = this.preparedPhotos[index];
-        this.status = '正在准备实拍图 ' + (index + 1) + '/' + this.preparedPhotos.length + '…';
-        const photoRequest: PrepareCardPhotoRequest = {
-          mimeType: photo.mimeType,
-          byteSize: photo.byteSize,
-          sha256: photo.sha256,
-          width: photo.width,
-          height: photo.height
-        };
-        const prepared = await this.repository.preparePhoto(context, photoRequest);
-        this.status = '正在上传实拍图 ' + (index + 1) + '/' + this.preparedPhotos.length + '…';
-        await PhotoUploadService.upload(context, prepared.bucketName, prepared.cloudPath, photo.data, photo.sha256);
-        mediaIds.push(prepared.mediaId);
+      const fingerprint: string = this.publicationFingerprint();
+      const pending: PublishCardRequest | undefined = this.pendingPublication;
+      if (pending !== undefined && this.pendingFormFingerprint !== fingerprint) {
+        this.status = '上次发布结果尚未确认，请恢复原表单后重试，或先到“我的卡片”确认结果。';
+        return;
       }
-      const request: PublishCardRequest = {
-        productName: this.productName.trim(),
-        brand: '',
-        priceFen: priceToFen(this.price),
-        priceLabel: '',
-        originalPriceFen: 0,
-        specification: '',
-        shop: this.placeText.trim(),
-        sellingPoints: [],
-        publicOffers: [],
-        reviewText: this.reviewText.trim(),
-        tasteScore: this.tasteScore,
-        sourceLink: this.sourceLink.trim(),
-        category: this.category,
-        mediaId: mediaIds[0],
-        mediaIds,
-        latE3: location.latE3,
-        lonE3: location.lonE3,
-        district: location.district
-      };
+      if (this.publicationRequestId.length === 0) this.publicationRequestId = util.generateRandomUUID();
+      let request: PublishCardRequest;
+      if (pending !== undefined) {
+        request = pending;
+      } else {
+        this.status = '正在获取本次发布所需的位置…';
+        const location: RoundedLocation = await LocationService.getPreciseRoundedLocation(context);
+        const mediaIds: Array<string> = [];
+        for (let index = 0; index < this.preparedPhotos.length; index++) {
+          const photo = this.preparedPhotos[index];
+          this.status = '正在准备实拍图 ' + (index + 1) + '/' + this.preparedPhotos.length + '…';
+          const photoRequest: PrepareCardPhotoRequest = {
+            mimeType: photo.mimeType,
+            byteSize: photo.byteSize,
+            sha256: photo.sha256,
+            width: photo.width,
+            height: photo.height
+          };
+          const prepared = await this.repository.preparePhoto(context, photoRequest);
+          this.status = '正在上传实拍图 ' + (index + 1) + '/' + this.preparedPhotos.length + '…';
+          await PhotoUploadService.upload(context, prepared.bucketName, prepared.cloudPath, photo.data, photo.sha256);
+          mediaIds.push(prepared.mediaId);
+        }
+        request = {
+          requestId: this.publicationRequestId,
+          productName: this.productName.trim(),
+          brand: '',
+          priceFen: priceToFen(this.price),
+          priceLabel: '',
+          originalPriceFen: 0,
+          specification: '',
+          shop: this.placeText.trim(),
+          sellingPoints: [],
+          publicOffers: [],
+          reviewText: this.reviewText.trim(),
+          tasteScore: this.tasteScore,
+          sourceLink: this.sourceLink.trim(),
+          category: this.category,
+          mediaId: mediaIds[0],
+          mediaIds,
+          latE3: location.latE3,
+          lonE3: location.lonE3,
+          district: location.district
+        };
+        this.pendingPublication = request;
+        this.pendingFormFingerprint = fingerprint;
+      }
       this.status = '正在保存推荐卡…';
       const result = await this.repository.publish(context, request);
       if (result.status === 'APPROVED') {
         this.resetForm();
         this.hasPublishedNotice = true;
-        this.status = '发布成功：你的评分和评论已显示在推荐页、口碑榜与详情页。';
+        this.status = '发布成功：你的评分和点评已显示在推荐页、口碑榜与详情页。';
         this.onPublished();
       } else {
         this.hasPublishedNotice = false;

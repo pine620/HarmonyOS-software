@@ -74,7 +74,6 @@ struct ServiceCard {
           .fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'))
           .width('100%').layoutWeight(1).maxLines(this.cardHeight >= 176 ? 2 : 1)
           .minFontSize('14vp').maxFontSize(this.formDimension === 3 ? 23 : 20)
-          .heightAdaptivePolicy(TextHeightAdaptivePolicy.LAYOUT_CONSTRAINT_FIRST)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
         if (this.cardHeight >= 156) {
           Text(this.hasCard() ? `${this.categoryText} · ${this.locationText}` : '打开食刻，发现好味道')

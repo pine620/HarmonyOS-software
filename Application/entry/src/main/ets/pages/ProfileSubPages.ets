@@ -59,7 +59,7 @@ export struct MyPublishedPage {
 
   private requestDeleteCard(cardId: string): void {
     this.pendingDeleteCardId = cardId;
-    this.status = '删除后卡片及实拍图不可恢复，请再次确认。';
+    this.status = '删除后卡片将立即隐藏，清理请求会保存在云端，请再次确认。';
   }
 
   private async deleteCard(cardId: string): Promise<void> {
@@ -70,7 +70,7 @@ export struct MyPublishedPage {
       await this.repository.deleteOwn(context, cardId);
       this.cards = await this.repository.myCards(context);
       this.pendingDeleteCardId = '';
-      this.status = '卡片及其云端实拍图已删除。';
+      this.status = '卡片已隐藏，相关数据已进入云端清理流程。';
       this.onCardsChanged();
     } catch (error) {
       this.status = `删除失败：${errorText(error as ErrorDetail)}`;
@@ -111,7 +111,7 @@ export struct MyPublishedPage {
 
       if (this.pendingDeleteCardId === card.id) {
           Column({ space: 10 }) {
-            Text('确认删除这张卡片和对应实拍图？')
+            Text('确认删除这张卡片？内容将立即隐藏。')
               .fontSize(13).lineHeight(20).fontColor($r('app.color.danger')).width('100%')
             Row({ space: 10 }) {
               Button('取消').layoutWeight(1).height(48)
@@ -280,7 +280,7 @@ export struct PermissionsPrivacyPage {
     try {
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
       await PushNotificationService.enable(context, profile.uid);
-      this.status = '好友、私信、群聊与评论通知已开启。';
+      this.status = '好友、私信与群聊通知已开启。';
     } catch (error) {
       this.status = `通知开启失败：${errorText(error as ErrorDetail)}`;
     } finally {
@@ -420,7 +420,7 @@ export struct PermissionsPrivacyPage {
               .fontColor($r('app.color.ink')).width('100%')
             Text(this.notificationStatus).fontSize(14).fontWeight(FontWeight.Medium)
               .fontColor(this.notificationEnabled ? $r('app.color.leaf') : $r('app.color.muted')).width('100%')
-            Text('默认关闭。开启后提醒好友申请、申请通过、私信、群聊、评论与回复；系统通知不展示聊天或评论正文。')
+            Text('默认关闭。开启后提醒好友申请、申请通过、私信与群聊；系统通知不展示聊天正文。')
               .fontSize(13).lineHeight(20).fontColor($r('app.color.muted')).width('100%')
             if (this.notificationSupported) {
               if (this.notificationEnabled) {
@@ -498,14 +498,14 @@ export struct PermissionsPrivacyPage {
           Column({ space: 12 }) {
             Text('隐私与数据删除').fontSize(18).fontWeight(FontWeight.Bold)
               .fontColor($r('app.color.ink')).width('100%')
-            Text('你可删除本人发布的卡片；移除好友会关闭双方会话并清理全部对应私信。退出登录会使当前会话失效；本机浏览记录仍按账号保留，可手动清空，注销账号时清理。')
+            Text('你可删除本人发布的卡片；移除好友会关闭当前会话，历史私信进入清理流程。退出登录会使当前会话失效；本机浏览记录仍按账号保留，可手动清空，注销账号时清理。')
               .fontSize(13).lineHeight(20).fontColor($r('app.color.muted')).width('100%')
             Button(this.showPrivacy ? '收起完整说明' : '查看完整隐私说明')
               .width('100%').height(48).backgroundColor($r('app.color.surface'))
               .fontColor($r('app.color.ink')).border({ width: 1, color: $r('app.color.line') })
               .onClick(() => this.showPrivacy = !this.showPrivacy)
             if (this.showPrivacy) {
-              Text('食刻使用 AGC Auth 管理邮箱验证码注册、登录和最近一次重新认证；邮箱原文不写入 UserProfile，食刻也不会收集或保存邮箱密码。华为账号仅作为兼容登录入口，完成邮箱绑定后，业务数据继续使用稳定的食刻账号标识。你可在资料页主动填写昵称并选择头像；头像与实拍图均先在本机重编码、移除 EXIF/GPS，再上传到 AGC 公开路径。发布位置只上传三位小数坐标和行政区，浏览位置不写入云端。好友功能会保存食刻号、好友申请、好友关系、会话未读数，以及你主动发送的文字、HTTPS 链接和卡片标识。好友通知和桌面卡片远程同步默认关闭，分别由你主动开启；相关 Push Token 均会加密保存。远程同步只更新已审核公开推荐摘要，不携带定位、实拍图、好友关系或私信。跨设备接续只传页签、卡片 ID 或好友 ID。移除好友时会话从双方页面移除，并同步清理全部对应私信。测试阶段的实拍图随卡片直接上架；正式上架前应根据平台要求补充内容审核和 HTTPS 隐私政策地址。')
+              Text('食刻使用 AGC Auth 管理邮箱验证码注册、登录和最近一次重新认证；邮箱原文不写入 UserProfile，食刻也不会收集或保存邮箱密码。华为账号仅作为兼容登录入口，完成邮箱绑定后，业务数据继续使用稳定的食刻账号标识。你可在资料页主动填写昵称并选择头像；头像与实拍图均先在本机重编码、移除 EXIF/GPS，再上传到 AGC 公开路径。发布位置只上传三位小数坐标和行政区，浏览位置不写入云端。好友功能会保存食刻号、好友申请、好友关系、会话未读数，以及你主动发送的文字、HTTPS 链接和卡片标识。好友通知和桌面卡片远程同步默认关闭，分别由你主动开启；相关 Push Token 均会加密保存。远程同步只更新已审核公开推荐摘要，不携带定位、实拍图、好友关系或私信。跨设备接续只传页签、卡片 ID 或好友 ID。移除好友时当前会话从双方页面移除，历史私信进入清理流程；已获授权的旧好友内容按权限规则继续可读，作者可撤销授权。测试阶段的实拍图随卡片直接上架；正式上架前应根据平台要求补充内容审核和 HTTPS 隐私政策地址。')
                 .fontSize(13).lineHeight(21).fontColor($r('app.color.muted')).width('100%')
                 .padding(14).backgroundColor($r('app.color.canvas')).borderRadius(14)
             }
@@ -832,7 +832,7 @@ export struct ProfileSettingsPage {
             Column({ space: 12 }) {
               Text('注销食刻账号').fontSize(18).fontWeight(FontWeight.Bold)
                 .fontColor($r('app.color.danger')).width('100%')
-              Text('注销会删除个人资料、本人发布的卡片与实拍图、好友关系和私信数据，并取消当前应用授权。此操作不可恢复。')
+              Text('注销申请提交后账号将立即停用、内容不可访问；相关数据和认证身份按后台清理流程处理。此操作不可恢复。')
                 .fontSize(13).lineHeight(20).fontColor($r('app.color.muted')).width('100%')
               if (this.deleteConfirmationVisible) {
                 Text('请再次确认：你将永久失去当前食刻账号及其相关数据。')

@@ -166,8 +166,8 @@ export struct CardDetailPage {
       this.favoriteCount = detail.favoriteCount === undefined ? 0 : detail.favoriteCount;
       this.viewerLiked = detail.viewerLiked === true;
       this.viewerFavorited = detail.viewerFavorited === true;
-      this.commentCount = detail.commentCount === undefined ? 0 : detail.commentCount;
-      this.comments = this.normalizeComments(detail.comments === undefined ? [] : detail.comments);
+      this.commentCount = 0;
+      this.comments = [];
       this.status = '';
       void this.hydratePhotoAt(0, 'high', generation);
       void this.hydrateAuthorAvatar(generation);
@@ -1167,7 +1167,6 @@ export struct CardDetailPage {
               Column({ space: 18 }) {
                 this.reviewSection();
                 this.productInfo();
-                this.commentsSection();
                 if (this.status.length > 0) {
                   Text(this.status).fontSize(12).lineHeight(19).fontColor($r('app.color.muted')).width('100%')
                     .padding(12).backgroundColor($r('app.color.accent_soft')).borderRadius(14);

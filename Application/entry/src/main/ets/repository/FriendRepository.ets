@@ -1,4 +1,5 @@
 import { common } from '@kit.AbilityKit';
+import util from '@ohos.util';
 import { CardPhoto, FoodCard, OperationResponse } from '../model/CloudContracts';
 import {
   CancelFriendRequest, ChatMessage, ConversationSummary, ConversationsResponse, CreateGroupChatRequest,
@@ -14,6 +15,8 @@ import { CloudGateway } from '../service/CloudGateway';
 import { PhotoUploadService } from '../service/PhotoUploadService';
 
 export class FriendRepository {
+  private removalRequests: Map<string, RemoveFriendRequest> = new Map<string, RemoveFriendRequest>();
+
   private async resolveUserAvatar(context: common.Context, user: SocialUser): Promise<void> {
     if (user.avatarPath.length === 0 || user.avatarBucket.length === 0) {
       user.avatarUrl = '';
@@ -89,15 +92,15 @@ export class FriendRepository {
     await CloudGateway.callAuthenticated<OperationResponse>('send-friend-request', request);
   }
 
-  async respondRequest(context: common.Context, requestId: string, accept: boolean): Promise<void> {
+  async respondRequest(context: common.Context, requestId: string, accept: boolean, expectedCreatedAt: number): Promise<void> {
     await AuthService.ensureSession(context);
-    const request: RespondFriendRequestRequest = { requestId, accept };
+    const request: RespondFriendRequestRequest = { requestId, accept, expectedCreatedAt };
     await CloudGateway.callAuthenticated<OperationResponse>('respond-friend-request', request);
   }
 
-  async cancelRequest(context: common.Context, requestId: string): Promise<void> {
+  async cancelRequest(context: common.Context, requestId: string, expectedCreatedAt: number): Promise<void> {
     await AuthService.ensureSession(context);
-    const request: CancelFriendRequest = { requestId };
+    const request: CancelFriendRequest = { requestId, expectedCreatedAt };
     await CloudGateway.callAuthenticated<OperationResponse>('cancel-friend-request', request);
   }
 
@@ -119,10 +122,22 @@ export class FriendRepository {
     await CloudGateway.callAuthenticated<OperationResponse>('report-user', request);
   }
 
-  async removeFriend(context: common.Context, friendUid: string): Promise<void> {
+  async removeFriend(context: common.Context, friendUid: string, expectedUpdatedAt: number | undefined): Promise<void> {
     await AuthService.ensureSession(context);
-    const request: RemoveFriendRequest = { friendUid };
+    if (expectedUpdatedAt === undefined || !Number.isSafeInteger(expectedUpdatedAt) || expectedUpdatedAt <= 0) {
+      throw new Error('请刷新好友列表后再解除好友。');
+    }
+    const key: string = `${friendUid}:${expectedUpdatedAt}`;
+    let request: RemoveFriendRequest | undefined = this.removalRequests.get(key);
+    if (request === undefined) {
+      const createdRequest: RemoveFriendRequest = {
+        friendUid, requestId: util.generateRandomUUID(), expectedFriendshipUpdatedAt: expectedUpdatedAt
+      };
+      this.removalRequests.set(key, createdRequest);
+      request = createdRequest;
+    }
     await CloudGateway.callAuthenticated<OperationResponse>('remove-friend', request);
+    this.removalRequests.delete(key);
   }
 
   async listConversations(context: common.Context, pageToken: string = '', pageSize: number = 50): Promise<ConversationsResponse> {

@@ -1,0 +1,142 @@
+{
+  "objectTypeName": "FoodCardRevision",
+  "fields": [
+    {
+      "fieldName": "revisionId",
+      "fieldType": "String",
+      "notNull": true,
+      "belongPrimaryKey": true
+    },
+    {
+      "fieldName": "cardId",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "authorUid",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "baseModifiedAt",
+      "fieldType": "Date"
+    },
+    {
+      "fieldName": "baseLifecycleGeneration",
+      "fieldType": "Long",
+      "notNull": true,
+      "defaultValue": 0
+    },
+    {
+      "fieldName": "payloadJson",
+      "fieldType": "Text",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "mediaManifestJson",
+      "fieldType": "Text",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "status",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "submittedAt",
+      "fieldType": "Date"
+    },
+    {
+      "fieldName": "reviewedAt",
+      "fieldType": "Date"
+    },
+    {
+      "fieldName": "reviewReason",
+      "fieldType": "String"
+    }
+  ],
+  "indexes": [
+    {
+      "indexName": "card_status_submitted",
+      "indexList": [
+        {
+          "fieldName": "cardId",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "status",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "submittedAt",
+          "sortType": "DESC"
+        },
+        {
+          "fieldName": "revisionId",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "author_submitted",
+      "indexList": [
+        {
+          "fieldName": "authorUid",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "submittedAt",
+          "sortType": "DESC"
+        },
+        {
+          "fieldName": "revisionId",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "status_submitted",
+      "indexList": [
+        {
+          "fieldName": "status",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "submittedAt",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "revisionId",
+          "sortType": "ASC"
+        }
+      ]
+    }
+  ],
+  "permissions": [
+    {
+      "role": "World",
+      "rights": []
+    },
+    {
+      "role": "Authenticated",
+      "rights": []
+    },
+    {
+      "role": "Creator",
+      "rights": []
+    },
+    {
+      "role": "Administrator",
+      "rights": [
+        "Read",
+        "Upsert",
+        "Delete"
+      ]
+    }
+  ]
+}

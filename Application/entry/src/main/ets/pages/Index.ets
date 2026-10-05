@@ -21,7 +21,6 @@ import { CreateCardPage } from './CreateCardPage';
 import { ProfilePage } from './ProfilePage';
 import { FavoriteCardsPage } from './FavoriteCardsPage';
 import { CardHistoryPage } from './CardHistoryPage';
-import { ReceivedCommentsPage } from './ReceivedCommentsPage';
 import { NotificationInboxPage } from './NotificationInboxPage';
 import { MyPublishedPage, PermissionsPrivacyPage, ProfileEditPage, ProfileSettingsPage } from './ProfileSubPages';
 import { CardDetailPage } from './CardDetailPage';
@@ -684,8 +683,6 @@ struct Index {
       NotificationInboxPage({ onOpenNotification: async (notificationId: string): Promise<void> => {
         await this.followNotification(notificationId);
       } })
-    } else if (routeName === 'profile-comments') {
-      ReceivedCommentsPage({ onOpenCard: (card: FoodCard): void => this.openCard(card) })
     } else if (routeName === 'profile-privacy') {
       PermissionsPrivacyPage()
     } else if (routeName === 'profile-edit') {

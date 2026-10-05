@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const { cloud } = require('@hw-agconnect/cloud-server');
+const { createContentPolicy, isAccountActive, readableCardState, currentVisibility, dateMillis, accessError } = require('./content-policy');
 
 const MAX_DISTANCE_KM = 20.0;
 const MAX_PAGE_SIZE = 20;
@@ -11,7 +12,7 @@ const NEARBY_CARD_HYDRATION_CONCURRENCY = 4;
 const NEARBY_CACHE_TTL_SECONDS = 25;
 const NEARBY_CACHE_TIMEOUT_MS = 400;
 const NEARBY_CACHE_RETRY_DELAY_MS = 30000;
-const NEARBY_CACHE_VERSION = 'v2';
+const NEARBY_CACHE_VERSION = 'v3';
 let nearbyRedis = null;
 let nearbyRedisConnecting = null;
 let nearbyRedisRetryAfter = 0;
@@ -78,10 +79,14 @@ UserProfile.fieldTypes = Object.freeze({
   accountStatus: 'String',
   publishCount: 'Integer',
   createdAt: 'Long',
-  updatedAt: 'Long'
+  updatedAt: 'Long',
+  contentSequence: 'Long'
 });
 UserProfile.primaryKeys = Object.freeze(['uid']);
-UserProfile.indexes = Object.freeze(['nicknameValue', 'friendCode']);
+UserProfile.indexes = Object.freeze([
+  'nicknameValue',
+  'friendCode'
+]);
 
 class FoodCard extends CloudDbModel {}
 FoodCard.fieldTypes = Object.freeze({
@@ -107,16 +112,44 @@ FoodCard.fieldTypes = Object.freeze({
   geohash: 'String',
   status: 'String',
   createdAt: 'Long',
-  updatedAt: 'Long'
+  updatedAt: 'Long',
+  schemaVersion: 'Integer',
+  migrationSource: 'String',
+  consumptionMode: 'String',
+  visibility: 'String',
+  merchantId: 'String',
+  merchantNameSnapshot: 'String',
+  merchantAddressSnapshot: 'Text',
+  categoryV2: 'String',
+  categoryVersion: 'Integer',
+  itemPriceFen: 'Long',
+  dineInAvgFen: 'Long',
+  orderTotalFen: 'Long',
+  deliveryFeeFen: 'Long',
+  queryPriceFen: 'Long',
+  deliveryPlatformKey: 'String',
+  deliveryPlatformLabelSnapshot: 'String',
+  consumedAt: 'Date',
+  publishedAt: 'Date',
+  modifiedAt: 'Date',
+  edited: 'Boolean',
+  friendVisibilitySince: 'Date',
+  friendVisibilitySequence: 'Long',
+  reviewState: 'String',
+  deletedAt: 'Date',
+  purgeAt: 'Date',
+  lifecycleGeneration: 'Long',
+  searchTextNormalized: 'Text'
 });
 FoodCard.primaryKeys = Object.freeze(['id']);
 FoodCard.indexes = Object.freeze([
+  'status,createdAt,id',
+  'status,category,createdAt,id',
   'ownerUid,createdAt',
   'ownerUid,status,createdAt',
   'status,latE3,lonE3,createdAt',
   'status,createdAt',
-  'status,createdAt,id',
-  'status,category,createdAt,id'
+  'ownerUid,status,tasteScore,createdAt'
 ]);
 
 class CardMedia extends CloudDbModel {}
@@ -159,7 +192,11 @@ CardAction.fieldTypes = Object.freeze({
   createdAt: 'Long'
 });
 CardAction.primaryKeys = Object.freeze(['id']);
-CardAction.indexes = Object.freeze(['cardId', 'actorUid,createdAt']);
+CardAction.indexes = Object.freeze([
+  'actorUid,kind,createdAt,id',
+  'cardId',
+  'actorUid,createdAt'
+]);
 
 class CardComment extends CloudDbModel {}
 CardComment.fieldTypes = Object.freeze({
@@ -353,11 +390,106 @@ AuthMigrationTicket.fieldTypes = Object.freeze({
 AuthMigrationTicket.primaryKeys = Object.freeze(['id']);
 AuthMigrationTicket.indexes = Object.freeze(['canonicalUid', 'expiresAt']);
 
+class CardReaction extends CloudDbModel {}
+CardReaction.fieldTypes = Object.freeze({
+  cardId: 'String',
+  uid: 'String',
+  reaction: 'String',
+  createdAt: 'Date',
+  updatedAt: 'Date'
+});
+CardReaction.primaryKeys = Object.freeze(['cardId', 'uid']);
+CardReaction.indexes = Object.freeze([
+  'cardId,reaction,uid',
+  'uid,updatedAt,cardId'
+]);
+
+class FriendContentAccessGrant extends CloudDbModel {}
+FriendContentAccessGrant.fieldTypes = Object.freeze({
+  authorUid: 'String',
+  viewerUid: 'String',
+  accessThroughAt: 'Date',
+  accessThroughSequence: 'Long',
+  revoked: 'Boolean',
+  revokedAt: 'Date',
+  updatedAt: 'Date'
+});
+FriendContentAccessGrant.primaryKeys = Object.freeze(['authorUid', 'viewerUid']);
+FriendContentAccessGrant.indexes = Object.freeze([
+  'authorUid,viewerUid',
+  'viewerUid,authorUid'
+]);
+
+class PublishRequestRecord extends CloudDbModel {}
+PublishRequestRecord.fieldTypes = Object.freeze({
+  requestId: 'String',
+  uid: 'String',
+  operationType: 'String',
+  payloadHash: 'String',
+  resultEntityId: 'String',
+  status: 'String',
+  createdAt: 'Date',
+  expiresAt: 'Date'
+});
+PublishRequestRecord.primaryKeys = Object.freeze(['requestId']);
+PublishRequestRecord.indexes = Object.freeze([
+  'uid,createdAt,requestId',
+  'status,expiresAt,requestId'
+]);
+
+class FoodCardRevision extends CloudDbModel {}
+FoodCardRevision.fieldTypes = Object.freeze({
+  revisionId: 'String',
+  cardId: 'String',
+  authorUid: 'String',
+  baseModifiedAt: 'Date',
+  baseLifecycleGeneration: 'Long',
+  payloadJson: 'Text',
+  mediaManifestJson: 'Text',
+  status: 'String',
+  submittedAt: 'Date',
+  reviewedAt: 'Date',
+  reviewReason: 'String'
+});
+FoodCardRevision.primaryKeys = Object.freeze(['revisionId']);
+FoodCardRevision.indexes = Object.freeze([
+  'cardId,status,submittedAt,revisionId',
+  'authorUid,submittedAt,revisionId',
+  'status,submittedAt,revisionId'
+]);
+
+class MaintenanceJob extends CloudDbModel {}
+MaintenanceJob.fieldTypes = Object.freeze({
+  jobId: 'String',
+  jobType: 'String',
+  entityId: 'String',
+  ownerUid: 'String',
+  generation: 'Long',
+  status: 'String',
+  runAfterAt: 'Date',
+  leaseUntilAt: 'Date',
+  leaseOwner: 'String',
+  attemptCount: 'Integer',
+  cursor: 'String',
+  checkpointJson: 'Text',
+  lastErrorCode: 'String',
+  createdAt: 'Date',
+  updatedAt: 'Date'
+});
+MaintenanceJob.primaryKeys = Object.freeze(['jobId']);
+MaintenanceJob.indexes = Object.freeze([
+  'status,runAfterAt,jobId',
+  'status,leaseUntilAt,jobId',
+  'ownerUid,jobType,jobId',
+  'entityId,jobType,generation'
+]);
+
 const OBJECT_TYPES = Object.freeze({
   UserProfile, FoodCard, CardMedia, Report, CardAction, CardComment, CommentReaction,
   Friendship, FriendReport, Conversation, ChatMessage, GroupConversation, GroupMember, GroupMessage,
   NotificationEvent, PushRegistration, WidgetRegistration,
-  IdentityBinding, AuthMigrationTicket
+  IdentityBinding, AuthMigrationTicket,
+  CardReaction, FriendContentAccessGrant, PublishRequestRecord, FoodCardRevision, MaintenanceJob
 });
 
 function required(env, name) {
@@ -601,6 +733,8 @@ function pushJwt(config) {
 }
 
 async function pushTokensFor(uid, env) {
+  const profile = await one(collection(env, 'UserProfile').query().equalTo('uid', uid));
+  if (!isAccountActive(profile)) return [];
   const rows = await collection(env, 'PushRegistration').query().equalTo('ownerUid', uid).limit(20).get();
   const tokens = [];
   for (const row of rows) {
@@ -679,6 +813,9 @@ function notificationId(recipientUid, kind, sourceId) {
 async function emitNotification(recipientUid, actorUid, kind, sourceId, targetId, env) {
   if (!recipientUid || recipientUid === actorUid || !NOTIFICATION_TEXT[kind]) return;
   try {
+    const policy = contentPolicy(env);
+    await policy.assertAccountActive(recipientUid);
+    await policy.assertAccountActive(actorUid);
     const id = notificationId(recipientUid, kind, sourceId);
     const notifications = collection(env, 'NotificationEvent');
     if (await one(notifications.query().equalTo('id', id))) return;
@@ -717,8 +854,9 @@ async function listNotifications(uid, payload, env) {
     : MAX_NOTIFICATION_PAGE_SIZE;
   const token = String(payload.pageToken || '').trim();
   const offset = /^\d+$/.test(token) ? Math.min(Number(token), 1000000) : 0;
-  const rows = await queryAllRows(() => collection(env, 'NotificationEvent').query()
+  let rows = await queryAllRows(() => collection(env, 'NotificationEvent').query()
     .equalTo('recipientUid', uid));
+  if (payload.includeComments === false) rows = rows.filter((row) => row.kind !== 'CARD_COMMENT' && row.kind !== 'REPLY');
   rows.sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0) ||
     String(b.id || '').localeCompare(String(a.id || '')));
   const items = rows.slice(offset, offset + pageSize).map(publicNotification);
@@ -771,6 +909,9 @@ async function openNotification(uid, payload, env) {
   const kind = String(row.kind || '');
   const targetId = String(row.targetId || '');
   const actorUid = String(row.actorUid || '');
+  if (payload.includeComments === false && (kind === 'CARD_COMMENT' || kind === 'REPLY')) return { route: 'expired', targetId: '' };
+  const actor = await one(collection(env, 'UserProfile').query().equalTo('uid', actorUid));
+  if (!isAccountActive(actor)) return { route: 'expired', targetId: '' };
   if (kind === 'FRIEND_REQUEST') {
     const request = await one(collection(env, 'Friendship').query().equalTo('id', targetId));
     return request && String(request.addresseeUid || '') === uid &&
@@ -793,7 +934,7 @@ async function openNotification(uid, payload, env) {
     const comment = await one(collection(env, 'CardComment').query()
       .equalTo('id', String(row.sourceId || '')));
     return card && comment && String(comment.cardId || '') === targetId &&
-      String(comment.status || '') === 'ACTIVE' && String(card.status || '') === 'APPROVED'
+      String(comment.status || '') === 'ACTIVE' && await contentPolicy(env).canReadCard(uid, card)
       ? { route: 'card', targetId } : { route: 'expired', targetId: '' };
   }
   return { route: 'expired', targetId: '' };
@@ -889,7 +1030,9 @@ async function pushServiceCardUpdate(uid, payload, env) {
     throw new Error('公开卡片标识无效。');
   }
   const card = await one(collection(env, 'FoodCard').query().equalTo('id', cardId));
-  if (!card || card.status !== 'APPROVED') throw new Error('该卡片不再公开，无法同步到桌面。');
+  if (!await contentPolicy(env).isCardPubliclyVisible(card) || !await contentPolicy(env).canReadCard(uid, card)) {
+    throw accessError('该卡片不再公开，无法同步到桌面。');
+  }
   const registrations = collection(env, 'WidgetRegistration');
   const rows = await registrations.query().equalTo('ownerUid', uid)
     .limit(MAX_SERVICE_CARD_REGISTRATIONS_PER_ACCOUNT).get();
@@ -1000,6 +1143,151 @@ async function one(query) {
   return rows.length > 0 ? rows[0] : null;
 }
 
+function contentPolicy(env) {
+  return createContentPolicy((name) => collection(env, name), one);
+}
+
+function contentSequence(profile) {
+  const value = Number(profile && profile.contentSequence || 0);
+  if (!Number.isSafeInteger(value) || value < 0) throw accessError('账号内容序列无效。', 'INVALID_STATE');
+  return value;
+}
+
+function nextContentSequence(profile) {
+  const value = contentSequence(profile) + 1;
+  if (!Number.isSafeInteger(value)) throw accessError('账号内容序列已达上限。', 'INVALID_STATE');
+  return value;
+}
+
+function logicalWriteTime(...values) {
+  let now = Date.now();
+  for (const value of values) {
+    if (value == null) continue;
+    const previous = Number(value);
+    if (!Number.isSafeInteger(previous) || previous < 0 || !Number.isSafeInteger(previous + 1)) {
+      throw accessError('服务端版本时间无效。', 'INVALID_STATE');
+    }
+    now = Math.max(now, previous + 1);
+  }
+  return now;
+}
+
+function profileForWrite(row, now, sequence = contentSequence(row)) {
+  // Cloud DB may omit sensitive mirrors on read. Restore them from the
+  // existing non-sensitive server-only fields when touching the sequence fence.
+  const nickname = String(row.nicknameValue || row.nickname || '食刻用户');
+  const avatarMediaId = String(row.avatarMediaId || '');
+  return Object.assign(new UserProfile(), row, {
+    nickname, nicknameValue: nickname,
+    avatarUrl: avatarMediaId ? approvedObjectKey(String(row.avatarStorageUid || row.uid), avatarMediaId) : '',
+    contentSequence: sequence, updatedAt: now
+  });
+}
+
+async function pairProfiles(transaction, uid, otherUid, env, requireOtherActive = false) {
+  const pair = socialPair(uid, otherUid);
+  const profiles = [];
+  for (const memberUid of [pair.memberAUid, pair.memberBUid]) {
+    const rows = await transaction.executeQuery(collection(env, 'UserProfile').query().equalTo('uid', memberUid).limit(1));
+    const row = rows[0];
+    if (!row || ((memberUid === uid || requireOtherActive) && !isAccountActive(row))) {
+      throw accessError('账号不存在、已停用或正在注销。', 'ACCOUNT_INACTIVE');
+    }
+    contentSequence(row);
+    profiles.push(row);
+  }
+  return profiles;
+}
+
+function transactionPolicy(transaction, env, profiles = [], relationships = []) {
+  return createContentPolicy((name) => collection(env, name), async (query) => {
+    const rows = await transaction.executeQuery(query.limit(1));
+    return rows[0] || null;
+  }, { profiles, relationships });
+}
+
+async function readableCardRows(rows, viewerUid, env, publicOnly = false) {
+  const candidates = publicOnly ? rows.filter((row) => currentVisibility(row) === 'PUBLIC') : rows;
+  const policy = contentPolicy(env);
+  await policy.prepareCardReads(viewerUid, candidates);
+  const readable = [];
+  for (const row of candidates) {
+    if (await policy.canReadCard(viewerUid, row)) readable.push(row);
+  }
+  return readable;
+}
+
+async function readCardIfAllowed(row, env, distanceKm = 0, includePhoto = true, viewerUid = '',
+  includeThread = false, maxPhotoCount = MAX_CARD_PHOTOS, metrics = null) {
+  try {
+    return await publicCard(row, env, distanceKm, includePhoto, viewerUid, includeThread, maxPhotoCount, metrics);
+  } catch (error) {
+    if (error && error.code === 'CONTENT_ACCESS_DENIED') return null;
+    throw error;
+  }
+}
+
+// Offsets count consumed database rows, including denied rows. A bounded scan
+// continues past hidden content and returns a continuation when its budget ends.
+async function scanCardPage(queryFactory, viewerUid, env, offset, pageSize, publicOnly = false, photoCount = 1) {
+  const cards = [];
+  let cursor = offset;
+  let scanned = 0;
+  while (scanned < 200 && cards.length < pageSize) {
+    const limit = Math.min(50, 200 - scanned);
+    const rows = await queryFactory().limit(limit, cursor).get();
+    if (rows.length === 0) return { cards, nextOffset: cursor, hasMore: false };
+    const readableRows = new Set(await readableCardRows(rows, viewerUid, env, publicOnly));
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index];
+      cursor += 1;
+      scanned += 1;
+      if (readableRows.has(row)) {
+        const card = await readCardIfAllowed(row, env, 0, true, viewerUid, false, photoCount);
+        if (card) cards.push(card);
+      }
+      if (cards.length === pageSize) {
+        return { cards, nextOffset: cursor, hasMore: index + 1 < rows.length || rows.length === limit };
+      }
+    }
+    if (rows.length < limit) return { cards, nextOffset: cursor, hasMore: false };
+  }
+  return { cards, nextOffset: cursor, hasMore: true };
+}
+
+function cardContractFields(row) {
+  const output = {
+    schemaVersion: Number(row.schemaVersion || 0),
+    consumptionMode: ['DELIVERY', 'DINE_IN'].includes(row.consumptionMode) ? row.consumptionMode : 'UNSPECIFIED',
+    visibility: currentVisibility(row),
+    reviewState: String(row.reviewState || 'LEGACY_APPROVED'),
+    categoryVersion: Number(row.categoryVersion || 0),
+    publishedAt: dateMillis(row.publishedAt) === null ? Number(row.createdAt || 0) : dateMillis(row.publishedAt),
+    modifiedAt: dateMillis(row.modifiedAt) === null ? Number(row.updatedAt || row.createdAt || 0) : dateMillis(row.modifiedAt),
+    edited: row.edited === true,
+    lifecycleGeneration: Number(row.lifecycleGeneration || 0)
+  };
+  for (const key of ['migrationSource', 'merchantId', 'merchantNameSnapshot', 'merchantAddressSnapshot',
+    'categoryV2', 'deliveryPlatformKey', 'deliveryPlatformLabelSnapshot']) {
+    if (typeof row[key] === 'string' && row[key]) output[key] = row[key];
+  }
+  for (const key of ['itemPriceFen', 'dineInAvgFen', 'orderTotalFen', 'deliveryFeeFen', 'queryPriceFen']) {
+    if (row[key] != null && Number.isSafeInteger(Number(row[key])) && Number(row[key]) >= 0) output[key] = Number(row[key]);
+  }
+  if (Number(row.schemaVersion || 0) === 0 && Number(row.priceFen || 0) > 0) {
+    output.itemPriceFen = Number(row.priceFen);
+    output.queryPriceFen = Number(row.priceFen);
+  }
+  for (const key of ['consumedAt', 'friendVisibilitySince']) {
+    const value = dateMillis(row[key]);
+    if (value !== null) output[key] = value;
+  }
+  if (Number.isSafeInteger(Number(row.friendVisibilitySequence)) && Number(row.friendVisibilitySequence) > 0) {
+    output.friendVisibilitySequence = Number(row.friendVisibilitySequence);
+  }
+  return output;
+}
+
 function identityBindingId(provider, providerUid) {
   return crypto.createHash('sha256')
     .update(`shike-identity:${String(provider)}:${String(providerUid)}`)
@@ -1057,8 +1345,9 @@ async function verifiedAgcUid(accessToken) {
 async function verifiedIdentity(accessToken, env) {
   const providerUid = await verifiedAgcUid(accessToken);
   const binding = await identityBinding('AGC', providerUid, env);
-  const canonicalUid = binding && String(binding.status || 'ACTIVE') === 'ACTIVE'
-    ? String(binding.canonicalUid || providerUid) : providerUid;
+  if (binding && String(binding.status || 'ACTIVE') !== 'ACTIVE') throw accessError('账号身份已停用。', 'ACCOUNT_INACTIVE');
+  const canonicalUid = binding ? String(binding.canonicalUid || providerUid) : providerUid;
+  await contentPolicy(env).assertAccountActive(canonicalUid, true);
   await ensureIdentityBinding('AGC', providerUid, canonicalUid, env);
   return { providerUid, canonicalUid };
 }
@@ -1334,47 +1623,30 @@ function mediaIdFromApprovedObjectKey(objectKey) {
 async function getPublicMedia(uid, payload, env) {
   const bucketName = String(payload && payload.bucketName || '').trim();
   const objectKey = String(payload && payload.cloudPath || '').trim();
-  if (bucketName !== required(env, 'SHIKE_STORAGE_BUCKET')) {
-    throw new Error('图片所属云存储实例无效。');
-  }
+  if (bucketName !== required(env, 'SHIKE_STORAGE_BUCKET')) throw new Error('图片所属云存储实例无效。');
   const mediaId = mediaIdFromApprovedObjectKey(objectKey);
   if (!mediaId) throw new Error('图片路径无效。');
   const media = await one(collection(env, 'CardMedia').query().equalTo('id', mediaId));
-  if (!media || media.status !== 'APPROVED' || approvedObjectKeyForMedia(media) !== objectKey) {
-    throw new Error('图片不存在、尚未发布或路径不匹配。');
-  }
-  const mediaOwnerUid = String(media.ownerUid || '');
-  if (!uid) {
-    const cardId = String(media.cardId || '');
-    if (mediaOwnerUid && cardId === `profile:${mediaOwnerUid}`) {
-      const profile = await one(collection(env, 'UserProfile').query().equalTo('uid', mediaOwnerUid));
-      if (!profile || String(profile.avatarMediaId || '') !== mediaId ||
-          String(profile.accountStatus || 'ACTIVE') !== 'ACTIVE') {
-        throw new Error('头像不再公开。');
-      }
-    } else {
-      const card = cardId && await one(collection(env, 'FoodCard').query().equalTo('id', cardId));
-      if (!card || card.status !== 'APPROVED' || String(card.ownerUid || '') !== mediaOwnerUid) {
-        throw new Error('图片所属卡片未公开或已下架。');
-      }
-    }
-  }
-  if (mediaOwnerUid && String(media.cardId || '') === `profile-cover:${mediaOwnerUid}` && mediaOwnerUid !== uid) {
-    const relationship = await friendshipBetween(uid, mediaOwnerUid, env);
-    if (!relationship || String(relationship.status || '') !== 'ACCEPTED') {
-      throw new Error('只有好友才能查看该主页背景。');
-    }
-  }
-  const response = await callMedia('read-approved', { key: objectKey }, env);
+  if (!media || media.status !== 'APPROVED' || approvedObjectKeyForMedia(media) !== objectKey ||
+      !await contentPolicy(env).canReadMedia(uid, media)) throw accessError('图片不存在或当前不可访问。');
+  const response = await callMedia('read-approved', { key: objectKey, viewerUid: uid }, env);
   const bytes = Buffer.from(String(response.dataBase64 || ''), 'base64');
   if (bytes.length === 0 || bytes.length > MAX_PHOTO_BYTES || bytes.length !== Number(response.byteSize || 0)) {
     throw new Error('图片内容无效或超过允许大小。');
   }
-  return {
-    mimeType: String(media.mimeType || 'image/jpeg'),
-    dataBase64: bytes.toString('base64'),
-    byteSize: bytes.length
-  };
+  return { mimeType: String(media.mimeType || 'image/jpeg'), dataBase64: bytes.toString('base64'), byteSize: bytes.length };
+}
+
+async function getRevisionMedia(uid, payload, env) {
+  const media = await one(collection(env, 'CardMedia').query().equalTo('id', String(payload.mediaId || '')));
+  await contentPolicy(env).assertAccountActive(uid);
+  const administrator = isAdministrator(uid, env);
+  const revisionId = String(payload.revisionId || '');
+  if (!await contentPolicy(env).canReadRevisionMedia(uid, media, revisionId, administrator)) throw accessError('编辑图片不可访问。');
+  const response = await callMedia('read-revision', { key: approvedObjectKeyForMedia(media), viewerUid: uid, revisionId, administrator }, env);
+  const bytes = Buffer.from(String(response.dataBase64 || ''), 'base64');
+  if (!bytes.length || bytes.length > MAX_PHOTO_BYTES || bytes.length !== Number(response.byteSize || 0)) throw new Error('编辑图片返回无效。');
+  return { mimeType: String(media.mimeType || 'image/jpeg'), dataBase64: bytes.toString('base64'), byteSize: bytes.length };
 }
 
 async function promotePendingMedia(media, env) {
@@ -1445,13 +1717,15 @@ function profileResponse(record, env) {
 async function upsertProfile(uid, payload, env, trustedProfile = false) {
   const users = collection(env, 'UserProfile');
   const existing = await one(users.query().equalTo('uid', uid));
+  if (existing && !isAccountActive(existing)) throw accessError('账号已停用或正在注销。', 'ACCOUNT_INACTIVE');
   if (!trustedProfile && payload && payload.readOnly === true) {
     if (existing) return profileResponse(existing, env);
     // AGC Auth has already verified the caller's UID. Create the local app
     // profile on first sign-in without storing email or provider details.
     return upsertProfile(uid, { nickname: '食刻用户' }, env, true);
   }
-  const publishCount = await collection(env, 'FoodCard').query().equalTo('ownerUid', uid).countQuery('id');
+  const ownedCards = await queryAllRows(() => collection(env, 'FoodCard').query().equalTo('ownerUid', uid));
+  const publishCount = ownedCards.filter(readableCardState).length;
   const now = Date.now();
   let nickname = String((existing && existing.nicknameValue) || '').trim();
   let avatarMediaId = String((existing && existing.avatarMediaId) || '').trim();
@@ -1564,13 +1838,42 @@ async function upsertProfile(uid, payload, env, trustedProfile = false) {
     coverMediaId,
     coverStorageUid: coverMediaId ? coverStorageUid : '',
     friendCode: friendCodeForUid(uid),
-    accountStatus: 'ACTIVE',
+    accountStatus: existing ? String(existing.accountStatus || 'ACTIVE') : 'ACTIVE',
+    contentSequence: Number(existing && existing.contentSequence || 0),
     publishCount,
     createdAt: existing ? Number(existing.createdAt || now) : now,
     updatedAt: now
   };
-  await users.upsert(record);
-  return profileResponse(record, env);
+  let saved = null;
+  const committed = await users.runTransaction({
+    apply: async (transaction) => {
+      const rows = await transaction.executeQuery(users.query().equalTo('uid', uid).limit(1));
+      const current = rows[0];
+      if (current && !isAccountActive(current)) throw accessError('账号已停用或正在注销。', 'ACCOUNT_INACTIVE');
+      const writeAt = logicalWriteTime(current && current.updatedAt);
+      saved = trustedProfile && current ? profileForWrite(current, writeAt) : Object.assign(new UserProfile(), record, {
+        accountStatus: current ? String(current.accountStatus || 'ACTIVE') : 'ACTIVE',
+        contentSequence: contentSequence(current), createdAt: current ? Number(current.createdAt || writeAt) : writeAt,
+        updatedAt: writeAt
+      });
+      saved.publishCount = publishCount;
+      if (!trustedProfile && current) {
+        if (!String(payload && payload.avatarMediaId || '').trim()) {
+          saved.avatarMediaId = current.avatarMediaId;
+          saved.avatarStorageUid = current.avatarStorageUid;
+          saved.avatarUrl = saved.avatarMediaId ? approvedObjectKey(String(saved.avatarStorageUid || uid), String(saved.avatarMediaId)) : '';
+        }
+        if (!(payload && payload.clearCover === true) && !String(payload && payload.coverMediaId || '').trim()) {
+          saved.coverMediaId = current.coverMediaId;
+          saved.coverStorageUid = current.coverStorageUid;
+        }
+      }
+      transaction.executeUpsert([saved]);
+      return true;
+    }
+  });
+  if (!committed || !saved) throw new Error('用户资料保存未完成，请重试。');
+  return profileResponse(saved, env);
 }
 
 async function refreshPublishCount(uid, env) {
@@ -1709,13 +2012,20 @@ function validateCard(payload) {
 }
 
 async function publishCard(uid, payload, env) {
+  const receiptSpec = stage1.publishReceiptSpec(uid, payload);
+  const replay = await stage1.readPublishReceipt(uid, receiptSpec, env);
+  if (replay) return replay;
   const validated = validateCard(payload);
   const point = roundedLocation(payload);
   const mediaIds = uniqueMediaIds(payload);
   const medias = [];
   for (const mediaId of mediaIds) {
     const media = await one(collection(env, 'CardMedia').query().equalTo('id', mediaId));
-    if (!media || media.ownerUid !== uid || media.cardId) throw new Error('实拍图不存在、不属于当前用户或已被使用。');
+    if (!media || media.ownerUid !== uid || media.cardId) {
+      const retry = await stage1.readPublishReceipt(uid, receiptSpec, env);
+      if (retry) return retry;
+      throw new Error('实拍图不存在、不属于当前用户或已被使用。');
+    }
     // Confirm each caller-owned public upload before creating a public card.
     // The compatibility branch also promotes an already-uploaded legacy
     // private/pending object if one exists.
@@ -1723,7 +2033,7 @@ async function publishCard(uid, payload, env) {
     medias.push(media);
   }
   const now = Date.now();
-  const cardId = crypto.randomUUID();
+  let cardId = crypto.randomUUID();
   const record = {
     id: cardId,
     ownerUid: uid,
@@ -1746,12 +2056,22 @@ async function publishCard(uid, payload, env) {
     district: String(payload.district || '当前位置').slice(0, 80),
     geohash: geohash(point.latE3 / 1000, point.lonE3 / 1000),
     status: 'APPROVED',
+    schemaVersion: 2, migrationSource: 'SERVER', consumptionMode: 'UNSPECIFIED', visibility: 'PUBLIC',
+    reviewState: 'PENDING_POST_REVIEW', publishedAt: new Date(now), modifiedAt: new Date(now),
+    edited: false, lifecycleGeneration: 0,
     createdAt: now,
     updatedAt: now
   };
+  Object.assign(record, stage1.derived(record));
   const mediaStore = collection(env, 'CardMedia');
   const committed = await collection(env, 'FoodCard').runTransaction({
     apply: async (transaction) => {
+      const owners = await transaction.executeQuery(collection(env, 'UserProfile').query().equalTo('uid', uid).limit(1));
+      if (!isAccountActive(owners[0])) throw accessError('账号已停用或正在注销。', 'ACCOUNT_INACTIVE');
+      const receipts = await transaction.executeQuery(collection(env, 'PublishRequestRecord').query()
+        .equalTo('requestId', receiptSpec.receiptId).limit(1));
+      const existingResult = stage1.checkPublishReceipt(receipts[0], uid, receiptSpec);
+      if (existingResult) { cardId = existingResult.cardId; return true; }
       const currentMedias = [];
       for (const media of medias) {
         const rows = await transaction.executeQuery(mediaStore.query().equalTo('id', media.id).limit(1));
@@ -1762,7 +2082,15 @@ async function publishCard(uid, payload, env) {
         }
         currentMedias.push(Object.assign(new CardMedia(), current, { cardId, status: 'APPROVED' }));
       }
-      transaction.executeUpsert([Object.assign(new FoodCard(), record)]);
+      const committedAt = logicalWriteTime(owners[0].updatedAt);
+      Object.assign(record, { createdAt: committedAt, updatedAt: committedAt,
+        publishedAt: new Date(committedAt), modifiedAt: new Date(committedAt) });
+      stage1.upsertRows(transaction, [Object.assign(new FoodCard(), record), profileForWrite(owners[0], committedAt)]);
+      transaction.executeUpsert([Object.assign(new PublishRequestRecord(), {
+        requestId: receiptSpec.receiptId, uid, operationType: 'PUBLISH_CARD', payloadHash: receiptSpec.payloadHash,
+        resultEntityId: cardId, status: 'COMMITTED', createdAt: new Date(committedAt),
+        expiresAt: new Date(committedAt + 30 * 24 * 60 * 60 * 1000)
+      })]);
       if (currentMedias.length > 0) transaction.executeUpsert(currentMedias);
       return true;
     }
@@ -1801,7 +2129,7 @@ async function publicProfile(uid, env, metrics = null) {
   try {
     if (metrics) metrics.profileDbQueries += 1;
     const profile = await one(collection(env, 'UserProfile').query().equalTo('uid', uid));
-    if (!profile) return fallback;
+    if (!isAccountActive(profile)) return fallback;
     const output = profileResponse(profile, env);
     return {
       nickname: output.nickname || '食刻用户',
@@ -1830,7 +2158,8 @@ async function publicPhotos(row, env, includePhoto, maxPhotoCount = MAX_CARD_PHO
   }
   const photos = [];
   for (const media of medias) {
-    if (!media || media.status !== 'APPROVED') continue;
+    if (!media || media.status !== 'APPROVED' || String(media.ownerUid || '') !== String(row.ownerUid || '') ||
+        String(media.cardId || '') !== String(row.id || '')) continue;
     try {
       photos.push({
         id: String(media.id || ''),
@@ -1848,19 +2177,7 @@ async function publicPhotos(row, env, includePhoto, maxPhotoCount = MAX_CARD_PHO
 }
 
 async function cardActionSummary(cardId, viewerUid, env) {
-  const actions = await collection(env, 'CardAction').query().equalTo('cardId', cardId).limit(500).get();
-  let likeCount = 0;
-  let favoriteCount = 0;
-  let viewerLiked = false;
-  let viewerFavorited = false;
-  for (const action of actions) {
-    const kind = String(action.kind || '');
-    if (kind === 'LIKE') likeCount += 1;
-    if (kind === 'FAVORITE') favoriteCount += 1;
-    if (viewerUid && String(action.actorUid || '') === viewerUid && kind === 'LIKE') viewerLiked = true;
-    if (viewerUid && String(action.actorUid || '') === viewerUid && kind === 'FAVORITE') viewerFavorited = true;
-  }
-  return { likeCount, favoriteCount, viewerLiked, viewerFavorited };
+  return stage1.reactionSummary(cardId, viewerUid, env);
 }
 
 async function commentReactionSummary(commentId, viewerUid, env) {
@@ -1884,12 +2201,16 @@ async function publicComments(cardId, viewerUid, env) {
     .orderByAsc('createdAt').limit(MAX_CARD_COMMENTS).get();
   const authorUids = [...new Set(rows.map((row) => String(row.authorUid || '')).filter(Boolean))];
   const authorsByUid = new Map();
+  const inactiveAuthors = new Set();
   const profiles = collection(env, 'UserProfile');
   for (let start = 0; start < authorUids.length; start += SOCIAL_PROFILE_QUERY_BATCH_SIZE) {
     const batch = authorUids.slice(start, start + SOCIAL_PROFILE_QUERY_BATCH_SIZE);
     try {
       const records = await profiles.query().in('uid', batch).limit(batch.length).get();
+      const returnedUids = new Set(records.map((record) => String(record.uid)));
+      for (const missingUid of batch) if (!returnedUids.has(missingUid)) inactiveAuthors.add(missingUid);
       for (const record of records) {
+        if (!isAccountActive(record)) { inactiveAuthors.add(String(record.uid)); continue; }
         try {
           const profile = profileResponse(record, env);
           authorsByUid.set(String(record.uid || ''), {
@@ -1901,8 +2222,9 @@ async function publicComments(cardId, viewerUid, env) {
           // Keep the same fallback as publicProfile for malformed profiles.
         }
       }
-    } catch (_error) {
-      // Profile data is optional in the public comment view.
+    } catch (error) {
+      // Account status is an authorization boundary; only presentation can fall back.
+      throw error;
     }
   }
   const reactionSummariesById = new Map();
@@ -1954,7 +2276,7 @@ async function publicComments(cardId, viewerUid, env) {
       { nickname: '食刻用户', avatarPath: '', avatarBucket: '' };
     const reactions = reactionSummariesById.get(String(row.id || '')) ||
       { likeCount: 0, dislikeCount: 0, viewerReaction: '' };
-    const deleted = String(row.status || 'ACTIVE') === 'DELETED';
+    const deleted = String(row.status || 'ACTIVE') === 'DELETED' || inactiveAuthors.has(String(row.authorUid || ''));
     if (!deleted) commentCount += 1;
     const view = {
       id: String(row.id || ''),
@@ -1988,6 +2310,7 @@ async function publicComments(cardId, viewerUid, env) {
 
 async function publicCard(row, env, distanceKm = 0, includePhoto = false, viewerUid = '', includeThread = false,
   maxPhotoCount = MAX_CARD_PHOTOS, metrics = null) {
+  await contentPolicy(env).assertCardReadable(viewerUid, row);
   const ownerUid = String(row.ownerUid || '');
   const parts = [
     publicPhotos(row, env, includePhoto, maxPhotoCount, metrics),
@@ -2002,10 +2325,11 @@ async function publicCard(row, env, distanceKm = 0, includePhoto = false, viewer
   const actions = includeThread
     ? await cardActionSummary(String(row.id || ''), viewerUid, env)
     : { likeCount: 0, favoriteCount: 0, viewerLiked: false, viewerFavorited: false };
-  const thread = includeThread
+  const thread = includeThread && includeThread !== 'NO_COMMENTS'
     ? await publicComments(String(row.id || ''), viewerUid, env)
     : { comments: [], commentCount: 0 };
   return {
+    ...cardContractFields(row),
     id: row.id,
     productName: row.productName,
     brand: row.brand || '',
@@ -2034,6 +2358,7 @@ async function publicCard(row, env, distanceKm = 0, includePhoto = false, viewer
     likeCount: actions.likeCount,
     favoriteCount: actions.favoriteCount,
     viewerLiked: actions.viewerLiked,
+    dislikeCount: Number(actions.dislikeCount || 0), myReaction: String(actions.myReaction || ''),
     viewerFavorited: actions.viewerFavorited,
     commentCount: thread.commentCount,
     comments: thread.comments,
@@ -2117,42 +2442,19 @@ function nearbyCacheKey(point, epoch, config) {
 }
 
 function nearbyCandidate(row) {
-  // Explicit projection prevents a future private FoodCard field from entering Redis.
-  return {
-    id: row.id, ownerUid: row.ownerUid, productName: row.productName,
-    brand: row.brand, priceFen: row.priceFen, priceLabel: row.priceLabel,
-    originalPriceFen: row.originalPriceFen, specification: row.specification,
-    shop: row.shop, sellingPointsJson: row.sellingPointsJson,
-    publicOffersJson: row.publicOffersJson, reviewText: row.reviewText,
-    tasteScore: row.tasteScore, sourceLink: row.sourceLink, category: row.category,
-    mediaId: row.mediaId, latE3: row.latE3, lonE3: row.lonE3,
-    district: row.district, status: row.status, createdAt: row.createdAt
-  };
+  // Candidate IDs are reusable; content and authorization are always read live.
+  return { id: String(row.id || '') };
 }
 
 function nearbyCachedRows(value) {
   const snapshot = JSON.parse(value);
   if (!snapshot || snapshot.version !== NEARBY_CACHE_VERSION ||
-    !Number.isSafeInteger(snapshot.createdAt) || snapshot.createdAt > Date.now() ||
-    Date.now() - snapshot.createdAt >= NEARBY_CACHE_TTL_SECONDS * 1000 ||
-    !Array.isArray(snapshot.rows) || snapshot.rows.length > 200) throw new Error('invalid nearby snapshot');
+      !Number.isSafeInteger(snapshot.createdAt) || snapshot.createdAt > Date.now() ||
+      Date.now() - snapshot.createdAt >= NEARBY_CACHE_TTL_SECONDS * 1000 ||
+      !Array.isArray(snapshot.rows) || snapshot.rows.length > 200) throw new Error('invalid nearby snapshot');
   const ids = new Set();
   return snapshot.rows.map((raw) => {
-    if (!raw || raw.status !== 'APPROVED' || typeof raw.id !== 'string' || !raw.id ||
-      ids.has(raw.id) || typeof raw.ownerUid !== 'string' || !raw.ownerUid ||
-      !Number.isInteger(raw.latE3) || Math.abs(raw.latE3) > 90000 ||
-      !Number.isInteger(raw.lonE3) || Math.abs(raw.lonE3) > 180000 ||
-      typeof raw.mediaId !== 'string' || typeof raw.productName !== 'string' ||
-      !VALID_CATEGORY.has(raw.category) || !Number.isSafeInteger(raw.createdAt) || raw.createdAt < 0) {
-      throw new Error('invalid nearby candidate');
-    }
-    const textFields = ['brand', 'priceLabel', 'specification', 'shop', 'sellingPointsJson',
-      'publicOffersJson', 'reviewText', 'sourceLink', 'district'];
-    const numberFields = ['priceFen', 'originalPriceFen', 'tasteScore'];
-    if (textFields.some((field) => raw[field] != null && typeof raw[field] !== 'string') ||
-      numberFields.some((field) => raw[field] != null && !Number.isFinite(raw[field]))) {
-      throw new Error('invalid nearby candidate');
-    }
+    if (!raw || typeof raw.id !== 'string' || !raw.id || ids.has(raw.id)) throw new Error('invalid nearby candidate');
     ids.add(raw.id);
     return nearbyCandidate(raw);
   });
@@ -2192,12 +2494,11 @@ function nearbyCacheMetric(env, metrics, requestStarted) {
 }
 
 /** Public homepage pagination has no location, radius or 200-candidate cutoff. */
-async function listPublicRecommendations(payload, env) {
+async function listPublicRecommendations(payload, env, viewerUid = '') {
   const category = String(payload.category || 'all');
   if (category !== 'all' && !VALID_CATEGORY.has(category)) throw new Error('商品分类无效。');
   const requestedSize = Number(payload.pageSize || MAX_PAGE_SIZE);
-  const pageSize = Number.isFinite(requestedSize)
-    ? Math.floor(Math.min(MAX_PAGE_SIZE, Math.max(1, requestedSize))) : MAX_PAGE_SIZE;
+  const pageSize = Number.isFinite(requestedSize) ? Math.floor(Math.min(MAX_PAGE_SIZE, Math.max(1, requestedSize))) : MAX_PAGE_SIZE;
   let snapshotAt = Date.now();
   let offset = 0;
   const token = String(payload.pageToken || '').trim();
@@ -2209,22 +2510,12 @@ async function listPublicRecommendations(payload, env) {
     if (!Number.isSafeInteger(snapshotAt) || snapshotAt < 0 || snapshotAt > Date.now() ||
         !Number.isSafeInteger(offset) || offset < 0) throw new Error('推荐分页参数无效。');
   }
-  let query = collection(env, 'FoodCard').query().equalTo('status', 'APPROVED')
-    .lessThanOrEqualTo('createdAt', snapshotAt);
-  if (category !== 'all') query = query.equalTo('category', category);
-  const rows = await query.orderByDesc('createdAt').orderByAsc('id').limit(pageSize + 1, offset).get();
-  const hasMore = rows.length > pageSize;
-  const pageRows = rows.slice(0, pageSize);
-  const cards = [];
-  for (let start = 0; start < pageRows.length; start += NEARBY_CARD_HYDRATION_CONCURRENCY) {
-    const batch = pageRows.slice(start, start + NEARBY_CARD_HYDRATION_CONCURRENCY);
-    cards.push(...await Promise.all(batch.map((row) => publicCard(row, env, 0, true, '', false, 1))));
-  }
-  return {
-    cards,
-    nextPageToken: hasMore ? `g1.${category}.${snapshotAt}.${offset + pageRows.length}` : '',
-    district: ''
-  };
+  const page = await scanCardPage(() => {
+    let query = collection(env, 'FoodCard').query().equalTo('status', 'APPROVED').lessThanOrEqualTo('createdAt', snapshotAt);
+    if (category !== 'all') query = query.equalTo('category', category);
+    return query.orderByDesc('createdAt').orderByAsc('id');
+  }, viewerUid, env, offset, pageSize, true);
+  return { cards: page.cards, nextPageToken: page.hasMore ? 'g1.' + category + '.' + snapshotAt + '.' + page.nextOffset : '', district: '' };
 }
 
 async function listNearby(uid, payload, env) {
@@ -2315,6 +2606,16 @@ async function listNearby(uid, payload, env) {
         metrics.state = 'snapshot_expired';
       }
     }
+    const currentRows = new Map();
+    const candidateIds = rows.map((row) => String(row.id || '')).filter(Boolean);
+    for (let start = 0; start < candidateIds.length; start += SOCIAL_PROFILE_QUERY_BATCH_SIZE) {
+      const ids = candidateIds.slice(start, start + SOCIAL_PROFILE_QUERY_BATCH_SIZE);
+      const fresh = await collection(env, 'FoodCard').query().in('id', ids).limit(ids.length).get();
+      metrics.candidateDbQueries += 1;
+      for (const row of fresh) currentRows.set(String(row.id || ''), row);
+    }
+    rows = candidateIds.map((id) => currentRows.get(id)).filter(Boolean);
+    rows = await readableCardRows(rows, uid, env, true);
     metrics.candidates = rows.length;
     const matched = rows.map((row) => ({
       row, distanceKm: haversineKm(point.latE3, point.lonE3, row.latE3, row.lonE3)
@@ -2335,10 +2636,10 @@ async function listNearby(uid, payload, env) {
         const batch = slice.slice(start, start + NEARBY_CARD_HYDRATION_CONCURRENCY);
         // Settle the already-started queries before emitting failure metrics.
         const results = await Promise.allSettled(batch.map((item) =>
-          publicCard(item.row, env, Number(item.distanceKm.toFixed(3)), true, uid, false, 1, metrics)));
+          readCardIfAllowed(item.row, env, Number(item.distanceKm.toFixed(3)), true, uid, false, 1, metrics)));
         const failure = results.find((result) => result.status === 'rejected');
         if (failure) throw failure.reason;
-        cards.push(...results.map((result) => result.value));
+        cards.push(...results.map((result) => result.value).filter(Boolean));
       }
     } finally {
       metrics.hydrationMs = Date.now() - hydrationStarted;
@@ -2385,11 +2686,8 @@ async function listFriendRankings(uid, env) {
       .orderByDesc('createdAt')
       .limit(MAX_FRIEND_RANKING_SIZE)
       .get()));
-    for (const rows of ownerRows) {
-      for (const row of rows) {
-        if (String(row.mediaId || '').length > 0) rankedRows.push(row);
-      }
-    }
+    const photoRows = ownerRows.flat().filter((row) => String(row.mediaId || '').length > 0);
+    rankedRows.push(...await readableCardRows(photoRows, uid, env));
   }
   const topRows = rankedRows
     .sort((first, second) => {
@@ -2398,22 +2696,26 @@ async function listFriendRankings(uid, env) {
     })
     .slice(0, MAX_FRIEND_RANKING_SIZE);
   const output = [];
-  for (const row of topRows) output.push(await publicCard(row, env, 0, true, uid));
+  for (const row of topRows) {
+    const card = await readCardIfAllowed(row, env, 0, true, uid);
+    if (card) output.push(card);
+  }
   return { cards: output };
 }
 
 async function cardDetail(uid, payload, env) {
   const row = await one(collection(env, 'FoodCard').query().equalTo('id', String(payload.cardId || '')));
-  if (!row || (row.status !== 'APPROVED' && (!uid || row.ownerUid !== uid))) {
-    throw new Error('卡片不存在、尚未公开或不属于当前用户。');
-  }
-  return publicCard(row, env, 0, row.status === 'APPROVED', uid, true);
+  await contentPolicy(env).assertCardReadable(uid, row);
+  return publicCard(row, env, 0, true, uid, payload.includeComments === false ? 'NO_COMMENTS' : true);
 }
 
 async function myCards(uid, env) {
   const rows = await collection(env, 'FoodCard').query().equalTo('ownerUid', uid).orderByDesc('createdAt').limit(100).get();
   const cards = [];
-  for (const row of rows) cards.push(await publicCard(row, env, 0, true, uid));
+  for (const row of rows) {
+    const card = await readCardIfAllowed(row, env, 0, true, uid);
+    if (card) cards.push(card);
+  }
   return { cards };
 }
 
@@ -2430,13 +2732,10 @@ async function friendProfile(uid, payload, env) {
   }
   const page = socialPage(payload);
   const requestedSize = Number(payload.pageSize || 12);
-  const pageSize = Math.floor(Math.min(MAX_PAGE_SIZE, Math.max(1, requestedSize)));
-  const rows = await collection(env, 'FoodCard').query().equalTo('ownerUid', friendUid)
-    .equalTo('status', 'APPROVED').orderByDesc('createdAt').limit(pageSize + 1, page.offset).get();
-  const hasMore = rows.length > pageSize;
-  const pageRows = rows.slice(0, pageSize);
-  const cards = [];
-  for (const row of pageRows) cards.push(await publicCard(row, env, 0, true, uid, false, 1));
+  const pageSize = Number.isFinite(requestedSize) ? Math.floor(Math.min(MAX_PAGE_SIZE, Math.max(1, requestedSize))) : 12;
+  const cardPage = await scanCardPage(() => collection(env, 'FoodCard').query().equalTo('ownerUid', friendUid)
+    .equalTo('status', 'APPROVED').orderByDesc('createdAt'), uid, env, page.offset, pageSize);
+  const cards = cardPage.cards;
   const profile = profileResponse(record, env);
   return {
     profile: {
@@ -2455,20 +2754,18 @@ async function friendProfile(uid, payload, env) {
       coverBucket: profile.coverBucket || ''
     },
     cards,
-    nextPageToken: hasMore ? String(page.offset + pageRows.length) : ''
+    nextPageToken: cardPage.hasMore ? String(cardPage.nextOffset) : ''
   };
 }
 
 async function myFavoriteCards(uid, env) {
-  const actions = await collection(env, 'CardAction').query().equalTo('actorUid', uid)
-    .orderByDesc('createdAt').limit(100).get();
+  const actions = await collection(env, 'CardAction').query().equalTo('actorUid', uid).equalTo('kind', 'FAVORITE')
+    .orderByDesc('createdAt').orderByAsc('id').limit(100).get();
   const cards = [];
   for (const action of actions) {
-    if (String(action.kind || '') !== 'FAVORITE') continue;
-    const card = await one(collection(env, 'FoodCard').query().equalTo('id', String(action.cardId || '')));
-    if (card && String(card.status || '') === 'APPROVED') {
-      cards.push(await publicCard(card, env, 0, true, uid));
-    }
+    const row = await one(collection(env, 'FoodCard').query().equalTo('id', String(action.cardId || '')));
+    const card = await readCardIfAllowed(row, env, 0, true, uid);
+    if (card) cards.push(card);
   }
   return { cards };
 }
@@ -2510,10 +2807,12 @@ async function receivedComments(uid, payload, env) {
     const rows = await collection(env, 'FoodCard').query().in('id', batch).limit(batch.length).get();
     for (const row of rows) cardsById.set(String(row.id || ''), row);
   }
-  const visibleRows = [...commentsById.values()].filter((row) => {
+  const visibleRows = [];
+  const readableCards = new Set(await readableCardRows([...cardsById.values()], uid, env));
+  for (const row of commentsById.values()) {
     const card = cardsById.get(String(row.cardId || ''));
-    return card && (String(card.status || '') === 'APPROVED' || String(card.ownerUid || '') === uid);
-  });
+    if (readableCards.has(card)) visibleRows.push(row);
+  }
   visibleRows.sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0) ||
     String(b.id || '').localeCompare(String(a.id || '')));
   const pageRows = visibleRows.slice(offset, offset + page.pageSize + 1);
@@ -2526,7 +2825,7 @@ async function receivedComments(uid, payload, env) {
     const rows = await collection(env, 'UserProfile').query().in('uid', batch).limit(batch.length).get();
     for (const row of rows) authorsByUid.set(String(row.uid || ''), row);
   }
-  const items = selected.map((row) => {
+  const items = selected.filter((row) => isAccountActive(authorsByUid.get(String(row.authorUid || '')))).map((row) => {
     const card = cardsById.get(String(row.cardId || ''));
     const author = authorsByUid.get(String(row.authorUid || ''));
     let authorNickname = String(author && (author.nicknameValue || author.nickname) || '食刻用户');
@@ -2579,6 +2878,8 @@ async function friendshipBetween(uid, otherUid, env) {
 }
 
 async function requireFriend(uid, otherUid, env) {
+  await contentPolicy(env).assertAccountActive(uid);
+  await contentPolicy(env).assertAccountActive(otherUid);
   const relationship = await friendshipBetween(uid, otherUid, env);
   if (!relationship || String(relationship.status || '') !== 'ACCEPTED') {
     throw new Error('只有互为好友后才能发送私信。');
@@ -2605,9 +2906,19 @@ async function expirePendingFriendships(rows, env) {
   const friendships = collection(env, 'Friendship');
   for (const row of rows) {
     if (!pendingFriendRequestExpired(row, now)) continue;
-    row.status = 'EXPIRED';
-    row.updatedAt = now;
-    await friendships.upsert(row);
+    const committed = await friendships.runTransaction({
+      apply: async (transaction) => {
+        const currentRows = await transaction.executeQuery(friendships.query().equalTo('id', String(row.id)).limit(1));
+        const current = currentRows[0];
+        if (current && pendingFriendRequestExpired(current, now)) {
+          transaction.executeUpsert([Object.assign(new Friendship(), current, {
+            status: 'EXPIRED', updatedAt: logicalWriteTime(now, current.updatedAt)
+          })]);
+        }
+        return true;
+      }
+    });
+    if (!committed) throw new Error('好友申请过期状态未保存，请重试。');
   }
 }
 
@@ -2622,7 +2933,8 @@ function socialUser(record, viewerUid, env, row = null) {
     avatarBucket: profile.avatarBucket,
     publishCount: profile.publishCount,
     friendshipState: relationshipState(row, viewerUid),
-    requestId: row ? String(row.id || '') : ''
+    requestId: row ? String(row.id || '') : '',
+    friendshipUpdatedAt: row ? Number(row.updatedAt || 0) : 0
   };
 }
 
@@ -2753,8 +3065,9 @@ function uniqueRows(rows) {
 
 async function listFriends(uid, payload, env) {
   const page = socialPage(payload);
-  const rows = await friendshipRowsFor(uid, env);
+  let rows = await friendshipRowsFor(uid, env);
   await expirePendingFriendships(rows, env);
+  rows = await friendshipRowsFor(uid, env);
   rows.sort((first, second) => Number(second.updatedAt || 0) - Number(first.updatedAt || 0));
   const pageRows = rows.slice(page.offset, page.offset + page.pageSize);
   const relationshipRowsByUid = new Map();
@@ -2802,121 +3115,187 @@ async function listFriends(uid, payload, env) {
   };
 }
 
+async function friendshipTransaction(uid, otherUid, env, requireOtherActive, apply) {
+  const pair = socialPair(uid, otherUid);
+  const id = socialPairId('friend', uid, otherUid);
+  const friendships = collection(env, 'Friendship');
+  let result = null;
+  const committed = await friendships.runTransaction({
+    apply: async (transaction) => {
+      result = null;
+      const profiles = await pairProfiles(transaction, uid, otherUid, env, requireOtherActive);
+      const rows = await transaction.executeQuery(friendships.query().equalTo('id', id).limit(1));
+      const row = rows[0] || null;
+      if (row && (String(row.memberAUid || '') !== pair.memberAUid || String(row.memberBUid || '') !== pair.memberBUid)) {
+        throw accessError('好友关系记录无效。', 'INVALID_STATE');
+      }
+      const now = logicalWriteTime(...profiles.map((profile) => profile.updatedAt), row && row.updatedAt);
+      result = await apply(transaction, { pair, id, row, profiles, now, friendships });
+      if (result.writeProfiles !== false) {
+        transaction.executeUpsert(profiles.map((profile) => profileForWrite(profile, now,
+          result.bumpSequences === true ? nextContentSequence(profile) : contentSequence(profile))));
+      }
+      return true;
+    }
+  });
+  if (!committed || !result) throw new Error('好友状态变更未完成，请重试。');
+  return result;
+}
+
+function assertFriendRequestVersion(row, payload) {
+  if (payload.expectedCreatedAt != null && (!Number.isSafeInteger(Number(payload.expectedCreatedAt)) ||
+      Number(payload.expectedCreatedAt) !== Number(row.createdAt))) {
+    throw accessError('好友申请已变化，请刷新。', 'CONFLICT');
+  }
+}
+
+function conversationCleanupId(friendshipId, cutoffAt) {
+  return crypto.createHash('sha256').update('friend-cleanup:' + friendshipId + ':' + cutoffAt).digest('hex');
+}
+
+async function prepareConversationCleanup(transaction, uid, otherUid, state, env) {
+  const conversationId = socialPairId('conversation', uid, otherUid);
+  const rows = await transaction.executeQuery(collection(env, 'Conversation').query().equalTo('id', conversationId).limit(1));
+  const jobId = conversationCleanupId(state.id, state.now);
+  const job = Object.assign(new MaintenanceJob(), {
+    jobId, jobType: 'PURGE_CONVERSATION', entityId: state.id, ownerUid: uid,
+    generation: state.now, status: 'PENDING', runAfterAt: new Date(state.now),
+    attemptCount: 0, cursor: '', lastErrorCode: '',
+    checkpointJson: JSON.stringify({ memberAUid: state.pair.memberAUid, memberBUid: state.pair.memberBUid,
+      conversationId, cutoffAt: state.now }), createdAt: new Date(state.now), updatedAt: new Date(state.now)
+  });
+  return { job, conversation: rows[0] || null };
+}
+
+function accessGrant(author, viewerUid, now, revoked = false) {
+  return Object.assign(new FriendContentAccessGrant(), {
+    authorUid: String(author.uid), viewerUid, accessThroughAt: new Date(now),
+    accessThroughSequence: nextContentSequence(author), revoked,
+    revokedAt: revoked ? new Date(now) : null, updatedAt: new Date(now)
+  });
+}
+
 async function sendFriendRequest(uid, payload, env) {
   const targetUid = String(payload.targetUid || '');
-  const target = await one(collection(env, 'UserProfile').query().equalTo('uid', targetUid));
-  if (!target || String(target.accountStatus || 'ACTIVE') !== 'ACTIVE') throw new Error('没有找到这个食刻用户。');
-  const pair = socialPair(uid, targetUid);
-  const id = socialPairId('friend', uid, targetUid);
-  const friendships = collection(env, 'Friendship');
-  const existing = await one(friendships.query().equalTo('id', id));
-  if (existing && String(existing.status || '') === 'ACCEPTED') throw new Error('你们已经是好友了。');
-  if (existing && String(existing.status || '') === 'BLOCKED') {
-    if (String(existing.requesterUid || '') === uid) throw new Error('你已屏蔽该用户，请先解除屏蔽。');
-    throw new Error('当前无法向该用户发送好友申请。');
-  }
-  if (existing && String(existing.status || '') === 'PENDING') {
-    if (pendingFriendRequestExpired(existing)) {
-      existing.status = 'EXPIRED';
-      existing.updatedAt = Date.now();
-      await friendships.upsert(existing);
-    } else if (String(existing.requesterUid || '') === uid) {
-      return { success: true };
-    } else {
+  const result = await friendshipTransaction(uid, targetUid, env, true, async (transaction, state) => {
+    const existing = state.row;
+    if (existing && existing.status === 'ACCEPTED') throw new Error('你们已经是好友了。');
+    if (existing && existing.status === 'BLOCKED') throw accessError('当前无法向该用户发送好友申请。');
+    if (existing && existing.status === 'PENDING' && !pendingFriendRequestExpired(existing, state.now)) {
+      if (String(existing.requesterUid || '') === uid) return { writeProfiles: false };
       throw new Error('对方已经向你发送好友申请，请到“收到的申请”中处理。');
     }
-  }
-  const now = Date.now();
-  await friendships.upsert({
-    id,
-    memberAUid: pair.memberAUid,
-    memberBUid: pair.memberBUid,
-    requesterUid: uid,
-    addresseeUid: targetUid,
-    status: 'PENDING',
-    createdAt: now,
-    updatedAt: now
+    transaction.executeUpsert([Object.assign(new Friendship(), {
+      id: state.id, memberAUid: state.pair.memberAUid, memberBUid: state.pair.memberBUid,
+      requesterUid: uid, addresseeUid: targetUid, status: 'PENDING', createdAt: state.now, updatedAt: state.now
+    })]);
+    return { notify: true, requestId: state.id, createdAt: state.now };
   });
-  await emitNotification(targetUid, uid, 'FRIEND_REQUEST', id + ':' + now, id, env);
+  if (result.notify) await emitNotification(targetUid, uid, 'FRIEND_REQUEST', result.requestId + ':' + result.createdAt, result.requestId, env);
   return { success: true };
 }
 
 async function respondFriendRequest(uid, payload, env) {
   const requestId = String(payload.requestId || '');
-  const friendships = collection(env, 'Friendship');
-  const row = await one(friendships.query().equalTo('id', requestId));
-  if (!row || String(row.addresseeUid || '') !== uid || String(row.status || '') !== 'PENDING') {
+  const initial = await one(collection(env, 'Friendship').query().equalTo('id', requestId));
+  if (!initial || String(initial.addresseeUid || '') !== uid) {
     throw new Error('好友申请不存在、已处理或不属于当前用户。');
   }
-  if (pendingFriendRequestExpired(row)) {
-    row.status = 'EXPIRED';
-    row.updatedAt = Date.now();
-    await friendships.upsert(row);
-    throw new Error('这条好友申请已过期。');
-  }
-  if (payload.accept === true) {
-    row.status = 'ACCEPTED';
-    row.updatedAt = Date.now();
-    await friendships.upsert(row);
-    await emitNotification(String(row.requesterUid || ''), uid,
-      'FRIEND_ACCEPTED', requestId + ':' + String(row.createdAt || ''), uid, env);
-  } else {
-    await friendships.delete(row);
-  }
+  const requesterUid = String(initial.requesterUid || '');
+  const result = await friendshipTransaction(uid, requesterUid, env, payload.accept === true, async (transaction, state) => {
+    const row = state.row;
+    if (!row || state.id !== requestId || row.status !== 'PENDING' || String(row.addresseeUid || '') !== uid) {
+      throw accessError('好友申请不存在或已处理。', 'CONFLICT');
+    }
+    assertFriendRequestVersion(row, payload);
+    if (payload.accept === true && payload.expectedCreatedAt == null) {
+      const grants = await transaction.executeQuery(collection(env, 'FriendContentAccessGrant').query()
+        .equalTo('authorUid', uid).equalTo('viewerUid', requesterUid).limit(1));
+      if (grants.length > 0) throw accessError('请更新客户端后刷新申请再处理。', 'CLIENT_UPDATE_REQUIRED');
+    }
+    if (pendingFriendRequestExpired(row, state.now)) {
+      transaction.executeUpsert([Object.assign(new Friendship(), row, { status: 'EXPIRED', updatedAt: state.now })]);
+      return { expired: true };
+    }
+    if (payload.accept === true) {
+      const conversationId = socialPairId('conversation', uid, requesterUid);
+      await transaction.executeQuery(collection(env, 'Conversation').query().equalTo('id', conversationId).limit(1));
+      transaction.executeUpsert([Object.assign(new Friendship(), row, {
+        status: 'ACCEPTED', createdAt: state.now, updatedAt: state.now
+      })]);
+      transaction.executeUpsert([Object.assign(new Conversation(), {
+        id: conversationId, memberAUid: state.pair.memberAUid, memberBUid: state.pair.memberBUid,
+        lastMessageId: '', lastMessageKind: 'TEXT', lastMessagePreview: encryptPrivateText('', `conversation:${conversationId}:preview`, env),
+        lastMessageAt: 0, unreadA: 0, unreadB: 0, createdAt: state.now, updatedAt: state.now
+      })]);
+      return { notify: true, originalCreatedAt: Number(row.createdAt) };
+    }
+    transaction.executeDelete([row]);
+    return {};
+  });
+  if (result.expired) throw accessError('这条好友申请已过期。', 'INVALID_STATE');
+  if (result.notify) await emitNotification(requesterUid, uid, 'FRIEND_ACCEPTED', requestId + ':' + result.originalCreatedAt, uid, env);
   return { success: true };
 }
 
 async function cancelFriendRequest(uid, payload, env) {
   const requestId = String(payload.requestId || '');
-  const friendships = collection(env, 'Friendship');
-  const row = await one(friendships.query().equalTo('id', requestId));
-  if (!row || String(row.requesterUid || '') !== uid || String(row.status || '') !== 'PENDING') {
+  const initial = await one(collection(env, 'Friendship').query().equalTo('id', requestId));
+  if (!initial || String(initial.requesterUid || '') !== uid) {
     throw new Error('好友申请不存在、已处理或不属于当前用户。');
   }
-  if (pendingFriendRequestExpired(row)) {
-    row.status = 'EXPIRED';
-    row.updatedAt = Date.now();
-    await friendships.upsert(row);
-    throw new Error('这条好友申请已过期。');
-  }
-  await friendships.delete(row);
+  await friendshipTransaction(uid, String(initial.addresseeUid), env, false, async (transaction, state) => {
+    const row = state.row;
+    if (!row || state.id !== requestId || row.status !== 'PENDING' || row.requesterUid !== uid) {
+      throw accessError('好友申请不存在或已处理。', 'CONFLICT');
+    }
+    assertFriendRequestVersion(row, payload);
+    transaction.executeDelete([row]);
+    return {};
+  });
   return { success: true };
 }
 
 async function blockUser(uid, payload, env) {
   const targetUid = String(payload.targetUid || '');
-  const target = await one(collection(env, 'UserProfile').query().equalTo('uid', targetUid));
-  if (!target || String(target.accountStatus || 'ACTIVE') !== 'ACTIVE') throw new Error('没有找到这个食刻用户。');
-  const pair = socialPair(uid, targetUid);
-  const id = socialPairId('friend', uid, targetUid);
-  const friendships = collection(env, 'Friendship');
-  const existing = await one(friendships.query().equalTo('id', id));
-  if (existing && String(existing.status || '') === 'BLOCKED') {
-    if (String(existing.requesterUid || '') === uid) return { success: true };
-    throw new Error('当前无法屏蔽该用户。');
-  }
-  await deleteConversation(uid, targetUid, env);
-  const now = Date.now();
-  await friendships.upsert({
-    id,
-    memberAUid: pair.memberAUid,
-    memberBUid: pair.memberBUid,
-    requesterUid: uid,
-    addresseeUid: targetUid,
-    status: 'BLOCKED',
-    createdAt: existing ? Number(existing.createdAt || now) : now,
-    updatedAt: now
+  const result = await friendshipTransaction(uid, targetUid, env, true, async (transaction, state) => {
+    if (state.row && state.row.status === 'BLOCKED') {
+      if (state.row.requesterUid === uid) return { writeProfiles: false };
+      throw accessError('当前无法屏蔽该用户。');
+    }
+    const cleanup = await prepareConversationCleanup(transaction, uid, targetUid, state, env);
+    transaction.executeUpsert([Object.assign(new Friendship(), {
+      id: state.id, memberAUid: state.pair.memberAUid, memberBUid: state.pair.memberBUid,
+      requesterUid: uid, addresseeUid: targetUid, status: 'BLOCKED',
+      createdAt: state.row ? Number(state.row.createdAt) : state.now, updatedAt: state.now
+    })]);
+    transaction.executeUpsert(state.profiles.map((profile) => accessGrant(profile, profile.uid === uid ? targetUid : uid, state.now, true)));
+    if (cleanup.conversation) transaction.executeDelete([cleanup.conversation]);
+    transaction.executeUpsert([cleanup.job]);
+    return { bumpSequences: true, jobId: cleanup.job.jobId };
   });
+  if (result.jobId) await bestEffortFriendCleanup(result.jobId, env);
   return { success: true };
 }
 
 async function unblockUser(uid, payload, env) {
   const targetUid = String(payload.targetUid || '');
-  const row = await friendshipBetween(uid, targetUid, env);
-  if (!row || String(row.status || '') !== 'BLOCKED' || String(row.requesterUid || '') !== uid) {
-    throw new Error('屏蔽关系不存在或无权解除。');
-  }
-  await collection(env, 'Friendship').delete(row);
+  await friendshipTransaction(uid, targetUid, env, false, async (transaction, state) => {
+    const row = state.row;
+    if (!row || row.status !== 'BLOCKED' || row.requesterUid !== uid) throw accessError('屏蔽关系不存在或无权解除。');
+    const grantRows = [];
+    for (const author of state.profiles) {
+      const rows = await transaction.executeQuery(collection(env, 'FriendContentAccessGrant').query()
+        .equalTo('authorUid', String(author.uid)).equalTo('viewerUid', author.uid === uid ? targetUid : uid).limit(1));
+      grantRows.push(...rows);
+    }
+    // Also close grants left by old deployments before deleting a legacy block.
+    if (grantRows.length > 0) transaction.executeUpsert(grantRows.map((grant) => Object.assign(new FriendContentAccessGrant(), grant, {
+      revoked: true, revokedAt: new Date(state.now), updatedAt: new Date(state.now)
+    })));
+    transaction.executeDelete([row]);
+    return {};
+  });
   return { success: true };
 }
 
@@ -2937,42 +3316,219 @@ async function reportUser(uid, payload, env) {
   return { success: true };
 }
 
-async function deleteAllMatchingRows(env, objectType, queryFactory) {
-  const target = collection(env, objectType);
-  while (true) {
-    const rows = await queryFactory(target).limit(SOCIAL_QUERY_BATCH_SIZE).get();
-    if (rows.length === 0) return;
-    await target.delete(rows);
-    if (rows.length < SOCIAL_QUERY_BATCH_SIZE) return;
-  }
-}
-
-async function deleteConversation(uid, otherUid, env) {
-  const id = socialPairId('conversation', uid, otherUid);
-  await deleteAllMatchingRows(env, 'ChatMessage', (messages) => messages.query().equalTo('conversationId', id));
-  const conversation = await one(collection(env, 'Conversation').query().equalTo('id', id));
-  if (conversation) await collection(env, 'Conversation').delete(conversation);
-}
-
-async function deleteGroupConversation(groupId, env) {
-  const normalizedGroupId = String(groupId || '');
-  if (!normalizedGroupId) return;
-  await deleteAllMatchingRows(env, 'GroupMessage', (messages) => messages.query()
-    .equalTo('groupId', normalizedGroupId));
-  await deleteAllMatchingRows(env, 'GroupMember', (members) => members.query()
-    .equalTo('groupId', normalizedGroupId));
-  const group = await one(collection(env, 'GroupConversation').query().equalTo('id', normalizedGroupId));
-  if (group) await collection(env, 'GroupConversation').delete(group);
-}
 
 async function removeFriend(uid, payload, env) {
   const friendUid = String(payload.friendUid || '');
-  const row = await requireFriend(uid, friendUid, env);
-  // Preserve the relationship if cleanup fails so the user can retry instead
-  // of leaving an inaccessible, undeletable conversation behind.
-  await deleteConversation(uid, friendUid, env);
-  await collection(env, 'Friendship').delete(row);
+  socialPair(uid, friendUid);
+  const requestId = String(payload.requestId || '').trim();
+  if (requestId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requestId)) {
+    throw new Error('解除好友请求标识无效。');
+  }
+  const expected = payload.expectedFriendshipUpdatedAt == null ? null : Number(payload.expectedFriendshipUpdatedAt);
+  if (requestId && (!Number.isSafeInteger(expected) || expected <= 0)) {
+    throw accessError('请刷新好友列表后再操作。', 'CONFLICT');
+  }
+  const receiptId = requestId ? crypto.createHash('sha256').update('friend-remove:' + uid + ':' + requestId).digest('hex') : '';
+  const payloadHash = crypto.createHash('sha256').update(JSON.stringify({ friendUid, expected })).digest('hex');
+  const receipts = collection(env, 'PublishRequestRecord');
+  function savedRemoval(receipt) {
+    if (receipt.uid !== uid || receipt.operationType !== 'FRIEND_REMOVE' || receipt.payloadHash !== payloadHash || receipt.status !== 'COMMITTED') {
+      throw accessError('请求标识已用于其他操作。', 'CONFLICT');
+    }
+    return { writeProfiles: false, alreadyProcessed: true, jobId: String(receipt.resultEntityId || '') };
+  }
+  const previous = receiptId && await one(receipts.query().equalTo('requestId', receiptId));
+  let result;
+  if (previous) {
+    result = savedRemoval(previous);
+  } else {
+    result = await friendshipTransaction(uid, friendUid, env, false, async (transaction, state) => {
+      const receiptRows = receiptId ? await transaction.executeQuery(receipts.query().equalTo('requestId', receiptId).limit(1)) : [];
+      if (receiptRows.length > 0) return savedRemoval(receiptRows[0]);
+      const grants = await transaction.executeQuery(collection(env, 'FriendContentAccessGrant').query()
+        .equalTo('authorUid', uid).equalTo('viewerUid', friendUid).limit(1));
+      const grant = grants[0] || null;
+      const reverseRows = await transaction.executeQuery(collection(env, 'FriendContentAccessGrant').query()
+        .equalTo('authorUid', friendUid).equalTo('viewerUid', uid).limit(1));
+      const reverseGrant = reverseRows[0] || null;
+      for (const existingGrant of [grant, reverseGrant].filter(Boolean)) {
+        const sequence = Number(existingGrant.accessThroughSequence || 0);
+        const author = state.profiles.find((profile) => profile.uid === existingGrant.authorUid);
+        if (!Number.isSafeInteger(sequence) || sequence < 0 || sequence > contentSequence(author)) {
+          throw accessError('历史授权序列与作者序列不一致，请先修复数据。', 'INVALID_STATE');
+        }
+      }
+      let jobId = '';
+      let alreadyRemoved = false;
+      if (!state.row || state.row.status !== 'ACCEPTED') {
+        if (state.row && state.row.status === 'BLOCKED') throw accessError('屏蔽关系不能作为解除好友操作处理。');
+        if (state.row && state.row.status === 'PENDING') throw accessError('好友关系已变化，请刷新。', 'CONFLICT');
+        if (!grant) throw accessError('好友关系不存在。');
+        const cutoffAt = dateMillis(grant.accessThroughAt);
+        if (cutoffAt !== null) jobId = conversationCleanupId(state.id, cutoffAt);
+        alreadyRemoved = true;
+      } else {
+        if (expected !== null && expected !== Number(state.row.updatedAt)) throw accessError('好友关系已变化，请刷新。', 'CONFLICT');
+        if (!requestId && (grant || reverseGrant)) throw accessError('请更新客户端后刷新好友列表再解除。', 'CLIENT_UPDATE_REQUIRED');
+        const cleanup = await prepareConversationCleanup(transaction, uid, friendUid, state, env);
+        jobId = cleanup.job.jobId;
+        transaction.executeUpsert(state.profiles.map((profile) => accessGrant(profile, profile.uid === uid ? friendUid : uid, state.now)));
+        transaction.executeDelete([state.row]);
+        if (cleanup.conversation) transaction.executeDelete([cleanup.conversation]);
+        transaction.executeUpsert([cleanup.job]);
+      }
+      if (receiptId) transaction.executeUpsert([Object.assign(new PublishRequestRecord(), {
+        requestId: receiptId, uid, operationType: 'FRIEND_REMOVE', payloadHash, resultEntityId: jobId,
+        status: 'COMMITTED', createdAt: new Date(state.now), expiresAt: new Date(state.now + 30 * 24 * 60 * 60 * 1000)
+      })]);
+      return { jobId, alreadyRemoved, bumpSequences: !alreadyRemoved, writeProfiles: !alreadyRemoved || !!receiptId };
+    });
+  }
+  const cleanup = result.jobId ? await bestEffortFriendCleanup(result.jobId, env) : { complete: true };
+  return { success: true, alreadyProcessed: result.alreadyProcessed === true || result.alreadyRemoved === true,
+    cleanupPending: !cleanup.complete, cleanupJobId: result.jobId || '' };
+}
+
+async function revokeFriendContentAccess(uid, payload, env) {
+  const viewerUid = String(payload.viewerUid || '');
+  await friendshipTransaction(uid, viewerUid, env, false, async (transaction, state) => {
+    if (state.row && state.row.status === 'ACCEPTED') throw accessError('当前好友不能撤销历史授权，请先解除好友。', 'CURRENT_FRIEND');
+    const rows = await transaction.executeQuery(collection(env, 'FriendContentAccessGrant').query()
+      .equalTo('authorUid', uid).equalTo('viewerUid', viewerUid).limit(1));
+    const grant = rows[0];
+    if (!grant || grant.revoked === true) return { writeProfiles: false };
+    transaction.executeUpsert([Object.assign(new FriendContentAccessGrant(), grant, {
+      revoked: true, revokedAt: new Date(state.now), updatedAt: new Date(state.now)
+    })]);
+    return {};
+  });
   return { success: true };
+}
+
+async function setCardVisibility(uid, payload, env) {
+  const cardId = String(payload.cardId || '').trim();
+  const visibility = String(payload.visibility || '');
+  if (!cardId || !['PUBLIC', 'FRIENDS'].includes(visibility)) throw new Error('可见范围参数无效。');
+  const cards = collection(env, 'FoodCard');
+  let output = null;
+  const committed = await cards.runTransaction({
+    apply: async (transaction) => {
+      output = null;
+      const profiles = await transaction.executeQuery(collection(env, 'UserProfile').query().equalTo('uid', uid).limit(1));
+      const owner = profiles[0];
+      if (!isAccountActive(owner)) throw accessError('账号已停用或正在注销。', 'ACCOUNT_INACTIVE');
+      const rows = await transaction.executeQuery(cards.query().equalTo('id', cardId).limit(1));
+      const card = rows[0];
+      if (!card || card.ownerUid !== uid || !readableCardState(card)) throw accessError('内容不存在、已失效或无权修改。');
+      if (payload.expectedModifiedAt != null && Number(payload.expectedModifiedAt) !==
+          (dateMillis(card.modifiedAt) === null ? Number(card.updatedAt || card.createdAt || 0) : dateMillis(card.modifiedAt))) {
+        throw accessError('内容已变化，请刷新。', 'CONFLICT');
+      }
+      const current = currentVisibility(card);
+      if (current === visibility) {
+        output = { success: true, cardId, visibility, modifiedAt: dateMillis(card.modifiedAt) === null
+          ? Number(card.updatedAt || card.createdAt || 0) : dateMillis(card.modifiedAt), unchanged: true };
+        return true;
+      }
+      if (visibility === 'PUBLIC') throw accessError('扩大公开范围须提交待审编辑。', 'REVISION_REQUIRED');
+      const previousSequence = Number(card.friendVisibilitySequence || 0);
+      if (!Number.isSafeInteger(previousSequence) || previousSequence < 0 || previousSequence > contentSequence(owner)) {
+        throw accessError('内容序列与作者序列不一致，请先修复数据。', 'INVALID_STATE');
+      }
+      const now = logicalWriteTime(owner.updatedAt, card.updatedAt, dateMillis(card.modifiedAt), dateMillis(card.publishedAt));
+      const sequence = nextContentSequence(owner);
+      const generation = Number(card.lifecycleGeneration || 0) + 1;
+      if (!Number.isSafeInteger(generation) || generation <= 0) throw accessError('内容生命周期版本无效。', 'INVALID_STATE');
+      const updated = Object.assign(new FoodCard(), card, {
+        visibility: 'FRIENDS', friendVisibilitySince: new Date(now), friendVisibilitySequence: sequence,
+        publishedAt: new Date(now), modifiedAt: new Date(now), updatedAt: now, lifecycleGeneration: generation
+      });
+      if (Number(card.schemaVersion || 0) === 0) {
+        Object.assign(updated, { schemaVersion: 2, migrationSource: 'SERVER', reviewState: 'PENDING_POST_REVIEW', consumptionMode: 'UNSPECIFIED' });
+        Object.assign(updated, stage1.derived(updated));
+      }
+      transaction.executeUpsert([updated]);
+      transaction.executeUpsert([profileForWrite(owner, now, sequence)]);
+      output = { success: true, cardId, visibility: 'FRIENDS', publishedAt: now, modifiedAt: now,
+        friendVisibilitySince: now, friendVisibilitySequence: sequence, lifecycleGeneration: generation, unchanged: false };
+      return true;
+    }
+  });
+  if (!committed || !output) throw new Error('可见范围保存未完成，请重试。');
+  return output;
+}
+
+async function processFriendCleanup(jobId, env) {
+  const jobs = collection(env, 'MaintenanceJob');
+  let output = null;
+  const committed = await jobs.runTransaction({
+    apply: async (transaction) => {
+      output = null;
+      const rows = await transaction.executeQuery(jobs.query().equalTo('jobId', jobId).limit(1));
+      const job = rows[0];
+      if (!job || job.jobType !== 'PURGE_CONVERSATION') throw accessError('会话清理任务不存在或类型不支持。', 'NOT_FOUND');
+      if (job.status === 'DONE' || job.status === 'CANCELLED') { output = { complete: true, deletedMessages: 0 }; return true; }
+      if (!['PENDING', 'RETRY_WAIT'].includes(job.status)) throw accessError('会话清理任务状态无效。', 'INVALID_STATE');
+      const runAfterAt = dateMillis(job.runAfterAt);
+      if (runAfterAt === null) throw accessError('会话清理调度时间无效。', 'INVALID_STATE');
+      if (runAfterAt > Date.now()) { output = { complete: false, retryAt: runAfterAt }; return true; }
+      const checkpoint = JSON.parse(String(job.checkpointJson || '{}'));
+      const first = String(checkpoint.memberAUid || '');
+      const second = String(checkpoint.memberBUid || '');
+      const cutoffAt = Number(checkpoint.cutoffAt);
+      if (!first || !second || first >= second || !Number.isSafeInteger(cutoffAt) || cutoffAt <= 0 ||
+          cutoffAt !== Number(job.generation) || String(job.entityId) !== socialPairId('friend', first, second) ||
+          jobId !== conversationCleanupId(String(job.entityId), cutoffAt) ||
+          String(checkpoint.conversationId) !== socialPairId('conversation', first, second)) {
+        throw accessError('会话清理检查点无效。', 'INVALID_STATE');
+      }
+      const messages = await transaction.executeQuery(collection(env, 'ChatMessage').query()
+        .equalTo('conversationId', String(checkpoint.conversationId)).lessThanOrEqualTo('createdAt', cutoffAt).limit(25));
+      const conversations = await transaction.executeQuery(collection(env, 'Conversation').query()
+        .equalTo('id', String(checkpoint.conversationId)).limit(1));
+      const conversation = conversations[0];
+      const complete = messages.length < 25;
+      const now = logicalWriteTime(dateMillis(job.updatedAt));
+      if (messages.length > 0) transaction.executeDelete(messages);
+      if (conversation && Number(conversation.createdAt || 0) <= cutoffAt && Number(conversation.lastMessageAt || 0) <= cutoffAt) {
+        transaction.executeDelete([conversation]);
+      }
+      transaction.executeUpsert([Object.assign(new MaintenanceJob(), job, {
+        status: complete ? 'DONE' : 'PENDING', attemptCount: Number(job.attemptCount || 0) + 1,
+        runAfterAt: new Date(now), updatedAt: new Date(now), lastErrorCode: ''
+      })]);
+      output = { complete, deletedMessages: messages.length, jobId };
+      return true;
+    }
+  });
+  if (!committed || !output) throw new Error('会话清理未完成。');
+  return output;
+}
+
+async function bestEffortFriendCleanup(jobId, env) {
+  try {
+    return await processFriendCleanup(jobId, env);
+  } catch (error) {
+    console.error(`friend cleanup failed: ${safeLogError(error)}`);
+    try {
+      const jobs = collection(env, 'MaintenanceJob');
+      await jobs.runTransaction({
+        apply: async (transaction) => {
+          const rows = await transaction.executeQuery(jobs.query().equalTo('jobId', jobId).limit(1));
+          const job = rows[0];
+          if (job && job.jobType === 'PURGE_CONVERSATION' && ['PENDING', 'RETRY_WAIT'].includes(job.status)) {
+            const now = Date.now();
+            transaction.executeUpsert([Object.assign(new MaintenanceJob(), job, {
+              status: 'RETRY_WAIT', attemptCount: Number(job.attemptCount || 0) + 1,
+              runAfterAt: new Date(now + 60000), updatedAt: new Date(now), lastErrorCode: 'CLEANUP_FAILED'
+            })]);
+          }
+          return true;
+        }
+      });
+    } catch (failure) { console.error(`friend cleanup retry mark failed: ${safeLogError(failure)}`); }
+    return { complete: false };
+  }
 }
 
 function messageKind(value) {
@@ -2981,8 +3537,8 @@ function messageKind(value) {
   return kind;
 }
 
-function messagePreview(kind, text, link, cardTitle) {
-  if (kind === 'CARD') return `推荐了：${String(cardTitle || '美食卡片').slice(0, 48)}`;
+function messagePreview(kind, text, link) {
+  if (kind === 'CARD') return '分享了一张美食推荐';
   if (kind === 'LINK') {
     try { return `商品链接：${new URL(link).hostname}`; } catch (_error) { return '分享了商品链接'; }
   }
@@ -3006,9 +3562,8 @@ async function publicMessage(row, viewerUid, env) {
   };
   if (output.kind === 'CARD' && output.cardId) {
     const card = await one(collection(env, 'FoodCard').query().equalTo('id', output.cardId));
-    if (card && String(card.status || '') === 'APPROVED') {
-      output.sharedCard = await publicCard(card, env, 0, true, viewerUid, false);
-    }
+    const sharedCard = await readCardIfAllowed(card, env, 0, true, viewerUid, false);
+    if (sharedCard) output.sharedCard = sharedCard;
   }
   return output;
 }
@@ -3020,7 +3575,6 @@ async function sendMessage(uid, payload, env) {
   let text = String(payload.text || '').trim();
   let link = String(payload.link || '').trim();
   let cardId = String(payload.cardId || '').trim();
-  let cardTitle = '';
   if (kind === 'TEXT') {
     if (text.length === 0 || text.length > MAX_MESSAGE_LENGTH) {
       throw new Error(`消息需为 1–${MAX_MESSAGE_LENGTH} 个字符。`);
@@ -3033,29 +3587,46 @@ async function sendMessage(uid, payload, env) {
     cardId = '';
   } else {
     const card = await one(collection(env, 'FoodCard').query().equalTo('id', cardId));
-    if (!card || String(card.status || '') !== 'APPROVED') throw new Error('只能发送仍在公开展示的推荐卡片。');
-    cardTitle = String(card.productName || '美食卡片');
+    if (!await contentPolicy(env).canReadCard(uid, card) || !await contentPolicy(env).canReadCard(friendUid, card)) {
+      throw accessError('当前双方不能读取这张推荐卡片。');
+    }
     text = '';
     link = '';
   }
   const pair = socialPair(uid, friendUid);
   const conversationId = socialPairId('conversation', uid, friendUid);
-  const now = Date.now();
   const messageId = crypto.randomUUID();
   const storedText = encryptPrivateText(text, `message:${messageId}:text`, env);
   const storedLink = encryptPrivateText(link, `message:${messageId}:link`, env);
   const storedPreview = encryptPrivateText(
-    messagePreview(kind, text, link, cardTitle), `conversation:${conversationId}:preview`, env
+    messagePreview(kind, text, link), `conversation:${conversationId}:preview`, env
   );
   const message = {
     id: messageId, conversationId, senderUid: uid, recipientUid: friendUid,
-    kind, text: storedText, link: storedLink, cardId, createdAt: now, readAt: 0
+    kind, text: storedText, link: storedLink, cardId, createdAt: 0, readAt: 0
   };
   const conversations = collection(env, 'Conversation');
   const committed = await conversations.runTransaction({
     apply: async (transaction) => {
+      const profiles = await pairProfiles(transaction, uid, friendUid, env, true);
+      const relationships = await transaction.executeQuery(collection(env, 'Friendship').query()
+        .equalTo('id', socialPairId('friend', uid, friendUid)).limit(1));
+      const relationship = relationships[0];
+      if (!relationship || relationship.status !== 'ACCEPTED' ||
+          relationship.memberAUid !== pair.memberAUid || relationship.memberBUid !== pair.memberBUid) {
+        throw accessError('好友关系已变化，不能发送消息。', 'CONFLICT');
+      }
       const rows = await transaction.executeQuery(conversations.query().equalTo('id', conversationId).limit(1));
-      const existing = rows[0];
+      const existing = rows[0] && Number(rows[0].createdAt || 0) >= Number(relationship.createdAt || 0) ? rows[0] : null;
+      if (kind === 'CARD') {
+        const cardRows = await transaction.executeQuery(collection(env, 'FoodCard').query().equalTo('id', cardId).limit(1));
+        const policy = transactionPolicy(transaction, env, profiles, [relationship]);
+        await policy.assertCardReadable(uid, cardRows[0]);
+        await policy.assertCardReadable(friendUid, cardRows[0]);
+      }
+      const now = logicalWriteTime(...profiles.map((profile) => profile.updatedAt), relationship.updatedAt,
+        existing && existing.lastMessageAt);
+      message.createdAt = now;
       const unreadA = Number(existing && existing.unreadA || 0) + (friendUid === pair.memberAUid ? 1 : 0);
       const unreadB = Number(existing && existing.unreadB || 0) + (friendUid === pair.memberBUid ? 1 : 0);
       const conversation = {
@@ -3073,6 +3644,7 @@ async function sendMessage(uid, payload, env) {
       };
       transaction.executeUpsert([Object.assign(new ChatMessage(), message)]);
       transaction.executeUpsert([Object.assign(new Conversation(), conversation)]);
+      transaction.executeUpsert(profiles.map((profile) => profileForWrite(profile, now)));
       return true;
     }
   });
@@ -3099,7 +3671,8 @@ async function listConversations(uid, payload, env) {
   const rows = uniqueRows([...asMemberA, ...asMemberB]).filter((row) => {
     const friendUid = String(row.memberAUid || '') === uid
       ? String(row.memberBUid || '') : String(row.memberAUid || '');
-    return acceptedRowsByUid.has(friendUid);
+    const relationship = acceptedRowsByUid.get(friendUid);
+    return !!relationship && Number(row.createdAt || 0) >= Number(relationship.createdAt || 0);
   });
   rows.sort((first, second) => Number(second.lastMessageAt || 0) - Number(first.lastMessageAt || 0));
   const pageRows = rows.slice(page.offset, page.offset + page.pageSize);
@@ -3116,7 +3689,7 @@ async function listConversations(uid, payload, env) {
       id: String(row.id || ''),
       friend,
       lastMessageKind: String(row.lastMessageKind || 'TEXT'),
-      lastMessagePreview: decryptPrivateText(
+      lastMessagePreview: String(row.lastMessageKind || '') === 'CARD' ? '分享了一张美食推荐' : decryptPrivateText(
         row.lastMessagePreview, `conversation:${String(row.id || '')}:preview`, env
       ),
       lastMessageAt: Number(row.lastMessageAt || 0),
@@ -3135,12 +3708,13 @@ async function listConversations(uid, payload, env) {
 
 async function listMessages(uid, payload, env) {
   const friendUid = String(payload.friendUid || '');
-  await requireFriend(uid, friendUid, env);
+  const relationship = await requireFriend(uid, friendUid, env);
   const conversationId = socialPairId('conversation', uid, friendUid);
   const requestedSize = Number(payload.pageSize || MAX_MESSAGE_PAGE_SIZE);
   const pageSize = Math.floor(Math.min(MAX_MESSAGE_PAGE_SIZE, Math.max(1, requestedSize)));
   const before = Number(payload.beforeToken || 0);
-  let query = collection(env, 'ChatMessage').query().equalTo('conversationId', conversationId);
+  let query = collection(env, 'ChatMessage').query().equalTo('conversationId', conversationId)
+    .greaterThanOrEqualTo('createdAt', Number(relationship.createdAt || 0));
   if (Number.isFinite(before) && before > 0) query = query.lessThan('createdAt', before);
   const rows = await query.orderByDesc('createdAt').limit(pageSize).get();
   const chronological = rows.slice().reverse();
@@ -3153,11 +3727,19 @@ async function listMessages(uid, payload, env) {
     const readAt = Date.now();
     const committed = await conversations.runTransaction({
       apply: async (transaction) => {
+        const relationships = await transaction.executeQuery(collection(env, 'Friendship').query()
+          .equalTo('id', String(relationship.id)).limit(1));
+        const currentRelationship = relationships[0];
+        if (!currentRelationship || currentRelationship.status !== 'ACCEPTED' ||
+            Number(currentRelationship.createdAt) !== Number(relationship.createdAt)) {
+          throw accessError('好友关系已变化，请刷新会话。', 'CONFLICT');
+        }
         const currentRows = await transaction.executeQuery(messageStore.query()
           .in('id', unread.map((row) => row.id)).limit(unread.length));
         const conversationRows = await transaction.executeQuery(conversations.query()
           .equalTo('id', conversationId).limit(1));
-        const newlyRead = currentRows.filter((row) => String(row.conversationId || '') === conversationId &&
+        const newlyRead = currentRows.filter((row) => Number(row.createdAt || 0) >= Number(currentRelationship.createdAt || 0) &&
+          String(row.conversationId || '') === conversationId &&
           String(row.recipientUid || '') === uid && Number(row.readAt || 0) === 0);
         if (newlyRead.length === 0) return true;
         transaction.executeUpsert(newlyRead.map((row) => Object.assign(new ChatMessage(), row, { readAt })));
@@ -3212,18 +3794,23 @@ async function requireGroupMember(uid, groupId, env) {
   }
   const group = await one(collection(env, 'GroupConversation').query().equalTo('id', normalizedGroupId));
   if (!group) throw new Error('群聊不存在或已解散。');
+  await contentPolicy(env).assertAccountActive(uid);
+  await contentPolicy(env).assertAccountActive(String(group.ownerUid || ''));
   return { group, membership };
 }
 
-function publicGroupConversation(row, membership, env) {
+async function publicGroupConversation(row, membership, env) {
   const groupId = String(row.id || '');
+  const lastMessage = row.lastMessageId ? await one(collection(env, 'GroupMessage').query().equalTo('id', String(row.lastMessageId))) : null;
+  const lastSender = lastMessage ? await one(collection(env, 'UserProfile').query().equalTo('uid', String(lastMessage.senderUid))) : null;
+  const previewAllowed = !!lastMessage && isAccountActive(lastSender);
   return {
     id: groupId,
     name: String(row.name || '群聊'),
     ownerUid: String(row.ownerUid || ''),
     memberCount: Number(row.memberCount || 0),
     lastMessageKind: String(row.lastMessageKind || 'TEXT'),
-    lastMessagePreview: decryptPrivateText(
+    lastMessagePreview: !previewAllowed ? '消息已不可访问' : String(row.lastMessageKind || '') === 'CARD' ? '分享了一张美食推荐' : decryptPrivateText(
       row.lastMessagePreview, `group-conversation:${groupId}:preview`, env
     ),
     lastMessageAt: Number(row.lastMessageAt || 0),
@@ -3284,13 +3871,21 @@ async function createGroupChat(uid, payload, env) {
   }
   const committed = await collection(env, 'GroupConversation').runTransaction({
     apply: async (transaction) => {
+      const profiles = [];
+      for (const memberUid of [uid, ...memberUids].sort()) profiles.push(await stage1.activeProfile(transaction, memberUid, env));
+      for (const memberUid of memberUids) {
+        const relation = await stage1.txOne(transaction, env, 'Friendship', 'id', socialPairId('friend', uid, memberUid));
+        if (!relation || relation.status !== 'ACCEPTED') throw accessError('邀请关系已变化，请刷新。', 'CONFLICT');
+      }
+      const writeAt = logicalWriteTime(...profiles.map((profile) => profile.updatedAt));
+      transaction.executeUpsert(profiles.map((profile) => profileForWrite(profile, writeAt)));
       transaction.executeUpsert([Object.assign(new GroupConversation(), group)]);
       transaction.executeUpsert(memberRows.map((row) => Object.assign(new GroupMember(), row)));
       return true;
     }
   });
   if (!committed) throw new Error('群聊创建未完成，请重试。');
-  return { group: publicGroupConversation(group, { unreadCount: 0 }, env) };
+  return { group: await publicGroupConversation(group, { unreadCount: 0 }, env) };
 }
 
 async function listGroupConversations(uid, payload, env) {
@@ -3309,11 +3904,15 @@ async function listGroupConversations(uid, payload, env) {
     const rows = await collection(env, 'GroupConversation').query().in('id', idBatch).limit(idBatch.length).get();
     for (const row of rows) groupsById.set(String(row.id || ''), row);
   }
-  const rows = [...groupsById.values()];
+  const rows = [];
+  for (const row of groupsById.values()) {
+    const owner = await one(collection(env, 'UserProfile').query().equalTo('uid', String(row.ownerUid || '')));
+    if (isAccountActive(owner)) rows.push(row);
+  }
   rows.sort((first, second) => Number(second.lastMessageAt || 0) - Number(first.lastMessageAt || 0));
   const pageRows = rows.slice(page.offset, page.offset + page.pageSize);
-  const groups = pageRows.map((row) => publicGroupConversation(
-    row, membershipsByGroupId.get(String(row.id || '')), env));
+  const groups = await Promise.all(pageRows.map((row) => publicGroupConversation(
+    row, membershipsByGroupId.get(String(row.id || '')), env)));
   const unreadCount = rows.reduce((sum, row) => sum + Number(
     membershipsByGroupId.get(String(row.id || '')) &&
     membershipsByGroupId.get(String(row.id || '')).unreadCount || 0
@@ -3343,26 +3942,26 @@ async function getGroupChat(uid, payload, env) {
   members.sort((first, second) => first.role === second.role
     ? first.user.nickname.localeCompare(second.user.nickname)
     : first.role === 'OWNER' ? -1 : 1);
-  return { group: publicGroupConversation(group, { unreadCount: 0 }, env), members };
+  return { group: await publicGroupConversation(group, { unreadCount: 0 }, env), members };
 }
 
 async function publicGroupMessage(row, viewerUid, env) {
   const messageId = String(row.id || '');
+  const sender = await socialUserByUid(String(row.senderUid || ''), viewerUid, env);
   const output = {
     id: messageId,
     groupId: String(row.groupId || ''),
-    sender: await socialUserByUid(String(row.senderUid || ''), viewerUid, env),
+    sender,
     mine: String(row.senderUid || '') === viewerUid,
     kind: groupMessageKind(row.kind),
-    text: decryptPrivateText(row.text, `group-message:${messageId}:text`, env),
-    cardId: String(row.cardId || ''),
+    text: sender ? decryptPrivateText(row.text, `group-message:${messageId}:text`, env) : '',
+    cardId: sender ? String(row.cardId || '') : '',
     createdAt: Number(row.createdAt || 0)
   };
   if (output.kind === 'CARD' && output.cardId) {
     const card = await one(collection(env, 'FoodCard').query().equalTo('id', output.cardId));
-    if (card && String(card.status || '') === 'APPROVED') {
-      output.sharedCard = await publicCard(card, env, 0, true, viewerUid, false);
-    }
+    const sharedCard = await readCardIfAllowed(card, env, 0, true, viewerUid, false);
+    if (sharedCard) output.sharedCard = sharedCard;
   }
   return output;
 }
@@ -3397,7 +3996,6 @@ async function sendGroupMessage(uid, payload, env) {
   const kind = groupMessageKind(payload.kind);
   let text = String(payload.text || '').trim();
   let cardId = String(payload.cardId || '').trim();
-  let cardTitle = '';
   if (kind === 'TEXT') {
     if (text.length === 0 || text.length > MAX_MESSAGE_LENGTH) {
       throw new Error(`消息需为 1–${MAX_MESSAGE_LENGTH} 个字符。`);
@@ -3405,8 +4003,7 @@ async function sendGroupMessage(uid, payload, env) {
     cardId = '';
   } else {
     const card = await one(collection(env, 'FoodCard').query().equalTo('id', cardId));
-    if (!card || String(card.status || '') !== 'APPROVED') throw new Error('只能发送仍在公开展示的推荐卡片。');
-    cardTitle = String(card.productName || '美食卡片');
+    await contentPolicy(env).assertCardReadable(uid, card);
     text = '';
   }
   const now = Date.now();
@@ -3421,7 +4018,7 @@ async function sendGroupMessage(uid, payload, env) {
     createdAt: now
   };
   const storedPreview = encryptPrivateText(
-    messagePreview(kind, text, '', cardTitle), `group-conversation:${groupId}:preview`, env
+    messagePreview(kind, text, ''), `group-conversation:${groupId}:preview`, env
   );
   const groups = collection(env, 'GroupConversation');
   const members = collection(env, 'GroupMember');
@@ -3434,6 +4031,13 @@ async function sendGroupMessage(uid, payload, env) {
       if (groupRows.length === 0 || memberships.length > MAX_GROUP_MEMBERS ||
         !memberships.some((membership) => String(membership.memberUid || '') === uid)) {
         throw new Error('你不在这个群聊中，或群聊已不存在。');
+      }
+      const senderProfile = await stage1.activeProfile(transaction, uid, env);
+      const ownerUid = String(groupRows[0].ownerUid || '');
+      const ownerProfile = ownerUid === uid ? senderProfile : await stage1.activeProfile(transaction, ownerUid, env);
+      if (kind === 'CARD') {
+        const sharedCard = await stage1.txOne(transaction, env, 'FoodCard', 'id', cardId);
+        await transactionPolicy(transaction, env, [senderProfile, ownerProfile]).assertCardReadable(uid, sharedCard);
       }
       const group = Object.assign(new GroupConversation(), groupRows[0], {
         lastMessageId: messageId,
@@ -3448,6 +4052,9 @@ async function sendGroupMessage(uid, payload, env) {
         updatedAt: now
       }));
       transaction.executeUpsert([Object.assign(new GroupMessage(), message)]);
+      const writeAt = logicalWriteTime(senderProfile.updatedAt, ownerProfile.updatedAt);
+      transaction.executeUpsert([profileForWrite(senderProfile, writeAt)]);
+      if (ownerUid !== uid) transaction.executeUpsert([profileForWrite(ownerProfile, writeAt)]);
       transaction.executeUpsert([group]);
       if (updatedMembers.length > 0) transaction.executeUpsert(updatedMembers);
       recipientUids = recipients.map((membership) => String(membership.memberUid || ''));
@@ -3531,105 +4138,85 @@ function commentReactionKind(value) {
 }
 
 async function toggleCardAction(uid, payload, env) {
-  const cardId = String(payload.cardId || '');
-  const card = await one(collection(env, 'FoodCard').query().equalTo('id', cardId));
-  if (!card || card.status !== 'APPROVED') throw new Error('只能互动公开卡片。');
   const kind = cardActionKind(payload.action);
-  const id = actionId(`card:${kind}`, uid, cardId);
-  const actions = collection(env, 'CardAction');
-  const existing = await one(actions.query().equalTo('id', id));
-  let active = false;
-  if (existing) {
-    await actions.delete(existing);
-  } else {
-    await actions.insert({ id, actorUid: uid, cardId, kind, createdAt: Date.now() });
-    active = true;
-  }
-  return { active, ...(await cardActionSummary(cardId, uid, env)) };
+  return kind === 'LIKE' ? stage1.mutateReaction(uid, payload, env, true) : stage1.toggleFavorite(uid, payload, env);
 }
 
 async function createCardComment(uid, payload, env) {
   const cardId = String(payload.cardId || '');
-  const card = await one(collection(env, 'FoodCard').query().equalTo('id', cardId));
-  if (!card || card.status !== 'APPROVED') throw new Error('只能评论公开卡片。');
   const content = String(payload.content || '').trim();
-  if (content.length === 0 || content.length > MAX_COMMENT_LENGTH) {
-    throw new Error(`评论需为 1–${MAX_COMMENT_LENGTH} 个字符。`);
-  }
-  let parentId = '';
-  let replyToNickname = '';
-  let replyToUid = '';
-  const requestedParentId = String(payload.parentCommentId || '');
-  if (requestedParentId.length > 0) {
-    const parent = await one(collection(env, 'CardComment').query().equalTo('id', requestedParentId));
-    if (!parent || String(parent.cardId || '') !== cardId || String(parent.status || 'ACTIVE') === 'DELETED') {
-      throw new Error('要回复的评论不存在或已删除。');
-    }
-    // The mobile surface keeps one visible reply level. Replying to a reply
-    // stays in its root thread while retaining the recipient nickname.
-    parentId = String(parent.parentId || '') || String(parent.id || '');
-    replyToUid = String(parent.authorUid || '');
-    replyToNickname = (await publicProfile(replyToUid, env)).nickname;
-  }
-  const now = Date.now();
+  if (!content.length || content.length > MAX_COMMENT_LENGTH) throw new Error('评论长度无效。');
   const commentId = crypto.randomUUID();
-  await collection(env, 'CardComment').insert({
-    id: commentId, cardId, authorUid: uid, parentId, replyToNickname, replyToUid,
-    content, status: 'ACTIVE', createdAt: now, updatedAt: now
-  });
+  let cardOwner = '';
+  let replyToUid = '';
+  const committed = await collection(env, 'CardComment').runTransaction({ apply: async (tx) => {
+    const profile = await stage1.activeProfile(tx, uid, env);
+    const card = await stage1.txOne(tx, env, 'FoodCard', 'id', cardId);
+    await transactionPolicy(tx, env, [profile]).assertCardReadable(uid, card);
+    const parentId = String(payload.parentCommentId || '');
+    const parent = parentId ? await stage1.txOne(tx, env, 'CardComment', 'id', parentId) : null;
+    if (parentId && (!parent || parent.cardId !== cardId || parent.status !== 'ACTIVE')) throw accessError('回复目标已失效。');
+    replyToUid = parent ? String(parent.authorUid || '') : '';
+    const recipient = replyToUid ? await stage1.txOne(tx, env, 'UserProfile', 'uid', replyToUid) : null;
+    if (parent && !isAccountActive(recipient)) throw accessError('回复目标账号已停用。');
+    const now = logicalWriteTime(profile.updatedAt);
+    stage1.upsertRows(tx, [Object.assign(new CardComment(), {
+      id: commentId, cardId, authorUid: uid, parentId: parent ? String(parent.parentId || parent.id) : '',
+      replyToUid, replyToNickname: recipient ? String(recipient.nicknameValue || recipient.nickname || '食刻用户') : '',
+      content, status: 'ACTIVE', createdAt: now, updatedAt: now
+    }), Object.assign(new FoodCard(), card), profileForWrite(profile, now)]);
+    cardOwner = String(card.ownerUid); return true;
+  } });
+  if (!committed) throw new Error('评论未保存。');
   const recipients = new Map();
-  if (String(card.ownerUid || '') !== uid) recipients.set(String(card.ownerUid || ''), 'CARD_COMMENT');
+  if (cardOwner !== uid) recipients.set(cardOwner, 'CARD_COMMENT');
   if (replyToUid && replyToUid !== uid) recipients.set(replyToUid, 'REPLY');
-  await Promise.all([...recipients.entries()].map(([recipientUid, notificationKind]) =>
-    emitNotification(recipientUid, uid, notificationKind, commentId, cardId, env)));
+  await Promise.all([...recipients.entries()].map(([recipientUid, kind]) => emitNotification(recipientUid, uid, kind, commentId, cardId, env)));
   return { success: true };
 }
 
 async function deleteCardComment(uid, payload, env) {
-  const commentId = String(payload.commentId || '');
-  const comments = collection(env, 'CardComment');
-  const comment = await one(comments.query().equalTo('id', commentId));
-  if (!comment || (String(comment.authorUid || '') !== uid && !isAdministrator(uid, env))) {
-    throw new Error('评论不存在或无权删除。');
-  }
-  if (String(comment.status || 'ACTIVE') === 'DELETED') return { success: true };
-  comment.content = '';
-  comment.status = 'DELETED';
-  comment.updatedAt = Date.now();
-  await comments.upsert(comment);
-  const reactions = await collection(env, 'CommentReaction').query().equalTo('commentId', commentId).get();
-  if (reactions.length > 0) await collection(env, 'CommentReaction').delete(reactions);
+  const committed = await collection(env, 'CardComment').runTransaction({ apply: async (tx) => {
+    await stage1.activeProfile(tx, uid, env);
+    const comment = await stage1.txOne(tx, env, 'CardComment', 'id', String(payload.commentId || ''));
+    if (!comment || (comment.authorUid !== uid && !isAdministrator(uid, env))) throw accessError('评论不存在或无权删除。');
+    if (comment.status !== 'DELETED') stage1.upsertRows(tx, [Object.assign(new CardComment(), comment, {
+      status: 'DELETED', updatedAt: logicalWriteTime(comment.updatedAt)
+    })]);
+    return true;
+  } });
+  if (!committed) throw new Error('评论状态未保存。');
   return { success: true };
 }
 
 async function toggleCommentReaction(uid, payload, env) {
   const commentId = String(payload.commentId || '');
-  const comment = await one(collection(env, 'CardComment').query().equalTo('id', commentId));
-  if (!comment || String(comment.status || 'ACTIVE') === 'DELETED') throw new Error('评论不存在或已删除。');
-  if (String(comment.authorUid || '') === uid) throw new Error('不能给自己的评论投票。');
-  const card = await one(collection(env, 'FoodCard').query().equalTo('id', String(comment.cardId || '')));
-  if (!card || card.status !== 'APPROVED') throw new Error('只能互动公开卡片中的评论。');
   const kind = commentReactionKind(payload.reaction);
   const id = actionId('comment', uid, commentId);
-  const reactions = collection(env, 'CommentReaction');
-  const existing = await one(reactions.query().equalTo('id', id));
-  let active = false;
   let reaction = '';
-  if (existing && String(existing.kind || '') === kind) {
-    await reactions.delete(existing);
-  } else {
-    await reactions.upsert({ id, actorUid: uid, commentId, kind, createdAt: Date.now() });
-    active = true;
-    reaction = kind;
-  }
+  const committed = await collection(env, 'CommentReaction').runTransaction({ apply: async (tx) => {
+    const profile = await stage1.activeProfile(tx, uid, env);
+    const comment = await stage1.txOne(tx, env, 'CardComment', 'id', commentId);
+    if (!comment || comment.status !== 'ACTIVE' || comment.authorUid === uid) throw accessError('评论不存在或不能互动。');
+    const card = await stage1.txOne(tx, env, 'FoodCard', 'id', comment.cardId);
+    await transactionPolicy(tx, env, [profile]).assertCardReadable(uid, card);
+    const existing = await stage1.txOne(tx, env, 'CommentReaction', 'id', id);
+    reaction = existing && existing.kind === kind ? '' : kind;
+    if (!reaction) tx.executeDelete([existing]);
+    else stage1.upsertRows(tx, [Object.assign(new CommentReaction(), { id, actorUid: uid, commentId, kind, createdAt: Date.now() })]);
+    stage1.upsertRows(tx, [Object.assign(new CardComment(), comment), Object.assign(new FoodCard(), card),
+      profileForWrite(profile, logicalWriteTime(profile.updatedAt))]);
+    return true;
+  } });
+  if (!committed) throw new Error('评论互动未保存。');
   const summary = await commentReactionSummary(commentId, uid, env);
-  return { active, reaction, likeCount: summary.likeCount, dislikeCount: summary.dislikeCount };
+  return { active: !!reaction, reaction, likeCount: summary.likeCount, dislikeCount: summary.dislikeCount };
 }
 
 async function reportCard(uid, payload, env) {
   const cardId = String(payload.cardId || '');
   const card = await one(collection(env, 'FoodCard').query().equalTo('id', cardId));
-  if (!card || card.status !== 'APPROVED') throw new Error('只能举报公开卡片。');
+  await contentPolicy(env).assertCardReadable(uid, card);
   const id = crypto.createHash('sha256').update(`${uid}:${cardId}`).digest('hex');
   const reports = collection(env, 'Report');
   const existing = await one(reports.query().equalTo('id', id));
@@ -3641,103 +4228,151 @@ async function reportCard(uid, payload, env) {
   }
   const distinct = await reports.query().equalTo('cardId', cardId).limit(3).get();
   if (distinct.length >= 3) {
-    card.status = 'REMOVED';
-    card.updatedAt = Date.now();
-    await collection(env, 'FoodCard').upsert(card);
+    const cards = collection(env, 'FoodCard');
+    const committed = await cards.runTransaction({
+      apply: async (transaction) => {
+        const rows = await transaction.executeQuery(cards.query().equalTo('id', cardId).limit(1));
+        const current = rows[0];
+        if (!current || (current.status === 'REMOVED' && current.reviewState === 'TAKEN_DOWN')) return true;
+        const now = Math.max(Date.now(), Number(current.updatedAt || 0) + 1, (dateMillis(current.modifiedAt) || 0) + 1);
+        transaction.executeUpsert([Object.assign(new FoodCard(), current, {
+          status: 'REMOVED', reviewState: 'TAKEN_DOWN', publishedAt: new Date(now), modifiedAt: new Date(now), updatedAt: now
+        })]);
+        return true;
+      }
+    });
+    if (!committed) throw new Error('举报下架状态未保存，请重试。');
   }
   return { success: true };
 }
 
 async function deleteOwnCard(uid, payload, env) {
-  const cards = collection(env, 'FoodCard');
-  const row = await one(cards.query().equalTo('id', String(payload.cardId || '')));
-  if (!row || row.ownerUid !== uid) throw new Error('卡片不存在或无权删除。');
-  const mediaStore = collection(env, 'CardMedia');
-  let cardMedias = await queryAllRows(() => mediaStore.query().equalTo('cardId', row.id));
-  if (cardMedias.length === 0 && row.mediaId) {
-    const legacyMedia = await one(mediaStore.query().equalTo('id', row.mediaId));
-    cardMedias = legacyMedia ? [legacyMedia] : [];
-  }
-  for (const media of cardMedias) {
-    if (media && media.ownerUid === uid) {
-      await deleteObject(env, approvedObjectKeyForMedia(media));
-      await mediaStore.delete(media);
-    }
-  }
-  await deleteAllMatchingRows(env, 'Report', (reports) => reports.query().equalTo('cardId', row.id));
-  await deleteAllMatchingRows(env, 'CardAction', (actions) => actions.query().equalTo('cardId', row.id));
-  const relatedComments = await queryAllRows(() => collection(env, 'CardComment').query().equalTo('cardId', row.id));
-  for (const comment of relatedComments) {
-    await deleteAllMatchingRows(env, 'CommentReaction', (reactions) => reactions.query()
-      .equalTo('commentId', comment.id));
-  }
-  if (relatedComments.length > 0) await collection(env, 'CardComment').delete(relatedComments);
-  await cards.delete(row);
-  await refreshPublishCount(uid, env);
-  return { success: true };
+  return stage1.softDelete(uid, payload, env);
 }
 
 async function cleanupAccount(uid, env) {
-  const cards = await queryAllRows(() => collection(env, 'FoodCard').query().equalTo('ownerUid', uid));
-  for (const card of cards) await deleteOwnCard(uid, { cardId: card.id }, env);
-  const medias = await queryAllRows(() => collection(env, 'CardMedia').query().equalTo('ownerUid', uid));
-  for (const media of medias) {
-    await deleteObject(env, approvedObjectKeyForMedia(media));
-  }
-  if (medias.length > 0) await collection(env, 'CardMedia').delete(medias);
-  await deleteAllMatchingRows(env, 'Report', (reports) => reports.query().equalTo('reporterUid', uid));
-  await deleteAllMatchingRows(env, 'CardAction', (actions) => actions.query().equalTo('actorUid', uid));
-  const ownComments = await queryAllRows(() => collection(env, 'CardComment').query().equalTo('authorUid', uid));
-  for (const comment of ownComments) {
-    await deleteAllMatchingRows(env, 'CommentReaction', (reactions) => reactions.query()
-      .equalTo('commentId', comment.id));
-  }
-  if (ownComments.length > 0) await collection(env, 'CardComment').delete(ownComments);
-  await deleteAllMatchingRows(env, 'CommentReaction', (reactions) => reactions.query().equalTo('actorUid', uid));
-  const friendships = collection(env, 'Friendship');
-  const friendshipRows = await friendshipRowsFor(uid, env);
-  for (const row of friendshipRows) {
-    const otherUid = String(row.memberAUid || '') === uid
-      ? String(row.memberBUid || '') : String(row.memberAUid || '');
-    if (otherUid) await deleteConversation(uid, otherUid, env);
-  }
-  if (friendshipRows.length > 0) await friendships.delete(friendshipRows);
-  await deleteAllMatchingRows(env, 'ChatMessage', (messages) => messages.query().equalTo('senderUid', uid));
-  await deleteAllMatchingRows(env, 'ChatMessage', (messages) => messages.query().equalTo('recipientUid', uid));
-  await deleteAllMatchingRows(env, 'Conversation', (conversations) => conversations.query().equalTo('memberAUid', uid));
-  await deleteAllMatchingRows(env, 'Conversation', (conversations) => conversations.query().equalTo('memberBUid', uid));
-  const ownedGroups = await queryAllRows(() => collection(env, 'GroupConversation').query().equalTo('ownerUid', uid));
-  for (const group of ownedGroups) await deleteGroupConversation(String(group.id || ''), env);
-  const groupMemberships = await queryAllRows(() => collection(env, 'GroupMember').query().equalTo('memberUid', uid));
-  for (const membership of groupMemberships) {
-    const groupId = String(membership.groupId || '');
-    const group = await one(collection(env, 'GroupConversation').query().equalTo('id', groupId));
-    if (!group) continue;
-    const members = await groupMembersFor(groupId, env);
-    if (members.length <= 2) {
-      await deleteGroupConversation(groupId, env);
-      continue;
-    }
-    await collection(env, 'GroupMember').delete(membership);
-    group.memberCount = members.length - 1;
-    group.updatedAt = Date.now();
-    await collection(env, 'GroupConversation').upsert(group);
-  }
-  await deleteAllMatchingRows(env, 'GroupMessage', (messages) => messages.query().equalTo('senderUid', uid));
-  await deleteAllMatchingRows(env, 'FriendReport', (reports) => reports.query().equalTo('reporterUid', uid));
-  await deleteAllMatchingRows(env, 'FriendReport', (reports) => reports.query().equalTo('targetUid', uid));
-  await deleteAllMatchingRows(env, 'PushRegistration', (registrations) => registrations.query().equalTo('ownerUid', uid));
-  await deleteAllMatchingRows(env, 'WidgetRegistration', (registrations) => registrations.query().equalTo('ownerUid', uid));
-  await deleteAllMatchingRows(env, 'NotificationEvent', (notifications) => notifications.query().equalTo('recipientUid', uid));
-  await deleteAllMatchingRows(env, 'NotificationEvent', (notifications) => notifications.query().equalTo('actorUid', uid));
-  const profile = await one(collection(env, 'UserProfile').query().equalTo('uid', uid));
-  if (profile) await collection(env, 'UserProfile').delete(profile);
-  await deleteAllMatchingRows(env, 'IdentityBinding', (bindings) => bindings.query().equalTo('canonicalUid', uid));
-  await deleteAllMatchingRows(env, 'AuthMigrationTicket', (tickets) => tickets.query().equalTo('canonicalUid', uid));
-  return { success: true };
+  return stage1.beginAccountDeletion(uid, env);
 }
 
+async function verifiedDeletionUid(accessToken, env) {
+  // Only the deletion entry may resolve an inactive binding, for a lost-response
+  // retry. It cannot create a profile or re-enable an account.
+  const providerUid = await verifiedAgcUid(accessToken);
+  const binding = await identityBinding('AGC', providerUid, env);
+  return binding ? String(binding.canonicalUid || providerUid) : providerUid;
+}
+
+async function assertAdmin(uid, env) {
+  await contentPolicy(env).assertAccountActive(uid);
+  if (!isAdministrator(uid, env)) throw accessError('403：没有管理员权限。', 'FORBIDDEN');
+}
+
+async function listModerationCards(uid, payload, env) {
+  await assertAdmin(uid, env);
+  const requestedSize = Number(payload.pageSize || MAX_PAGE_SIZE);
+  const pageSize = Number.isFinite(requestedSize) ? Math.floor(Math.min(MAX_PAGE_SIZE, Math.max(1, requestedSize))) : MAX_PAGE_SIZE;
+  const offset = Number(payload.pageToken || 0);
+  if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('审核分页参数无效。');
+  const items = [];
+  let cursor = offset;
+  let scanned = 0;
+  let hasMore = true;
+  while (scanned < 200 && items.length < pageSize) {
+    const limit = Math.min(50, 200 - scanned);
+    const rows = await collection(env, 'FoodCard').query().equalTo('status', 'APPROVED')
+      .orderByDesc('createdAt').orderByAsc('id').limit(limit, cursor).get();
+    if (rows.length === 0) { hasMore = false; break; }
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index];
+      cursor += 1;
+      scanned += 1;
+      if (row.reviewState === 'PENDING_POST_REVIEW' && row.deletedAt == null && row.purgeAt == null) {
+        items.push({ cardId: String(row.id || ''), ownerUid: String(row.ownerUid || ''),
+          productName: String(row.productName || ''), reviewText: String(row.reviewText || ''),
+          sourceLink: String(row.sourceLink || ''), visibility: currentVisibility(row),
+          reviewState: row.reviewState, modifiedAt: dateMillis(row.modifiedAt),
+          createdAt: Number(row.createdAt || 0), photos: await publicPhotos(row, env, true) });
+      }
+      if (items.length === pageSize) {
+        return { items, nextPageToken: index + 1 < rows.length || rows.length === limit ? String(cursor) : '' };
+      }
+    }
+    if (rows.length < limit) { hasMore = false; break; }
+  }
+  return { items, nextPageToken: hasMore ? String(cursor) : '' };
+}
+
+async function moderateCard(uid, payload, env) {
+  await assertAdmin(uid, env);
+  const cardId = String(payload.cardId || '').trim();
+  const action = String(payload.action || '');
+  if (!cardId || (action !== 'APPROVE' && action !== 'TAKE_DOWN')) throw new Error('审核操作无效。');
+  const cards = collection(env, 'FoodCard');
+  let reviewed = null;
+  const committed = await cards.runTransaction({
+    apply: async (transaction) => {
+      const rows = await transaction.executeQuery(cards.query().equalTo('id', cardId).limit(1));
+      const row = rows[0];
+      if (!row) throw accessError('内容不存在。');
+      const owners = await transaction.executeQuery(collection(env, 'UserProfile').query()
+        .equalTo('uid', String(row.ownerUid || '')).limit(1));
+      if (payload.expectedModifiedAt != null && dateMillis(row.modifiedAt) !== Number(payload.expectedModifiedAt)) {
+        throw accessError('内容已变化，请刷新审核列表。', 'CONFLICT');
+      }
+      if (action === 'APPROVE' && (row.status !== 'APPROVED' || row.reviewState !== 'PENDING_POST_REVIEW' ||
+          row.deletedAt != null || row.purgeAt != null || !isAccountActive(owners[0]))) {
+        throw accessError('当前内容不能批准。', 'INVALID_STATE');
+      }
+      const now = Math.max(Date.now(), Number(row.updatedAt || 0) + 1, (dateMillis(row.modifiedAt) || 0) + 1);
+      reviewed = Object.assign(new FoodCard(), row, {
+        reviewState: action === 'APPROVE' ? 'APPROVED' : 'TAKEN_DOWN',
+        status: action === 'APPROVE' ? 'APPROVED' : 'REMOVED',
+        publishedAt: new Date(now), modifiedAt: new Date(now), updatedAt: now
+      });
+      transaction.executeUpsert([reviewed]);
+      return true;
+    }
+  });
+  if (!committed || !reviewed) throw new Error('审核操作未完成，请重试。');
+  return { success: true, cardId, reviewState: reviewed.reviewState,
+    publishedAt: dateMillis(reviewed.publishedAt), modifiedAt: dateMillis(reviewed.modifiedAt) };
+}
+
+const stage1 = require('./stage1-services').createStage1Services({
+  collection, one, transactionPolicy, contentPolicy, profileForWrite, logicalWriteTime, nextContentSequence,
+  assertAdmin, validateCard, uniqueMediaIds, promotePendingMedia, refreshPublishCount, actionId, safeArray,
+  personalized: PERSONALIZED, models: OBJECT_TYPES
+});
+
 const operations = {
+  'get-revision-media': async ({ accessToken, payload }, env) => getRevisionMedia(await verifiedUid(accessToken, env), payload, env),
+  'set-card-reaction': async ({ accessToken, payload }, env) => stage1.mutateReaction(await verifiedUid(accessToken, env), payload, env),
+  'submit-card-revision': async ({ accessToken, payload }, env) => stage1.submitRevision(await verifiedUid(accessToken, env), payload, env),
+  'get-card-revision': async ({ accessToken, payload }, env) => stage1.getRevision(await verifiedUid(accessToken, env), payload, env),
+  'withdraw-card-revision': async ({ accessToken, payload }, env) => stage1.decideRevision(await verifiedUid(accessToken, env), payload, env, true),
+  'list-moderation-revisions': async ({ accessToken, payload }, env) => stage1.listRevisions(await verifiedUid(accessToken, env), payload, env),
+  'moderate-card-revision': async ({ accessToken, payload }, env) => stage1.decideRevision(await verifiedUid(accessToken, env), payload, env),
+  'start-migration-job': async ({ accessToken, payload }, env) => stage1.startMigration(await verifiedUid(accessToken, env), payload, env),
+  'process-migration-job': async ({ accessToken, payload }, env) => stage1.processMigration(await verifiedUid(accessToken, env), payload, env),
+  'get-migration-status': async ({ accessToken }, env) => stage1.migrationStatus(await verifiedUid(accessToken, env), env),
+  'list-maintenance-jobs': async ({ accessToken, payload }, env) => stage1.listJobs(await verifiedUid(accessToken, env), payload, env),
+  'get-maintenance-job': async ({ accessToken, payload }, env) => stage1.getJob(await verifiedUid(accessToken, env), payload, env),
+  'retry-maintenance-job': async ({ accessToken, payload }, env) => stage1.retryJob(await verifiedUid(accessToken, env), payload, env),
+  'validate-lifecycle-job': async ({ accessToken, payload }, env) => stage1.validateLifecycleJob(await verifiedUid(accessToken, env), payload, env),
+  'set-card-visibility': async ({ accessToken, payload }, env) =>
+    setCardVisibility(await verifiedUid(accessToken, env), payload, env),
+  'revoke-friend-content-access': async ({ accessToken, payload }, env) =>
+    revokeFriendContentAccess(await verifiedUid(accessToken, env), payload, env),
+  'process-friend-cleanup-job': async ({ accessToken, payload }, env) => {
+    await assertAdmin(await verifiedUid(accessToken, env), env);
+    const jobId = String(payload.jobId || '');
+    if (!/^[0-9a-f]{64}$/.test(jobId)) throw new Error('清理任务标识无效。');
+    return processFriendCleanup(jobId, env);
+  },
+  'list-moderation-cards': async ({ accessToken, payload }, env) =>
+    listModerationCards(await verifiedUid(accessToken, env), payload, env),
+  'moderate-card': async ({ accessToken, payload }, env) =>
+    moderateCard(await verifiedUid(accessToken, env), payload, env),
   'complete-legacy-login': async ({ accessToken, payload }, env) =>
     completeLegacyLogin(accessToken, payload, env),
   'start-email-binding': async ({ accessToken }, env) => startEmailBinding(accessToken, env),
@@ -3754,7 +4389,7 @@ const operations = {
     getPublicMedia(accessToken ? await verifiedUid(accessToken, env) : '', payload, env),
   'publish-card': async ({ accessToken, payload }, env) => publishCard(await verifiedUid(accessToken, env), payload, env),
   'list-nearby-cards': async ({ accessToken, payload }, env) => payload.scope === 'all'
-    ? listPublicRecommendations(payload, env) : listNearby(await verifiedUid(accessToken, env), payload, env),
+    ? listPublicRecommendations(payload, env, accessToken ? await verifiedUid(accessToken, env) : '') : listNearby(await verifiedUid(accessToken, env), payload, env),
   'list-friend-rankings': async ({ accessToken }, env) => listFriendRankings(await verifiedUid(accessToken, env), env),
   'get-friend-profile': async ({ accessToken, payload }, env) =>
     friendProfile(await verifiedUid(accessToken, env), payload, env),
@@ -3822,7 +4457,7 @@ const operations = {
   'delete-card-comment': async ({ accessToken, payload }, env) => deleteCardComment(await verifiedUid(accessToken, env), payload, env),
   'toggle-comment-reaction': async ({ accessToken, payload }, env) => toggleCommentReaction(await verifiedUid(accessToken, env), payload, env),
   'delete-own-card': async ({ accessToken, payload }, env) => deleteOwnCard(await verifiedUid(accessToken, env), payload, env),
-  'delete-account-data': async ({ accessToken }, env) => cleanupAccount(await verifiedUid(accessToken, env), env)
+  'delete-account-data': async ({ accessToken }, env) => cleanupAccount(await verifiedDeletionUid(accessToken, env), env)
 };
 
 function createHandler(operation) {

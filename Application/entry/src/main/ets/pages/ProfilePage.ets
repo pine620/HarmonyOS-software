@@ -132,7 +132,6 @@ export struct ProfilePage {
         this.shortcut('我的卡片', $r('app.media.ic_profile_cards'), 'profile-published');
         this.shortcut('收藏', $r('app.media.ic_profile_favorite'), 'profile-favorites');
         this.shortcut('浏览记录', $r('app.media.ic_profile_history'), 'profile-history');
-        this.shortcut('评论', $r('app.media.ic_profile_comments'), 'profile-comments');
       }.width('100%');
     }
     .width('100%').padding({ left: 12, right: 12, top: 14, bottom: 10 })

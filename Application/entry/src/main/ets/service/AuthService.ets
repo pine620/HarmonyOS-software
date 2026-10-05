@@ -3,6 +3,7 @@ import { authentication } from '@kit.AccountKit';
 import util from '@ohos.util';
 import {
   AuthSession,
+  DeleteAccountResponse,
   EmptyRequest,
   ExchangeHuaweiAccountRequest,
   MigrationTicketRequest,
@@ -388,10 +389,11 @@ export class AuthService {
     } catch (_error) {
       pushCleanupPending = true;
     }
-    const result: OperationResponse =
-      await CloudGateway.callAuthenticated<OperationResponse>('delete-account-data', {} as EmptyRequest);
+    const deletionRequest: EmptyRequest = {};
+    const result: DeleteAccountResponse =
+      await CloudGateway.callAuthenticated<DeleteAccountResponse>('delete-account-data', deletionRequest);
     if (!result.success) {
-      throw new Error('云端未确认账号注销完成，请稍后重试。');
+      throw new Error('云端未确认注销申请，请稍后重试。');
     }
     let localServiceCardCleanupPending: boolean = false;
     if (serviceCardCleanupPending) {
@@ -409,23 +411,14 @@ export class AuthService {
         localPushCleanupPending = true;
       }
     }
-    let authorizationRevoked: boolean = true;
-    try {
-      if (nativeEmailSession) {
-        await AuthSessionStore.deleteUser();
-      } else {
-        await AuthService.revokeHuaweiAuthorization(context);
-      }
-    } catch (_error) {
-      authorizationRevoked = false;
-    } finally {
-      AuthService.clearLocalSession();
-    }
-    const accountMessage: string = authorizationRevoked
-      ? '食刻账号、相关应用数据和认证授权已注销。'
-      : '食刻账号和相关应用数据已注销；认证授权未能自动取消，请稍后在账号设置中处理。';
+    // Keep provider identity until the durable server task has cleaned all
+    // related records. A client must not delete credentials ahead of that job.
+    AuthService.clearLocalSession();
+    const accountMessage: string = result.cleanupPending
+      ? '注销申请已受理，账号已停用，内容已不可访问；云端数据与认证身份待后台清理完成。'
+      : '食刻账号注销处理已完成。';
     if (localPushCleanupPending || localServiceCardCleanupPending) {
-      return `${accountMessage} 本机 Push 状态未能完全清理，请重新登录后检查权限与隐私。`;
+      return `${accountMessage} 本机通知状态未能完全清理，请在系统设置中检查通知权限。`;
     }
     return accountMessage;
   }

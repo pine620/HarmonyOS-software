@@ -7,7 +7,12 @@ type CloudResponse = {
   ok: boolean;
   data: object;
   message: string;
+  code?: string;
 };
+
+interface CodedRuntimeError extends Error {
+  code?: string;
+}
 
 type RuntimeModule = {
   executeOperation(operation: string, input: CloudEnvelope, env?: NodeJS.ProcessEnv): Promise<object>;
@@ -30,11 +35,88 @@ async function executeCloudOperation(
   } catch (error) {
     console.error(`${operation} failed: ${runtime.safeLogError(error)}`);
     const message = error instanceof Error ? error.message : '云端请求失败。';
-    return { ok: false, data: {}, message };
+    const failure = error instanceof Error ? error as CodedRuntimeError : undefined;
+    const code = failure && typeof failure.code === 'string' && failure.code.length > 0 ? failure.code : 'REQUEST_FAILED';
+    return { ok: false, data: {}, message, code };
   }
 }
 
 export class ShikeService {
+  getRevisionMedia(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('get-revision-media', input);
+  }
+
+  setCardReaction(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('set-card-reaction', input);
+  }
+
+  submitCardRevision(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('submit-card-revision', input);
+  }
+
+  getCardRevision(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('get-card-revision', input);
+  }
+
+  withdrawCardRevision(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('withdraw-card-revision', input);
+  }
+
+  listModerationRevisions(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('list-moderation-revisions', input);
+  }
+
+  moderateCardRevision(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('moderate-card-revision', input);
+  }
+
+  startMigrationJob(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('start-migration-job', input);
+  }
+
+  processMigrationJob(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('process-migration-job', input);
+  }
+
+  getMigrationStatus(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('get-migration-status', input);
+  }
+
+  listMaintenanceJobs(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('list-maintenance-jobs', input);
+  }
+
+  getMaintenanceJob(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('get-maintenance-job', input);
+  }
+
+  retryMaintenanceJob(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('retry-maintenance-job', input);
+  }
+
+  validateLifecycleJob(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('validate-lifecycle-job', input);
+  }
+
+  setCardVisibility(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('set-card-visibility', input);
+  }
+
+  revokeFriendContentAccess(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('revoke-friend-content-access', input);
+  }
+
+  processFriendCleanupJob(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('process-friend-cleanup-job', input);
+  }
+
+  listModerationCards(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('list-moderation-cards', input);
+  }
+
+  moderateCard(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('moderate-card', input);
+  }
 
   completeLegacyLogin(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('complete-legacy-login', input);

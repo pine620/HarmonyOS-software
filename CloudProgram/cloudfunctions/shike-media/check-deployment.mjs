@@ -47,6 +47,7 @@ if ((artifactMode && (args.length !== 2 || artifactFlag !== 0 || !args[1])) || (
   const handlerName = artifactMode ? 'shikeMedia.js' : 'shikeMedia.ts';
   const handlerPath = requireFile(handlerName);
   const runtimePath = requireFile('runtime.js');
+  const policyPath = requireFile('content-policy.js');
   const configPath = requireFile('function-config.json');
   const packagePath = requireFile('package.json');
   const lockPath = requireFile('package-lock.json');
@@ -81,9 +82,10 @@ if ((artifactMode && (args.length !== 2 || artifactFlag !== 0 || !args[1])) || (
 
   const handlerCode = existsSync(handlerPath) ? readFileSync(handlerPath, 'utf8') : '';
   const runtimeCode = existsSync(runtimePath) ? readFileSync(runtimePath, 'utf8') : '';
+  const policyCode = existsSync(policyPath) ? readFileSync(policyPath, 'utf8') : '';
   const requests = [];
   const requestPattern = /\brequire\(\s*(['"])([^'"]+)\1\s*\)/g;
-  for (const source of [handlerCode, runtimeCode]) {
+  for (const source of [handlerCode, runtimeCode, policyCode]) {
     for (const match of source.matchAll(requestPattern)) requests.push(match[2]);
   }
   if (!requests.includes('./runtime')) errors.push(handlerName + ' must retain the relative require(\'./runtime\').');

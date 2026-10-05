@@ -181,7 +181,7 @@ export struct FriendsPage {
     this.actionUid = request.user.uid;
     try {
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      await this.repository.respondRequest(context, request.id, accept);
+      await this.repository.respondRequest(context, request.id, accept, request.createdAt);
       this.status = accept ? `你和 ${request.user.nickname} 已成为好友。` : '已拒绝这条好友申请。';
       this.notifyRelationshipChanged();
       void this.loadFriends(true);
@@ -199,7 +199,7 @@ export struct FriendsPage {
     this.actionUid = user.uid;
     try {
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      await this.repository.removeFriend(context, user.uid);
+      await this.repository.removeFriend(context, user.uid, user.friendshipUpdatedAt);
       this.pendingRemoveUser = undefined;
       this.pendingFriendAction = 'REMOVE';
       this.status = `已移除 ${user.nickname}，会话已从应用中移除。`;
@@ -262,7 +262,7 @@ export struct FriendsPage {
     this.actionUid = request.user.uid;
     try {
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      await this.repository.cancelRequest(context, request.id);
+      await this.repository.cancelRequest(context, request.id, request.createdAt);
       this.status = `已撤回给 ${request.user.nickname} 的好友申请。`;
       this.notifyRelationshipChanged();
       void this.loadFriends(true);

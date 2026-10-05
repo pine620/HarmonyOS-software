@@ -1,0 +1,105 @@
+{
+  "objectTypeName": "PublishRequestRecord",
+  "fields": [
+    {
+      "fieldName": "requestId",
+      "fieldType": "String",
+      "notNull": true,
+      "belongPrimaryKey": true
+    },
+    {
+      "fieldName": "uid",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "operationType",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "payloadHash",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "resultEntityId",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "status",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "createdAt",
+      "fieldType": "Date"
+    },
+    {
+      "fieldName": "expiresAt",
+      "fieldType": "Date"
+    }
+  ],
+  "indexes": [
+    {
+      "indexName": "uid_created_request",
+      "indexList": [
+        {
+          "fieldName": "uid",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "createdAt",
+          "sortType": "DESC"
+        },
+        {
+          "fieldName": "requestId",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "status_expiry_request",
+      "indexList": [
+        {
+          "fieldName": "status",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "expiresAt",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "requestId",
+          "sortType": "ASC"
+        }
+      ]
+    }
+  ],
+  "permissions": [
+    {
+      "role": "World",
+      "rights": []
+    },
+    {
+      "role": "Authenticated",
+      "rights": []
+    },
+    {
+      "role": "Creator",
+      "rights": []
+    },
+    {
+      "role": "Administrator",
+      "rights": [
+        "Read",
+        "Upsert",
+        "Delete"
+      ]
+    }
+  ]
+}

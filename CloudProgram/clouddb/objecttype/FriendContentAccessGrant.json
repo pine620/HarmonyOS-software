@@ -1,0 +1,91 @@
+{
+  "objectTypeName": "FriendContentAccessGrant",
+  "fields": [
+    {
+      "fieldName": "authorUid",
+      "fieldType": "String",
+      "notNull": true,
+      "belongPrimaryKey": true
+    },
+    {
+      "fieldName": "viewerUid",
+      "fieldType": "String",
+      "notNull": true,
+      "belongPrimaryKey": true
+    },
+    {
+      "fieldName": "accessThroughAt",
+      "fieldType": "Date"
+    },
+    {
+      "fieldName": "accessThroughSequence",
+      "fieldType": "Long",
+      "notNull": true,
+      "defaultValue": 0
+    },
+    {
+      "fieldName": "revoked",
+      "fieldType": "Boolean",
+      "notNull": true,
+      "defaultValue": false
+    },
+    {
+      "fieldName": "revokedAt",
+      "fieldType": "Date"
+    },
+    {
+      "fieldName": "updatedAt",
+      "fieldType": "Date"
+    }
+  ],
+  "indexes": [
+    {
+      "indexName": "author_viewer",
+      "indexList": [
+        {
+          "fieldName": "authorUid",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "viewerUid",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "viewer_author",
+      "indexList": [
+        {
+          "fieldName": "viewerUid",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "authorUid",
+          "sortType": "ASC"
+        }
+      ]
+    }
+  ],
+  "permissions": [
+    {
+      "role": "World",
+      "rights": []
+    },
+    {
+      "role": "Authenticated",
+      "rights": []
+    },
+    {
+      "role": "Creator",
+      "rights": []
+    },
+    {
+      "role": "Administrator",
+      "rights": [
+        "Read",
+        "Upsert",
+        "Delete"
+      ]
+    }
+  ]
+}

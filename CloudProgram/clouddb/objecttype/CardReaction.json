@@ -1,0 +1,89 @@
+{
+  "objectTypeName": "CardReaction",
+  "fields": [
+    {
+      "fieldName": "cardId",
+      "fieldType": "String",
+      "notNull": true,
+      "belongPrimaryKey": true
+    },
+    {
+      "fieldName": "uid",
+      "fieldType": "String",
+      "notNull": true,
+      "belongPrimaryKey": true
+    },
+    {
+      "fieldName": "reaction",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "createdAt",
+      "fieldType": "Date"
+    },
+    {
+      "fieldName": "updatedAt",
+      "fieldType": "Date"
+    }
+  ],
+  "indexes": [
+    {
+      "indexName": "card_reaction_uid",
+      "indexList": [
+        {
+          "fieldName": "cardId",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "reaction",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "uid",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "uid_updated_card",
+      "indexList": [
+        {
+          "fieldName": "uid",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "updatedAt",
+          "sortType": "DESC"
+        },
+        {
+          "fieldName": "cardId",
+          "sortType": "ASC"
+        }
+      ]
+    }
+  ],
+  "permissions": [
+    {
+      "role": "World",
+      "rights": []
+    },
+    {
+      "role": "Authenticated",
+      "rights": []
+    },
+    {
+      "role": "Creator",
+      "rights": []
+    },
+    {
+      "role": "Administrator",
+      "rights": [
+        "Read",
+        "Upsert",
+        "Delete"
+      ]
+    }
+  ]
+}

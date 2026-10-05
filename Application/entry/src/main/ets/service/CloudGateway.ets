@@ -4,8 +4,11 @@ import type { CloudEnvelope } from '@shike/cloud-objects';
 import { AuthSessionStore } from './AuthSessionStore';
 
 type MediaOperation = 'prepare-card-photo' | 'upload-card-photo' | 'get-public-media';
+type MediaErrorSource = 'cloud-call' | 'business-response';
+type MediaCloudObjectName = 'shike-media' | 'shike-service';
 
 interface CloudHandlerErrorDetail {
+  code?: number;
   message?: string;
 }
 
@@ -73,6 +76,25 @@ export class CloudGateway {
     return typeof detail.message === 'string' ? detail.message : '';
   }
 
+  private static cloudHandlerCode(error: Object): string {
+    if (error === null || error === undefined) return 'not-provided';
+    const detail: CloudHandlerErrorDetail = error as CloudHandlerErrorDetail;
+    return typeof detail.code === 'number' ? String(detail.code) : 'not-provided';
+  }
+
+  private static logMediaHandlerError(operation: MediaOperation, source: MediaErrorSource,
+    cloudObjectName: MediaCloudObjectName, message: string, code: string): void {
+    // Extract only the missing module name; never log the request or raw error body.
+    const matchedModule: RegExpMatchArray | null = message.match(
+      /Cannot find (?:module|package)\s+['"]([^'"\r\n]+)['"]/);
+    const missingModule: string = matchedModule !== null && matchedModule.length > 1
+      ? matchedModule[1].replace(/[A-Za-z0-9_+=-]{48,}/g, '[redacted]')
+        .replace(/[^A-Za-z0-9@./_:+\[\]-]/g, '?').slice(0, 160)
+      : 'not-provided';
+    console.error('[MediaService] diagnostic; source=' + source + '; cloudObject=' + cloudObjectName +
+      '; version=$latest; operation=' + operation + '; code=' + code + '; missingModule=' + missingModule);
+  }
+
   private static isMediaHandlerModuleError(message: string): boolean {
     return message.includes('Call handler error') &&
       (message.includes('Cannot find module') || message.includes('Cannot find package'));
@@ -98,6 +120,10 @@ export class CloudGateway {
       throw new Error('当前未开放媒体接口。');
     } catch (error) {
       const message: string = CloudGateway.cloudHandlerMessage(error as Object);
+      if (message.includes('Call handler error')) {
+        CloudGateway.logMediaHandlerError(operation, 'cloud-call', 'shike-media', message,
+          CloudGateway.cloudHandlerCode(error as Object));
+      }
       if (CloudGateway.isMediaHandlerModuleError(message)) {
         throw CloudGateway.openMediaCircuit(operation, generation);
       }
@@ -214,8 +240,7 @@ export class CloudGateway {
         raw = await (CloudGateway.serviceObject as ShikeService).listMyFavoriteCards(envelope);
         break;
       case 'list-received-comments':
-        raw = await (CloudGateway.serviceObject as ShikeService).listReceivedComments(envelope);
-        break;
+        throw new Error('评论入口已下线。');
       case 'search-users':
         raw = await (CloudGateway.serviceObject as ShikeService).searchUsers(envelope);
         break;
@@ -307,13 +332,61 @@ export class CloudGateway {
         raw = await (CloudGateway.serviceObject as ShikeService).toggleCardAction(envelope);
         break;
       case 'create-card-comment':
-        raw = await (CloudGateway.serviceObject as ShikeService).createCardComment(envelope);
-        break;
+        throw new Error('评论入口已下线。');
       case 'delete-card-comment':
-        raw = await (CloudGateway.serviceObject as ShikeService).deleteCardComment(envelope);
-        break;
+        throw new Error('评论入口已下线。');
       case 'toggle-comment-reaction':
-        raw = await (CloudGateway.serviceObject as ShikeService).toggleCommentReaction(envelope);
+        throw new Error('评论入口已下线。');
+      case 'set-card-reaction':
+        raw = await (CloudGateway.serviceObject as ShikeService).setCardReaction(envelope);
+        break;
+      case 'submit-card-revision':
+        raw = await (CloudGateway.serviceObject as ShikeService).submitCardRevision(envelope);
+        break;
+      case 'get-card-revision':
+        raw = await (CloudGateway.serviceObject as ShikeService).getCardRevision(envelope);
+        break;
+      case 'withdraw-card-revision':
+        raw = await (CloudGateway.serviceObject as ShikeService).withdrawCardRevision(envelope);
+        break;
+      case 'list-moderation-revisions':
+        raw = await (CloudGateway.serviceObject as ShikeService).listModerationRevisions(envelope);
+        break;
+      case 'moderate-card-revision':
+        raw = await (CloudGateway.serviceObject as ShikeService).moderateCardRevision(envelope);
+        break;
+      case 'start-migration-job':
+        raw = await (CloudGateway.serviceObject as ShikeService).startMigrationJob(envelope);
+        break;
+      case 'process-migration-job':
+        raw = await (CloudGateway.serviceObject as ShikeService).processMigrationJob(envelope);
+        break;
+      case 'get-migration-status':
+        raw = await (CloudGateway.serviceObject as ShikeService).getMigrationStatus(envelope);
+        break;
+      case 'list-maintenance-jobs':
+        raw = await (CloudGateway.serviceObject as ShikeService).listMaintenanceJobs(envelope);
+        break;
+      case 'get-maintenance-job':
+        raw = await (CloudGateway.serviceObject as ShikeService).getMaintenanceJob(envelope);
+        break;
+      case 'retry-maintenance-job':
+        raw = await (CloudGateway.serviceObject as ShikeService).retryMaintenanceJob(envelope);
+        break;
+      case 'validate-lifecycle-job':
+        raw = await (CloudGateway.serviceObject as ShikeService).validateLifecycleJob(envelope);
+        break;
+      case 'get-revision-media':
+        raw = await (CloudGateway.serviceObject as ShikeService).getRevisionMedia(envelope);
+        break;
+      case 'set-card-visibility':
+        raw = await (CloudGateway.serviceObject as ShikeService).setCardVisibility(envelope);
+        break;
+      case 'revoke-friend-content-access':
+        raw = await (CloudGateway.serviceObject as ShikeService).revokeFriendContentAccess(envelope);
+        break;
+      case 'process-friend-cleanup-job':
+        raw = await (CloudGateway.serviceObject as ShikeService).processFriendCleanupJob(envelope);
         break;
       case 'delete-own-card':
         raw = await (CloudGateway.serviceObject as ShikeService).deleteOwnCard(envelope);
@@ -330,6 +403,12 @@ export class CloudGateway {
     const decoded = decode<T>(raw);
     if (!decoded.ok) {
       const message: string = decoded.message || '云端请求失败，请稍后重试。';
+      if (mediaOperation !== undefined && message.includes('Call handler error')) {
+        const cloudObjectName: MediaCloudObjectName = name === 'get-public-media' && !authenticated
+          ? 'shike-service' : 'shike-media';
+        CloudGateway.logMediaHandlerError(mediaOperation, 'business-response', cloudObjectName, message,
+          'not-returned');
+      }
       if (mediaOperation !== undefined && CloudGateway.isMediaHandlerModuleError(message)) {
         throw CloudGateway.openMediaCircuit(mediaOperation, mediaGeneration);
       }

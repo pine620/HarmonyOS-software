@@ -8,6 +8,7 @@
     { "fieldName": "createdAt", "fieldType": "Long", "notNull": true, "defaultValue": 0 }
   ],
   "indexes": [
+    {"indexName": "actor_kind_created_id", "indexList": [{"fieldName": "actorUid", "sortType": "ASC"}, {"fieldName": "kind", "sortType": "ASC"}, {"fieldName": "createdAt", "sortType": "DESC"}, {"fieldName": "id", "sortType": "ASC"}]},
     { "indexName": "cardId", "indexList": [{ "fieldName": "cardId", "sortType": "ASC" }] },
     { "indexName": "actorUid_createdAt", "indexList": [
       { "fieldName": "actorUid", "sortType": "ASC" },
