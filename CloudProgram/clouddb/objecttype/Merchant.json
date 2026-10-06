@@ -1,0 +1,195 @@
+{
+  "objectTypeName": "Merchant",
+  "fields": [
+    {
+      "fieldName": "merchantId",
+      "fieldType": "String",
+      "notNull": true,
+      "belongPrimaryKey": true
+    },
+    {
+      "fieldName": "name",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "normalizedName",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "address",
+      "fieldType": "Text"
+    },
+    {
+      "fieldName": "district",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "sourceType",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "provider",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "providerPoiId",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "latitudeE6",
+      "fieldType": "Long"
+    },
+    {
+      "fieldName": "longitudeE6",
+      "fieldType": "Long"
+    },
+    {
+      "fieldName": "coordinateSystem",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "verificationStatus",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "createdByUid",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "createdAt",
+      "fieldType": "Date"
+    },
+    {
+      "fieldName": "updatedAt",
+      "fieldType": "Date"
+    },
+    {
+      "fieldName": "publicRecommendationCount",
+      "fieldType": "Integer"
+    },
+    {
+      "fieldName": "publicDeliveryCount",
+      "fieldType": "Integer"
+    },
+    {
+      "fieldName": "publicDineInCount",
+      "fieldType": "Integer"
+    },
+    {
+      "fieldName": "mapVisible",
+      "fieldType": "Boolean"
+    },
+    {
+      "fieldName": "reviewAction",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "reviewReason",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "reviewedAt",
+      "fieldType": "Date"
+    },
+    {
+      "fieldName": "creationRequestHash",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "lastUpdateRequestId",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "lastUpdatePayloadHash",
+      "fieldType": "String"
+    }
+  ],
+  "indexes": [
+    {
+      "indexName": "provider_poi",
+      "indexList": [
+        {
+          "fieldName": "provider",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "providerPoiId",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "verification_created",
+      "indexList": [
+        {
+          "fieldName": "verificationStatus",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "createdAt",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "merchantId",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "creator_created",
+      "indexList": [
+        {
+          "fieldName": "createdByUid",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "createdAt",
+          "sortType": "DESC"
+        },
+        {
+          "fieldName": "merchantId",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "map_latitude",
+      "indexList": [
+        {
+          "fieldName": "mapVisible",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "latitudeE6",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "merchantId",
+          "sortType": "ASC"
+        }
+      ]
+    }
+  ],
+  "permissions": [
+    {
+      "role": "World",
+      "rights": []
+    },
+    {
+      "role": "Authenticated",
+      "rights": []
+    },
+    {
+      "role": "Creator",
+      "rights": []
+    },
+    {
+      "role": "Administrator",
+      "rights": [
+        "Read",
+        "Upsert",
+        "Delete"
+      ]
+    }
+  ]
+}

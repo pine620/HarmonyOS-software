@@ -13,6 +13,8 @@ import { PhotoUploadService } from '../service/PhotoUploadService';
 import { PushNotificationService, PushNotificationStatus } from '../service/PushNotificationService';
 import { ServiceCardRemoteSyncService, ServiceCardRemoteSyncStatus } from '../service/ServiceCardRemoteSyncService';
 import { ErrorDetail, errorText } from '../common/ErrorKit';
+import { ModeFieldCache } from '../service/ModeFieldCache';
+import { PublishVisibilityStore } from '../service/PublishVisibilityStore';
 
 const AVATAR_CROP_VIEWPORT = 240;
 const CLOUD_BUSY_MAX_ATTEMPTS = 3;
@@ -684,6 +686,8 @@ export struct ProfileSettingsPage {
         } catch (_error) {
           // Account deletion has already succeeded; local history cleanup is best effort.
         }
+        try { ModeFieldCache.clearAccount(context, deletedUid); } catch (_error) { }
+        try { PublishVisibilityStore.clearAccount(context, deletedUid); } catch (_error) { }
       }
       this.deleteConfirmationVisible = false;
       this.onSessionEnded(message);

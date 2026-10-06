@@ -4,6 +4,8 @@ import { fileIo } from '@kit.CoreFileKit';
 import { formBindingData, formProvider } from '@kit.FormKit';
 import util from '@ohos.util';
 import { FoodCard } from '../model/CloudContracts';
+import { cardPriceText } from '../model/CardPrice';
+import { foodCardCategoryLabel } from '../components/FoodCover';
 import { ServiceCardCoverCache } from './ServiceCardCoverCache';
 
 const STORE_OPTIONS: preferences.Options = { name: 'shike_service_card' };
@@ -68,20 +70,6 @@ function dimensionStore(context: common.Context): preferences.Preferences {
 
 function stringValue(value: preferences.ValueType, fallback: string): string {
   return typeof value === 'string' ? value : fallback;
-}
-
-function categoryLabel(category: string): string {
-  if (category === 'staple') return '米饭';
-  if (category === 'bakery') return '汤粉';
-  if (category === 'snack') return '炸鸡';
-  if (category === 'fresh') return '烧烤';
-  if (category === 'drink') return '饮品';
-  return '其他';
-}
-
-function cardPriceText(card: FoodCard): string {
-  if (!Number.isFinite(card.priceFen) || card.priceFen <= 0) return '价格待补充';
-  return `¥${(card.priceFen / 100).toFixed(2)}`;
 }
 
 export class ServiceCardStore {
@@ -244,8 +232,8 @@ export class ServiceCardStore {
     store.putSync(PRODUCT_NAME_KEY, card.productName.trim().slice(0, 36) || '附近值得一试');
     store.putSync(SCORE_TEXT_KEY, `${card.tasteScore}/10 好味评分`);
     store.putSync(PRICE_TEXT_KEY, cardPriceText(card));
-    store.putSync(LOCATION_TEXT_KEY, card.district.trim().slice(0, 24) || '20 km 内');
-    store.putSync(CATEGORY_TEXT_KEY, categoryLabel(card.category));
+    store.putSync(LOCATION_TEXT_KEY, (card.merchantAddressSnapshot || card.district).trim().slice(0, 24) || '未关联店铺');
+    store.putSync(CATEGORY_TEXT_KEY, foodCardCategoryLabel(card));
     store.putSync(PHOTO_PATH_KEY, card.photoPath.trim());
     store.putSync(PHOTO_BUCKET_KEY, card.photoBucket.trim());
     const oldPath: string = stringValue(store.getSync(COVER_FILE_KEY, ''), '');

@@ -2,7 +2,7 @@ import { common } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import util from '@ohos.util';
-import { OperationResponse, PublicMediaRequest, PublicMediaResponse, UploadPreparedPhotoRequest } from '../model/CloudContracts';
+import { OperationResponse, PublicMediaRequest, PublicMediaResponse, RevisionMediaRequest, UploadPreparedPhotoRequest } from '../model/CloudContracts';
 import { CloudGateway, MediaServiceUnavailableError } from './CloudGateway';
 import { NearbyPerformanceTrace, PreloadMetricState } from './NearbyPerformanceTrace';
 
@@ -13,7 +13,9 @@ const MEDIA_CACHE_MAX_FILE_BYTES: number = 8 * 1024 * 1024;
 const MEDIA_URL_CACHE_MAX_ENTRIES: number = 128;
 const MAX_CONCURRENT_MEDIA_DOWNLOADS: number = 2;
 const MEDIA_DOWNLOAD_MAX_ATTEMPTS: number = 3;
-const MEDIA_DOWNLOAD_RETRY_DELAY_MS: number = 600;
+const MEDIA_DOWNLOAD_RETRY_DELAY_MS: number = 1200;
+const MEDIA_DOWNLOAD_MAX_COOLDOWN_MS: number = 8000;
+const MEDIA_DOWNLOAD_RECOVERY_SUCCESSES: number = 3;
 
 interface DownloadUrlCacheEntry {
   url: string;
@@ -42,12 +44,29 @@ class MediaDownloadQueueEntry {
 }
 
 export class PhotoUploadService {
+  static async getRevisionDownloadUrl(context: common.Context, revisionId: string, mediaId: string): Promise<string> {
+    const generation: number = PhotoUploadService.cacheGeneration;
+    const request: RevisionMediaRequest = { revisionId, mediaId };
+    // Every display revalidates the revision; a cached private file never grants access.
+    const media: PublicMediaResponse = await CloudGateway.callAuthenticated<PublicMediaResponse>('get-revision-media', request);
+    if (generation !== PhotoUploadService.cacheGeneration) return '';
+    const filePath: string = await PhotoUploadService.cacheFilePath(context,
+      'revision:' + PhotoUploadService.cacheOwner + ':' + revisionId + ':' + mediaId);
+    if (generation !== PhotoUploadService.cacheGeneration) return '';
+    return PhotoUploadService.writeCachedMedia(context, filePath, media);
+  }
   private static cacheOwner: string = 'public';
   private static cacheGeneration: number = 0;
   private static downloadUrlCache: Map<string, DownloadUrlCacheEntry> = new Map<string, DownloadUrlCacheEntry>();
   private static downloadUrlRequests: Map<string, Promise<string>> = new Map<string, Promise<string>>();
   private static mediaDownloadQueue: Array<MediaDownloadQueueEntry> = [];
   private static activeMediaDownloadCount: number = 0;
+  private static activeMediaRequestCount: number = 0;
+  private static mediaBusyUntilMs: number = 0;
+  private static mediaRecovering: boolean = false;
+  private static mediaRecoverySuccesses: number = 0;
+  private static mediaBusyRevision: number = 0;
+  private static mediaQueueResumeTimer: number | undefined = undefined;
 
   static isMediaServiceUnavailable(): boolean {
     return CloudGateway.isMediaServiceUnavailable();
@@ -183,6 +202,10 @@ export class PhotoUploadService {
   }
 
   private static cancelQueuedMediaDownloads(): void {
+    if (PhotoUploadService.mediaQueueResumeTimer !== undefined) {
+      clearTimeout(PhotoUploadService.mediaQueueResumeTimer);
+      PhotoUploadService.mediaQueueResumeTimer = undefined;
+    }
     const queued: Array<MediaDownloadQueueEntry> = PhotoUploadService.mediaDownloadQueue;
     PhotoUploadService.mediaDownloadQueue = [];
     queued.forEach((entry: MediaDownloadQueueEntry): void => {
@@ -212,7 +235,13 @@ export class PhotoUploadService {
       });
       return;
     }
-    while (PhotoUploadService.activeMediaDownloadCount < MAX_CONCURRENT_MEDIA_DOWNLOADS
+    const cooldownMs: number = PhotoUploadService.mediaBusyUntilMs - Date.now();
+    if (cooldownMs > 0) {
+      if (PhotoUploadService.mediaDownloadQueue.length > 0) PhotoUploadService.scheduleQueueResume(cooldownMs);
+      return;
+    }
+    const concurrency: number = PhotoUploadService.mediaRecovering ? 1 : MAX_CONCURRENT_MEDIA_DOWNLOADS;
+    while (PhotoUploadService.activeMediaDownloadCount < concurrency
       && PhotoUploadService.mediaDownloadQueue.length > 0) {
       let bestIndex: number = 0;
       for (let index = 1; index < PhotoUploadService.mediaDownloadQueue.length; index += 1) {
@@ -253,24 +282,34 @@ export class PhotoUploadService {
     const request: PublicMediaRequest = { bucketName, cloudPath };
     let lastMessage: string = '获取实拍图失败。';
     for (let attempt = 1; attempt <= MEDIA_DOWNLOAD_MAX_ATTEMPTS; attempt += 1) {
-      if (mayContinue !== undefined && !await mayContinue()) return '';
-      if (generation !== PhotoUploadService.cacheGeneration) return '';
+      if (!await PhotoUploadService.acquireMediaRequest(generation, mayContinue)) return '';
+      const busyRevision: number = PhotoUploadService.mediaBusyRevision;
       try {
         const media: PublicMediaResponse = CloudGateway.hasSession()
           ? await CloudGateway.callAuthenticated<PublicMediaResponse>('get-public-media', request)
           : await CloudGateway.callPublic<PublicMediaResponse>('get-public-media', request);
         if (mayContinue !== undefined && !await mayContinue()) return '';
         if (generation !== PhotoUploadService.cacheGeneration) return '';
-        return PhotoUploadService.writeCachedMedia(context, filePath, media);
+        const url: string = PhotoUploadService.writeCachedMedia(context, filePath, media);
+        if (generation !== PhotoUploadService.cacheGeneration) return '';
+        if (PhotoUploadService.mediaRecovering && busyRevision === PhotoUploadService.mediaBusyRevision) {
+          PhotoUploadService.mediaRecoverySuccesses += 1;
+          if (PhotoUploadService.mediaRecoverySuccesses >= MEDIA_DOWNLOAD_RECOVERY_SUCCESSES) {
+            PhotoUploadService.mediaRecovering = false;
+            PhotoUploadService.mediaRecoverySuccesses = 0;
+            console.info('[PhotoDownload] media recovered; concurrency=2.');
+          }
+        }
+        return url;
       } catch (error) {
         if (error instanceof MediaServiceUnavailableError) throw error;
         lastMessage = PhotoUploadService.mediaErrorMessage(error as Object);
-        const canRetry: boolean = PhotoUploadService.isBusyMediaError(lastMessage)
-          && attempt < MEDIA_DOWNLOAD_MAX_ATTEMPTS;
-        if (!canRetry) throw new Error(lastMessage);
-        const delayMs: number = MEDIA_DOWNLOAD_RETRY_DELAY_MS * attempt;
+        if (!PhotoUploadService.isBusyMediaError(lastMessage)) throw new Error(lastMessage);
+        const delayMs: number = PhotoUploadService.enterMediaCooldown(attempt);
+        if (attempt >= MEDIA_DOWNLOAD_MAX_ATTEMPTS) throw new Error(lastMessage);
         console.warn(`[PhotoDownload] get-public-media busy; retry ${attempt + 1}/${MEDIA_DOWNLOAD_MAX_ATTEMPTS} after ${delayMs}ms.`);
-        await PhotoUploadService.waitForRetry(delayMs);
+      } finally {
+        PhotoUploadService.activeMediaRequestCount -= 1;
       }
     }
     throw new Error(lastMessage);
@@ -282,6 +321,45 @@ export class PhotoUploadService {
 
   private static isBusyMediaError(message: string): boolean {
     return message.includes('3007009') || message.includes('too many requests');
+  }
+
+  private static enterMediaCooldown(attempt: number): number {
+    const delayMs: number = Math.min(MEDIA_DOWNLOAD_MAX_COOLDOWN_MS,
+      MEDIA_DOWNLOAD_RETRY_DELAY_MS * Math.pow(2, attempt - 1) + Math.floor(Math.random() * 400));
+    PhotoUploadService.mediaBusyUntilMs = Math.max(PhotoUploadService.mediaBusyUntilMs, Date.now() + delayMs);
+    PhotoUploadService.mediaRecovering = true;
+    PhotoUploadService.mediaRecoverySuccesses = 0;
+    PhotoUploadService.mediaBusyRevision += 1;
+    console.warn(`[PhotoDownload] media cooldown=${delayMs}ms; concurrency=1.`);
+    return delayMs;
+  }
+
+  private static scheduleQueueResume(delayMs: number): void {
+    if (PhotoUploadService.mediaQueueResumeTimer !== undefined) return;
+    PhotoUploadService.mediaQueueResumeTimer = setTimeout((): void => {
+      PhotoUploadService.mediaQueueResumeTimer = undefined;
+      PhotoUploadService.drainMediaDownloadQueue();
+    }, Math.max(1, delayMs));
+  }
+
+  private static async acquireMediaRequest(generation: number, mayContinue?: MediaRequestGuard): Promise<boolean> {
+    while (generation === PhotoUploadService.cacheGeneration) {
+      if (mayContinue !== undefined && !await mayContinue()) return false;
+      if (generation !== PhotoUploadService.cacheGeneration) return false;
+      if (CloudGateway.isMediaServiceUnavailable()) throw new MediaServiceUnavailableError();
+      const cooldownMs: number = PhotoUploadService.mediaBusyUntilMs - Date.now();
+      if (cooldownMs > 0) {
+        await PhotoUploadService.waitForRetry(Math.min(cooldownMs, 500));
+        continue;
+      }
+      const concurrency: number = PhotoUploadService.mediaRecovering ? 1 : MAX_CONCURRENT_MEDIA_DOWNLOADS;
+      if (PhotoUploadService.activeMediaRequestCount < concurrency) {
+        PhotoUploadService.activeMediaRequestCount += 1;
+        return true;
+      }
+      await PhotoUploadService.waitForRetry(100);
+    }
+    return false;
   }
 
   private static waitForRetry(delayMs: number): Promise<void> {

@@ -47,7 +47,9 @@ function createStage1Services(ctx) {
   function publishReceiptSpec(uid, payload) {
     const fields = {};
     for (const key of ['productName', 'brand', 'priceFen', 'priceLabel', 'originalPriceFen', 'specification', 'shop',
-      'sellingPoints', 'publicOffers', 'reviewText', 'tasteScore', 'sourceLink', 'category', 'mediaId', 'mediaIds', 'latE3', 'lonE3', 'district']) {
+      'sellingPoints', 'publicOffers', 'reviewText', 'tasteScore', 'sourceLink', 'category', 'mediaId', 'mediaIds', 'latE3', 'lonE3', 'district',
+      'consumptionMode', 'visibility', 'categoryV2', 'merchantId', 'itemPriceFen', 'dineInAvgFen',
+      'orderTotalFen', 'deliveryFeeFen', 'deliveryPlatformKey', 'deliveryPlatformLabelSnapshot', 'consumedAt']) {
       if (payload[key] !== undefined) fields[key] = payload[key];
     }
     const payloadHash = hash(JSON.stringify(fields));
@@ -183,8 +185,10 @@ function createStage1Services(ctx) {
       const now = logicalWriteTime(owner.updatedAt, card.updatedAt, cardTime(card));
       const version = generation(card) + 1;
       const job = jobRow('PURGE_CARD', cardId, uid, version, now, now + 30 * DAY, { physicalDeletionStarted: false });
-      upsertRows(tx, [model('FoodCard', { ...card, deletedAt: new Date(now), purgeAt: new Date(now + 30 * DAY),
-        modifiedAt: new Date(now), updatedAt: now, lifecycleGeneration: version })]);
+      const deleted = model('FoodCard', { ...card, deletedAt: new Date(now), purgeAt: new Date(now + 30 * DAY),
+        modifiedAt: new Date(now), updatedAt: now, lifecycleGeneration: version });
+      const counters = await ctx.stage2().prepareCounterTransition(tx, card, deleted, owner, env, now);
+      upsertRows(tx, [deleted, ...counters]);
       upsertRows(tx, [job, profileForWrite(owner, now)]);
       output = { success: true, alreadyDeleted: false, deletedAt: now, purgeAt: now + 30 * DAY, jobId: job.jobId };
       return true;
@@ -214,7 +218,8 @@ function createStage1Services(ctx) {
         { phase: 'BUSINESS_CLEANUP', providerBindingsRetained: true, physicalDeletionStarted: false,
           registrationCleanupPending: pushRows.length === 50 || widgetRows.length === 50,
           bindingStatusCleanupPending: bindings.length === 50 });
-      upsertRows(tx, [model('UserProfile', { ...profileForWrite(profile, now), accountStatus: 'DELETION_IN_PROGRESS' }), job]);
+      const counters = await ctx.stage2().prepareAccountCounterRemoval(tx, uid, profile, env, now);
+      upsertRows(tx, [model('UserProfile', { ...profileForWrite(profile, now), accountStatus: 'DELETION_IN_PROGRESS' }), job, ...counters]);
       if (bindings.length > 0) upsertRows(tx, bindings.map((row) => model('IdentityBinding', {
         ...row, status: 'INACTIVE', updatedAt: now
       })));
@@ -228,13 +233,20 @@ function createStage1Services(ctx) {
   }
 
   const EDIT_FIELDS = Object.freeze(['productName', 'brand', 'priceFen', 'priceLabel', 'originalPriceFen', 'specification',
-    'shop', 'sellingPoints', 'publicOffers', 'reviewText', 'tasteScore', 'sourceLink', 'category', 'visibility']);
-  function editFields(card, changes) {
+    'shop', 'sellingPoints', 'publicOffers', 'reviewText', 'tasteScore', 'sourceLink', 'category', 'visibility',
+    'consumptionMode', 'categoryV2', 'merchantId', 'itemPriceFen', 'dineInAvgFen', 'orderTotalFen',
+    'deliveryFeeFen', 'deliveryPlatformKey', 'deliveryPlatformLabelSnapshot', 'consumedAt']);
+  async function editFields(card, changes, uid, env, read) {
     if (!changes || typeof changes !== 'object' || Array.isArray(changes)) throw new Error('编辑内容无效。');
     if (Object.keys(changes).some((key) => !EDIT_FIELDS.includes(key))) throw new Error('包含本阶段不支持的编辑字段。');
     const base = { ...card, sellingPoints: ctx.safeArray(card.sellingPointsJson), publicOffers: ctx.safeArray(card.publicOffersJson),
       visibility: currentVisibility(card) };
-    const candidate = { ...base, ...changes };
+    const candidate = { ...base, consumedAt: dateMillis(card.consumedAt), ...changes };
+    if (changes.priceFen !== undefined && changes.itemPriceFen === undefined) candidate.itemPriceFen = Number(changes.priceFen) > 0 ? Number(changes.priceFen) : null;
+    if (changes.category !== undefined && changes.categoryV2 === undefined) candidate.categoryV2 = CATEGORY_MAP[changes.category] || 'OTHER';
+    const fields = await ctx.stage2().cardFields(candidate, uid, env, read, true);
+    Object.assign(candidate, fields);
+    if (currentVisibility(card) !== 'FRIENDS') ctx.stage2().requireFriendsGate(candidate.visibility, env);
     const validated = validateCard(candidate);
     if (!['PUBLIC', 'FRIENDS'].includes(candidate.visibility)) throw new Error('可见范围无效。');
     // Narrowing is a separate immediate operation and cannot wait in a revision.
@@ -244,7 +256,7 @@ function createStage1Services(ctx) {
       specification: String(candidate.specification || '').slice(0, 100), shop: String(candidate.shop || '').slice(0, 100),
       sellingPointsJson: JSON.stringify(ctx.safeArray(candidate.sellingPoints).slice(0, 3)),
       publicOffersJson: JSON.stringify(ctx.safeArray(candidate.publicOffers).filter((item) => !ctx.personalized.test(item)).slice(0, 4)),
-      category: candidate.category, visibility: candidate.visibility };
+      category: candidate.category, visibility: candidate.visibility, ...fields };
   }
   function revisionView(row) {
     const stored = JSON.parse(row.payloadJson);
@@ -266,19 +278,30 @@ function createStage1Services(ctx) {
   async function submitRevision(uid, payload, env) {
     const cardId = String(payload.cardId || '');
     const revisionId = hash('revision:' + uid + ':' + uuid(payload.requestId));
-    const initial = await one(collection(env, 'FoodCard').query().equalTo('id', cardId));
-    if (!initial || initial.ownerUid !== uid || !readableCardState(initial)) throw accessError('内容不存在、已失效或无权编辑。');
     await ctx.contentPolicy(env).assertAccountActive(uid);
-    const fields = editFields(initial, payload.changes);
     const mediaIds = uniqueMediaIds({ mediaIds: payload.mediaIds });
     if (!Array.isArray(payload.mediaIds)) throw new Error('必须传完整图片列表，保留旧图时也传其 ID。');
     const baseTime = Number(payload.baseModifiedAt);
     const baseGeneration = Number(payload.baseLifecycleGeneration);
     if (!Number.isSafeInteger(baseTime) || !Number.isSafeInteger(baseGeneration) || baseGeneration < 0) throw new Error('编辑基准无效。');
-    // Transport retries check the existing immutable submission before uploads.
+    if (!payload.changes || typeof payload.changes !== 'object' || Array.isArray(payload.changes) ||
+        Object.keys(payload.changes).some((key) => !EDIT_FIELDS.includes(key))) throw new Error('编辑字段无效。');
+    const inputFields = {};
+    for (const key of EDIT_FIELDS) if (payload.changes[key] !== undefined) inputFields[key] = payload.changes[key];
+    const requestPayloadHash = hash(JSON.stringify({ cardId, baseTime, baseGeneration, changes: inputFields, mediaIds }));
+    // Replay is compared to immutable input before deriving fields from a card
+    // or Merchant that may have changed since submission/approval.
     const saved = await one(collection(env, 'FoodCardRevision').query().equalTo('revisionId', revisionId));
+    if (saved && saved.requestPayloadHash) {
+      if (saved.authorUid !== uid || saved.requestPayloadHash !== requestPayloadHash) throw accessError('请求标识已经用于其他编辑。', 'CONFLICT');
+      return { success: true, revision: revisionView(saved), alreadyProcessed: true };
+    }
+    const initial = await one(collection(env, 'FoodCard').query().equalTo('id', cardId));
+    if (!initial || initial.ownerUid !== uid || !readableCardState(initial)) throw accessError('内容不存在、已失效或无权编辑。');
+    const fields = await editFields(initial, payload.changes, uid, env);
     const matches = (row) => row.authorUid === uid && row.cardId === cardId && dateMillis(row.baseModifiedAt) === baseTime &&
-      Number(row.baseLifecycleGeneration) === baseGeneration && row.payloadJson === JSON.stringify(fields) &&
+      Number(row.baseLifecycleGeneration) === baseGeneration && (row.requestPayloadHash
+        ? row.requestPayloadHash === requestPayloadHash : row.payloadJson === JSON.stringify(fields)) &&
       row.mediaManifestJson === JSON.stringify(mediaIds);
     if (saved) {
       if (!matches(saved)) throw accessError('请求标识已经用于其他编辑。', 'CONFLICT');
@@ -304,6 +327,8 @@ function createStage1Services(ctx) {
       if (!card || card.ownerUid !== uid || !readableCardState(card) || cardTime(card) !== baseTime || generation(card) !== baseGeneration) {
         throw accessError('公开版本已变化，请刷新后重建编辑。', 'CONFLICT');
       }
+      const currentFields = await editFields(card, payload.changes, uid, env, (name, field, value) => txOne(tx, env, name, field, value));
+      if (JSON.stringify(currentFields) !== JSON.stringify(fields)) throw accessError('店铺或内容已变化，请刷新。', 'CONFLICT');
       const pending = await tx.executeQuery(collection(env, 'FoodCardRevision').query().equalTo('cardId', cardId).equalTo('status', 'PENDING').limit(20));
       if (pending.length === 20) throw accessError('待审版本数量异常。', 'INVALID_STATE');
       const medias = [];
@@ -316,7 +341,7 @@ function createStage1Services(ctx) {
       }
       const now = logicalWriteTime(owner.updatedAt, cardTime(card));
       result = model('FoodCardRevision', { revisionId, cardId, authorUid: uid, baseModifiedAt: new Date(baseTime),
-        baseLifecycleGeneration: baseGeneration, payloadJson: JSON.stringify(fields), mediaManifestJson: JSON.stringify(mediaIds),
+        baseLifecycleGeneration: baseGeneration, requestPayloadHash, payloadJson: JSON.stringify(fields), mediaManifestJson: JSON.stringify(mediaIds),
         status: 'PENDING', submittedAt: new Date(now), reviewedAt: null, reviewReason: '' });
       if (pending.length > 0) upsertRows(tx, pending.map((row) => model('FoodCardRevision', {
         ...row, status: 'WITHDRAWN', reviewedAt: new Date(now), reviewReason: 'SUPERSEDED'
@@ -336,6 +361,15 @@ function createStage1Services(ctx) {
     await ctx.contentPolicy(env).assertAccountActive(uid);
     if (row.authorUid !== uid) await assertAdmin(uid, env);
     return { revision: revisionView(row) };
+  }
+  async function getEditContext(uid, payload, env) {
+    const card = await one(collection(env, 'FoodCard').query().equalTo('id', String(payload.cardId || '')));
+    if (!card || card.ownerUid !== uid) throw accessError('无权编辑此卡片。', 'FORBIDDEN');
+    await ctx.contentPolicy(env).assertCardReadable(uid, card);
+    const rows = await collection(env, 'FoodCardRevision').query().equalTo('cardId', card.id)
+      .orderByDesc('submittedAt').orderByAsc('revisionId').limit(1).get();
+    const latest = rows[0] && ['PENDING', 'REJECTED', 'WITHDRAWN'].includes(rows[0].status) ? rows[0] : null;
+    return { card: await ctx.publicCard(card, env, 0, true, uid, false), revision: latest ? revisionView(latest) : null };
   }
   async function listRevisions(uid, payload, env) {
     await assertAdmin(uid, env);
@@ -371,6 +405,7 @@ function createStage1Services(ctx) {
       const ids = JSON.parse(revision.mediaManifestJson);
       const medias = [];
       if (action === 'APPROVE') {
+        uniqueMediaIds({ mediaIds: ids });
         for (const id of ids) {
           const media = await txOne(tx, env, 'CardMedia', 'id', id);
           if (!media || media.ownerUid !== revision.authorUid || media.status !== 'APPROVED' ||
@@ -380,17 +415,27 @@ function createStage1Services(ctx) {
       }
       const oldMedias = action === 'APPROVE' ? await tx.executeQuery(collection(env, 'CardMedia').query().equalTo('cardId', revision.cardId).limit(50)) : [];
       if (oldMedias.length === 50) throw accessError('卡片图片数量异常。', 'INVALID_STATE');
+      let appliedFields = null;
+      if (action === 'APPROVE') {
+        const storedFields = JSON.parse(revision.payloadJson);
+        appliedFields = await ctx.stage2().cardFields(storedFields, revision.authorUid, env,
+          (name, field, value) => txOne(tx, env, name, field, value), true);
+        if (appliedFields.merchantNameSnapshot !== String(storedFields.merchantNameSnapshot || '') ||
+          appliedFields.merchantAddressSnapshot !== String(storedFields.merchantAddressSnapshot || '')) {
+          throw accessError('待审店铺资料已变化，请作者重新提交。', 'CONFLICT');
+        }
+      }
       const now = logicalWriteTime(dateMillis(revision.submittedAt), card && cardTime(card), owner && owner.updatedAt);
       const status = action === 'APPROVE' ? 'APPROVED' : action === 'REJECT' ? 'REJECTED' : 'WITHDRAWN';
       if (action === 'APPROVE') {
         const fields = JSON.parse(revision.payloadJson);
         // A base check precedes every application, including visibility expansion.
-        const updated = model('FoodCard', { ...card, ...fields, ...derived(fields), schemaVersion: 2,
-          migrationSource: 'SERVER', consumptionMode: card.consumptionMode || 'UNSPECIFIED', reviewState: 'APPROVED',
+        const updated = model('FoodCard', { ...card, ...fields, ...ctx.stage2().storageFields(appliedFields), schemaVersion: 2,
+          migrationSource: 'SERVER', reviewState: 'APPROVED',
           edited: true, publishedAt: new Date(now), modifiedAt: new Date(now), updatedAt: now,
           lifecycleGeneration: generation(card) + 1, mediaId: ids[0] || '' });
-        if (Number(fields.priceFen) === 0) { updated.itemPriceFen = null; updated.queryPriceFen = null; }
-        upsertRows(tx, [updated, profileForWrite(owner, now)]);
+        const counters = await ctx.stage2().prepareCounterTransition(tx, card, updated, owner, env, now);
+        upsertRows(tx, [updated, profileForWrite(owner, now), ...counters]);
         if (medias.length > 0) upsertRows(tx, medias.map((media) => model('CardMedia', { ...media, cardId: card.id })));
         const removed = oldMedias.filter((media) => !ids.includes(media.id));
         if (removed.length > 0) upsertRows(tx, removed.map((media) => model('CardMedia', {
@@ -482,6 +527,10 @@ function createStage1Services(ctx) {
   }
   async function migrationStatus(uid, env) {
     await assertAdmin(uid, env);
+    return migrationReadiness(env, true);
+  }
+  // Internal Stage 3 gate: no admin task payload is exposed to public callers.
+  async function migrationReadiness(env, includeJobs = false) {
     const jobs = [];
     for (const type of MIGRATION_TYPES) {
       const row = await one(collection(env, 'MaintenanceJob').query().equalTo('jobId', hash(type + ':stage1-v1:1')));
@@ -495,7 +544,7 @@ function createStage1Services(ctx) {
     const reactionReady = complete(reactionJob);
     // Stage 3 consumes this gate; an environment variable alone cannot claim
     // that historical indexed queries have coverage.
-    return { jobs, cardCoverageComplete: cardReady, reactionCoverageComplete: reactionReady,
+    return { ...(includeJobs ? { jobs } : {}), cardCoverageComplete: cardReady, reactionCoverageComplete: reactionReady,
       indexedQueryReady: cardReady && reactionReady && String(env.SHIKE_INDEXED_QUERY_VERIFIED || process.env.SHIKE_INDEXED_QUERY_VERIFIED || '') === 'true',
       userQueryVerificationRequired: true };
   }
@@ -668,8 +717,8 @@ function createStage1Services(ctx) {
   }
 
   return { reactionSummary, mutateReaction, toggleFavorite, softDelete, beginAccountDeletion, derived,
-    submitRevision, getRevision, listRevisions, decideRevision, startMigration, listJobs, getJob, retryJob,
-    migrationStatus, processMigration, validateLifecycleJob, jobRow, jobView, txOne, activeProfile, model, hash, cardTime,
+    submitRevision, getRevision, getEditContext, listRevisions, decideRevision, startMigration, listJobs, getJob, retryJob,
+    migrationStatus, migrationReadiness, processMigration, validateLifecycleJob, jobRow, jobView, txOne, activeProfile, model, hash, cardTime,
     publishReceiptSpec, checkPublishReceipt, readPublishReceipt, upsertRows };
 }
 

@@ -1,4 +1,5 @@
-import { FoodCategory } from '../model/CloudContracts';
+import { FoodCard, FoodCategory } from '../model/CloudContracts';
+import { categoryV2Label } from '../model/PublishingModels';
 
 export function coverFor(category: FoodCategory): Resource {
   if (category === 'staple') return $r('app.media.food_staple');
@@ -16,4 +17,8 @@ export function categoryLabel(category: FoodCategory): string {
   if (category === 'snack') return '炸鸡';
   if (category === 'fresh') return '烧烤';
   return '其他';
+}
+
+export function foodCardCategoryLabel(card: FoodCard): string {
+  return card.categoryV2 === undefined ? categoryLabel(card.category) : categoryV2Label(card.categoryV2);
 }

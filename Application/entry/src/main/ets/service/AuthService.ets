@@ -17,6 +17,7 @@ import { CloudGateway } from './CloudGateway';
 import { MediaPriority, PhotoUploadService } from './PhotoUploadService';
 import { PushNotificationService } from './PushNotificationService';
 import { ServiceCardRemoteSyncService } from './ServiceCardRemoteSyncService';
+import { DiscoveryCache } from './DiscoveryCache';
 
 type AuthMode = 'none' | 'email' | 'huawei';
 
@@ -332,6 +333,7 @@ export class AuthService {
   }
 
   private static clearLocalSession(): void {
+    DiscoveryCache.clear();
     AuthSessionStore.clearLegacyAccessToken();
     AuthSessionStore.invalidateCachedToken();
     AuthService.currentProfile = undefined;

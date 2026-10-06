@@ -16,6 +16,9 @@ import { cardAppLink } from '../service/CardAppLink';
 import { tasteScoreText as formatTasteScore } from '../model/TasteScore';
 import { ErrorDetail, errorText } from '../common/ErrorKit';
 import { BreakpointSystem } from '../common/BreakpointSystem';
+import { CreateCardPage } from './CreateCardPage';
+import { categoryV2Label, formatFenInput } from '../model/PublishingModels';
+import { isSafeHttpsSourceLink } from '../service/SafeSourceLink';
 
 const DETAIL_MEDIA_FRAME_HEIGHT = 360;
 
@@ -42,6 +45,7 @@ function fallbackPhoto(card: FoodCard): CardPhoto {
 @Component
 export struct CardDetailPage {
   @State detailWidthVp: number = 0;
+  @State editingVisible: boolean = false;
   @Prop card: FoodCard = emptyCard();
   @Prop @Watch('onSessionChanged') loggedIn: boolean = false;
   onRequireLogin: (message: string) => void = (_message: string): void => {};
@@ -106,6 +110,7 @@ export struct CardDetailPage {
   }
 
   private onSessionChanged(): void {
+    this.editingVisible = false;
     void this.loadDetail();
   }
 
@@ -485,7 +490,7 @@ export struct CardDetailPage {
   }
 
   private async openSource(): Promise<void> {
-    if (!this.card.sourceLink.startsWith('https://')) {
+    if (!isSafeHttpsSourceLink(this.card.sourceLink)) {
       this.status = '当前卡片没有可打开的来源页面。';
       this.closeActionMenu();
       return;
@@ -672,7 +677,7 @@ export struct CardDetailPage {
           Text('实拍分享者').fontSize(11).fontColor($r('app.color.leaf'))
             .padding({ left: 7, right: 7, top: 3, bottom: 3 })
             .backgroundColor($r('app.color.accent_soft')).borderRadius(8);
-          Text(`${this.card.district || '附近'} · ${this.createdLabel(this.card.createdAt)}`).fontSize(12)
+          Text(`${this.card.merchantNameSnapshot || (this.card.consumptionMode === 'DELIVERY' || this.card.consumptionMode === 'DINE_IN' ? '店铺未关联' : this.card.district || '历史发布位置')} · ${this.createdLabel(this.card.publishedAt === undefined ? this.card.createdAt : this.card.publishedAt)}`).fontSize(12)
             .fontColor($r('app.color.muted')).maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis });
         }
@@ -712,7 +717,7 @@ export struct CardDetailPage {
         });
       Button('系统分享').width('100%').height(48).backgroundColor($r('app.color.canvas'))
         .fontColor($r('app.color.ink')).onClick(() => this.shareCard());
-      if (this.card.sourceLink.startsWith('https://')) {
+      if (isSafeHttpsSourceLink(this.card.sourceLink)) {
         Button('打开来源页面').width('100%').height(48).backgroundColor($r('app.color.canvas'))
           .fontColor($r('app.color.ink')).onClick(() => this.openSource());
       }
@@ -944,17 +949,31 @@ export struct CardDetailPage {
       Row() {
         Text('商品信息').fontSize(18).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'));
         Blank();
-        Text(categoryLabel(this.card.category)).fontSize(11).fontColor($r('app.color.leaf'))
+        Text(this.card.categoryV2 === undefined ? categoryLabel(this.card.category) : categoryV2Label(this.card.categoryV2)).fontSize(13).fontColor($r('app.color.leaf'))
           .padding({ left: 8, right: 8, top: 4, bottom: 4 })
           .backgroundColor($r('app.color.accent_soft')).borderRadius(8);
       }.width('100%');
       this.infoRow('商品名称', this.card.productName);
+      this.infoRow('消费方式', this.card.consumptionMode === 'DELIVERY' ? '外卖' : this.card.consumptionMode === 'DINE_IN' ? '到店' : '历史未区分');
+      this.infoRow('可见范围', this.card.visibility === 'FRIENDS' ? '仅好友可见' : '公开');
       this.infoRow('价格', this.priceText());
-      if (this.card.sourceLink.startsWith('https://')) {
+      if (isSafeHttpsSourceLink(this.card.sourceLink)) {
         this.infoRow('来源链接', '已提供，可从更多操作打开');
       }
-      if (this.card.shop.trim().length > 0) {
-        this.infoRow('店名-地址', this.card.shop);
+      if (this.card.merchantNameSnapshot !== undefined && this.card.merchantNameSnapshot.length > 0) {
+        this.infoRow('店铺', this.card.merchantNameSnapshot);
+        if (this.card.merchantAddressSnapshot !== undefined && this.card.merchantAddressSnapshot.length > 0) { this.infoRow('地址', this.card.merchantAddressSnapshot); }
+      } else if (this.card.shop.trim().length > 0) {
+        this.infoRow('历史店名文本', this.card.shop);
+      }
+      if (this.card.consumptionMode === 'DINE_IN' && this.card.itemPriceFen !== undefined) { this.infoRow('单品价格', '¥' + formatFenInput(this.card.itemPriceFen)); }
+      if (this.card.deliveryPlatformLabelSnapshot !== undefined && this.card.deliveryPlatformLabelSnapshot.length > 0) {
+        this.infoRow('外卖平台', this.card.deliveryPlatformLabelSnapshot);
+      }
+      if (this.card.edited === true) { this.infoRow('内容状态', '已编辑'); }
+      if (this.viewerIsOwner && this.loggedIn) {
+        Button('编辑 / 继续待审编辑').height(48).width('100%').backgroundColor($r('app.color.accent_soft'))
+          .fontColor($r('app.color.accent_action')).onClick((): void => { this.editingVisible = true; });
       }
       if (this.card.specification.trim().length > 0) {
         this.infoRow('规格', this.card.specification);
@@ -1145,8 +1164,15 @@ export struct CardDetailPage {
     .border({ width: 1, color: $r('app.color.line') });
   }
 
+  private editorUid(): string { const profile = AuthService.profile(); return profile === undefined ? '' : profile.uid; }
+
   build() {
     NavDestination() {
+      if (this.editingVisible && this.loggedIn) {
+        CreateCardPage({ editCardId: this.card.id, accountUid: this.editorUid(), onEditingFinished: (): void => {
+          this.editingVisible = false; void this.loadDetail();
+        } })
+      } else {
       Stack({ alignContent: Alignment.Bottom }) {
         Scroll() {
           Column({ space: 18 }) {
@@ -1199,7 +1225,8 @@ export struct CardDetailPage {
           this.detailWidthVp = width;
         }
       });
-    }.title('卡片详情')
+      }
+    }.title(this.editingVisible ? '编辑推荐' : '卡片详情')
       .onShown((): void => {
         this.knockSharePageVisible = true;
       })

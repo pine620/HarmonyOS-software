@@ -1,6 +1,8 @@
 export type CardStatus = 'APPROVED' | 'REMOVED';
 export type FoodCategory = 'staple' | 'bakery' | 'drink' | 'snack' | 'fresh' | 'other';
 export type FoodConsumptionMode = 'UNSPECIFIED' | 'DELIVERY' | 'DINE_IN';
+export type FoodCategoryV2 = 'NOODLES' | 'RICE_SET' | 'HOT_POT' | 'GRILL_FRIED' | 'SNACK' |
+  'FAST_WESTERN' | 'BREAKFAST_BAKERY' | 'DESSERT' | 'DRINK' | 'PACKAGED' | 'OTHER';
 export type FoodVisibility = 'PUBLIC' | 'FRIENDS';
 export type CardReviewState = 'LEGACY_APPROVED' | 'PENDING_POST_REVIEW' | 'APPROVED' | 'TAKEN_DOWN';
 export type CardReactionType = 'LIKE' | 'DISLIKE';
@@ -219,6 +221,17 @@ export interface SetCardReactionRequest extends CardIdRequest {
 }
 
 export interface CardRevisionChanges {
+  consumptionMode?: FoodConsumptionMode;
+  categoryV2?: FoodCategoryV2;
+  merchantId?: string;
+  itemPriceFen?: number | null;
+  dineInAvgFen?: number | null;
+  orderTotalFen?: number | null;
+  deliveryFeeFen?: number | null;
+  deliveryPlatformKey?: string;
+  deliveryPlatformLabelSnapshot?: string;
+  consumedAt?: number | null;
+
   productName?: string;
   brand?: string;
   priceFen?: number;
@@ -287,6 +300,11 @@ export interface CardRevisionResponse {
   success?: boolean;
   alreadyProcessed?: boolean;
   revision: CardRevisionView;
+}
+
+export interface CardEditContextResponse {
+  card: FoodCard;
+  revision: CardRevisionView | null;
 }
 
 export interface ModerationRevisionsResponse {
@@ -598,6 +616,17 @@ export interface PublicMediaResponse {
 }
 
 export interface PublishCardRequest {
+  consumptionMode?: FoodConsumptionMode;
+  categoryV2?: FoodCategoryV2;
+  merchantId?: string;
+  itemPriceFen?: number | null;
+  dineInAvgFen?: number | null;
+  orderTotalFen?: number | null;
+  deliveryFeeFen?: number | null;
+  deliveryPlatformKey?: string;
+  deliveryPlatformLabelSnapshot?: string;
+  consumedAt?: number | null;
+  visibility?: FoodVisibility;
   requestId?: string;
   productName: string;
   brand: string;
@@ -615,9 +644,9 @@ export interface PublishCardRequest {
   // mediaId remains the primary image for backward-compatible waterfall rows.
   mediaId: string;
   mediaIds: Array<string>;
-  latE3: number;
-  lonE3: number;
-  district: string;
+  latE3?: number;
+  lonE3?: number;
+  district?: string;
 }
 
 export interface PublishCardResponse {

@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('crypto');
+const { AsyncLocalStorage } = require('async_hooks');
 const { cloud } = require('@hw-agconnect/cloud-server');
 const { createContentPolicy, isAccountActive, readableCardState, currentVisibility, dateMillis, accessError } = require('./content-policy');
 
@@ -8,6 +9,8 @@ const MAX_DISTANCE_KM = 20.0;
 const MAX_PAGE_SIZE = 20;
 const MAX_PHOTO_BYTES = 2 * 1024 * 1024;
 const MAX_CARD_PHOTOS = 6;
+const CARD_READ_BATCH_SIZE = 10;
+const readMetricsScope = new AsyncLocalStorage();
 const NEARBY_CARD_HYDRATION_CONCURRENCY = 4;
 const NEARBY_CACHE_TTL_SECONDS = 25;
 const NEARBY_CACHE_TIMEOUT_MS = 400;
@@ -22,7 +25,7 @@ const MAX_COMMENT_LENGTH = 240;
 const MAX_CARD_REVIEW_LENGTH = 600;
 const MAX_SOCIAL_RESULTS = 50;
 const MAX_FRIEND_RANKING_SIZE = 50;
-const MAX_FRIEND_RANKING_QUERY_BATCH = 10;
+const MAX_FRIEND_RANKING_QUERY_BATCH = 2;
 const MAX_SOCIAL_PAGE_SIZE = 50;
 const SOCIAL_QUERY_BATCH_SIZE = 200;
 const SOCIAL_PROFILE_QUERY_BATCH_SIZE = 50;
@@ -142,15 +145,38 @@ FoodCard.fieldTypes = Object.freeze({
   searchTextNormalized: 'Text'
 });
 FoodCard.primaryKeys = Object.freeze(['id']);
-FoodCard.indexes = Object.freeze([
-  'status,createdAt,id',
-  'status,category,createdAt,id',
-  'ownerUid,createdAt',
-  'ownerUid,status,createdAt',
-  'status,latE3,lonE3,createdAt',
-  'status,createdAt',
-  'ownerUid,status,tasteScore,createdAt'
-]);
+FoodCard.indexes = Object.freeze(["status,createdAt,id", "status,category,createdAt,id", "ownerUid,createdAt", "ownerUid,status,createdAt", "status,latE3,lonE3,createdAt", "status,createdAt", "ownerUid,status,tasteScore,createdAt", "merchantId,id", "ownerUid,merchantId,id", "visibility,status,publishedAt,id", "visibility,status,tasteScore,publishedAt,id", "visibility,status,queryPriceFen,publishedAt,id", "visibility,status,queryPriceFen,publishedAt,id", "merchantId,visibility,status,publishedAt,id"]);
+
+class Merchant extends CloudDbModel {}
+Merchant.fieldTypes = Object.freeze({
+  "merchantId": "String",
+  "name": "String",
+  "normalizedName": "String",
+  "address": "Text",
+  "district": "String",
+  "sourceType": "String",
+  "provider": "String",
+  "providerPoiId": "String",
+  "latitudeE6": "Long",
+  "longitudeE6": "Long",
+  "coordinateSystem": "String",
+  "verificationStatus": "String",
+  "createdByUid": "String",
+  "createdAt": "Date",
+  "updatedAt": "Date",
+  "publicRecommendationCount": "Integer",
+  "publicDeliveryCount": "Integer",
+  "publicDineInCount": "Integer",
+  "mapVisible": "Boolean",
+  "reviewAction": "String",
+  "reviewReason": "String",
+  "reviewedAt": "Date",
+  "creationRequestHash": "String",
+  "lastUpdateRequestId": "String",
+  "lastUpdatePayloadHash": "String"
+});
+Merchant.primaryKeys = Object.freeze(['merchantId']);
+Merchant.indexes = Object.freeze(["provider,providerPoiId", "verificationStatus,createdAt,merchantId", "createdByUid,createdAt,merchantId", "mapVisible,latitudeE6,merchantId"]);
 
 class CardMedia extends CloudDbModel {}
 CardMedia.fieldTypes = Object.freeze({
@@ -444,6 +470,7 @@ FoodCardRevision.fieldTypes = Object.freeze({
   authorUid: 'String',
   baseModifiedAt: 'Date',
   baseLifecycleGeneration: 'Long',
+  requestPayloadHash: 'String',
   payloadJson: 'Text',
   mediaManifestJson: 'Text',
   status: 'String',
@@ -455,7 +482,8 @@ FoodCardRevision.primaryKeys = Object.freeze(['revisionId']);
 FoodCardRevision.indexes = Object.freeze([
   'cardId,status,submittedAt,revisionId',
   'authorUid,submittedAt,revisionId',
-  'status,submittedAt,revisionId'
+  'status,submittedAt,revisionId',
+  'cardId,submittedAt,revisionId'
 ]);
 
 class MaintenanceJob extends CloudDbModel {}
@@ -489,7 +517,7 @@ const OBJECT_TYPES = Object.freeze({
   Friendship, FriendReport, Conversation, ChatMessage, GroupConversation, GroupMember, GroupMessage,
   NotificationEvent, PushRegistration, WidgetRegistration,
   IdentityBinding, AuthMigrationTicket,
-  CardReaction, FriendContentAccessGrant, PublishRequestRecord, FoodCardRevision, MaintenanceJob
+  CardReaction, FriendContentAccessGrant, PublishRequestRecord, FoodCardRevision, MaintenanceJob, Merchant
 });
 
 function required(env, name) {
@@ -950,15 +978,21 @@ function serviceCardCategoryLabel(category) {
 }
 
 function serviceCardFormData(card, primaryPhoto = { path: '', bucket: '' }) {
-  const priceFen = nonNegativeInteger(card.priceFen);
+  const mode = String(card.consumptionMode || 'UNSPECIFIED');
+  const currentPrice = mode === 'DINE_IN' ? card.dineInAvgFen : card.itemPriceFen;
+  const known = currentPrice != null && Number.isSafeInteger(Number(currentPrice)) && Number(currentPrice) >= 0;
+  const priceFen = known ? Number(currentPrice) : mode === 'UNSPECIFIED' ? nonNegativeInteger(card.priceFen) : 0;
+  const unit = mode === 'DINE_IN' ? ' / 人均' : mode === 'DELIVERY' ? ' / 单品' : known ? ' / 历史单品' : '';
+  const labels = { NOODLES: '粉面', RICE_SET: '米饭 / 套餐', HOT_POT: '火锅 / 麻辣烫', GRILL_FRIED: '烧烤 / 炸物',
+    SNACK: '小吃', FAST_WESTERN: '快餐 / 西式', BREAKFAST_BAKERY: '早餐 / 烘焙', DESSERT: '甜品', DRINK: '饮品', PACKAGED: '零食 / 包装食品', OTHER: '其他' };
   const tasteScore = Number(card.tasteScore);
   return {
     cardId: String(card.id || ''),
     productName: String(card.productName || '').trim().slice(0, 36) || '附近值得一试',
     scoreText: `${Number.isInteger(tasteScore) ? tasteScore : 0}/10 好味评分`,
-    priceText: priceFen > 0 ? `¥${(priceFen / 100).toFixed(2)}` : '价格待补充',
-    locationText: String(card.district || '').trim().slice(0, 24) || '20 km 内',
-    categoryText: serviceCardCategoryLabel(String(card.category || '')),
+    priceText: known || priceFen > 0 ? `¥${(priceFen / 100).toFixed(2)}${unit}` : mode === 'DINE_IN' ? '人均待补充' : '价格待补充',
+    locationText: String(card.merchantAddressSnapshot || card.district || '').trim().slice(0, 24) || '未关联店铺',
+    categoryText: card.categoryV2 ? labels[card.categoryV2] || '其他' : serviceCardCategoryLabel(String(card.category || '')),
     // Identity only: bytes stay in the app's approved-media cache and are bound
     // through Form Kit. A remote change must not display an unrelated old cover.
     photoPath: String(primaryPhoto.path || '').trim(),
@@ -1135,7 +1169,60 @@ function collection(env, name) {
   const zoneName = env.SHIKE_DB_ZONE || process.env.SHIKE_DB_ZONE || 'shike';
   const objectType = OBJECT_TYPES[name];
   if (!objectType) throw new Error(`未知云数据库对象类型 ${name}`);
-  return cloud.database({ zoneName }).collection(objectType);
+  const target = cloud.database({ zoneName }).collection(objectType);
+  const metrics = readMetricsScope.getStore();
+  if (!metrics) return target;
+  return new Proxy(target, { get(object, property) {
+    if (property === 'query') return (...args) => measuredQuery(object.query(...args), name, metrics);
+    const value = Reflect.get(object, property, object);
+    if (property === 'constructor') return value;
+    return typeof value === 'function' ? value.bind(object) : value;
+  } });
+}
+
+function measuredQuery(target, name, metrics) {
+  const proxy = new Proxy(target, { get(object, property) {
+    if (property === 'get') return async (...args) => {
+      const started = Date.now();
+      metrics.queryGetCount += 1;
+      metrics.byObject[name] = (metrics.byObject[name] || 0) + 1;
+      try {
+        const rows = await object.get(...args);
+        metrics.queriedRows += Array.isArray(rows) ? rows.length : 0;
+        return rows;
+      } catch (error) {
+        metrics.queryFailures += 1;
+        if (String(error && error.message || error).includes('3007009')) metrics.busyErrors += 1;
+        throw error;
+      } finally { metrics.dbMs += Date.now() - started; }
+    };
+    const value = Reflect.get(object, property, object);
+    if (property === 'constructor') return value;
+    if (typeof value !== 'function') return value;
+    return (...args) => {
+      const result = value.apply(object, args);
+      return result === object ? proxy : result;
+    };
+  } });
+  return proxy;
+}
+
+async function withReadMetrics(operation, env, action) {
+  const flag = env && env.SHIKE_READ_METRICS_ENABLED !== undefined
+    ? env.SHIKE_READ_METRICS_ENABLED : process.env.SHIKE_READ_METRICS_ENABLED;
+  if (String(flag || '').trim().toLowerCase() !== 'true') return action();
+  const metrics = { queryGetCount: 0, queriedRows: 0, queryFailures: 0, busyErrors: 0, dbMs: 0, byObject: {} };
+  return readMetricsScope.run(metrics, async () => {
+    const started = Date.now();
+    let outcome = 'error';
+    try { const result = await action(); outcome = 'success'; return result; }
+    finally {
+      // Query.get calls only: excludes transactions, Storage and auth SDK requests.
+      console.info(`read.metrics operation=${operation} outcome=${outcome} queryGetCount=${metrics.queryGetCount} ` +
+        `queriedRows=${metrics.queriedRows} queryFailures=${metrics.queryFailures} busyErrors=${metrics.busyErrors} ` +
+        `dbMs=${metrics.dbMs} totalMs=${Date.now() - started} byObject=${JSON.stringify(metrics.byObject)}`);
+    }
+  });
 }
 
 async function one(query) {
@@ -1206,9 +1293,9 @@ function transactionPolicy(transaction, env, profiles = [], relationships = []) 
   }, { profiles, relationships });
 }
 
-async function readableCardRows(rows, viewerUid, env, publicOnly = false) {
+async function readableCardRows(rows, viewerUid, env, publicOnly = false, readContext = null) {
   const candidates = publicOnly ? rows.filter((row) => currentVisibility(row) === 'PUBLIC') : rows;
-  const policy = contentPolicy(env);
+  const policy = readContext ? readContext.policy : contentPolicy(env);
   await policy.prepareCardReads(viewerUid, candidates);
   const readable = [];
   for (const row of candidates) {
@@ -1218,9 +1305,9 @@ async function readableCardRows(rows, viewerUid, env, publicOnly = false) {
 }
 
 async function readCardIfAllowed(row, env, distanceKm = 0, includePhoto = true, viewerUid = '',
-  includeThread = false, maxPhotoCount = MAX_CARD_PHOTOS, metrics = null) {
+  includeThread = false, maxPhotoCount = MAX_CARD_PHOTOS, metrics = null, readContext = null) {
   try {
-    return await publicCard(row, env, distanceKm, includePhoto, viewerUid, includeThread, maxPhotoCount, metrics);
+    return await publicCard(row, env, distanceKm, includePhoto, viewerUid, includeThread, maxPhotoCount, metrics, readContext);
   } catch (error) {
     if (error && error.code === 'CONTENT_ACCESS_DENIED') return null;
     throw error;
@@ -1231,28 +1318,32 @@ async function readCardIfAllowed(row, env, distanceKm = 0, includePhoto = true, 
 // continues past hidden content and returns a continuation when its budget ends.
 async function scanCardPage(queryFactory, viewerUid, env, offset, pageSize, publicOnly = false, photoCount = 1) {
   const cards = [];
+  const sourceRows = [];
   let cursor = offset;
   let scanned = 0;
+  const finish = async (hasMore) => ({ cards: await finalizeCardReads(cards, sourceRows, viewerUid, env), nextOffset: cursor, hasMore });
   while (scanned < 200 && cards.length < pageSize) {
     const limit = Math.min(50, 200 - scanned);
     const rows = await queryFactory().limit(limit, cursor).get();
-    if (rows.length === 0) return { cards, nextOffset: cursor, hasMore: false };
-    const readableRows = new Set(await readableCardRows(rows, viewerUid, env, publicOnly));
+    if (rows.length === 0) return finish(false);
+    const readContext = await createCardReadContext(rows, viewerUid, env);
+    const readableRows = new Set(await readableCardRows(rows, viewerUid, env, publicOnly, readContext));
+    if (photoCount === 1) await preparePrimaryPhotos(readContext, [...readableRows].slice(0, pageSize - cards.length), env);
     for (let index = 0; index < rows.length; index += 1) {
       const row = rows[index];
       cursor += 1;
       scanned += 1;
       if (readableRows.has(row)) {
-        const card = await readCardIfAllowed(row, env, 0, true, viewerUid, false, photoCount);
-        if (card) cards.push(card);
+        const card = await readCardIfAllowed(row, env, 0, true, viewerUid, false, photoCount, null, readContext);
+        if (card) { cards.push(card); sourceRows.push(row); }
       }
       if (cards.length === pageSize) {
-        return { cards, nextOffset: cursor, hasMore: index + 1 < rows.length || rows.length === limit };
+        return finish(index + 1 < rows.length || rows.length === limit);
       }
     }
-    if (rows.length < limit) return { cards, nextOffset: cursor, hasMore: false };
+    if (rows.length < limit) return finish(false);
   }
-  return { cards, nextOffset: cursor, hasMore: true };
+  return finish(true);
 }
 
 function cardContractFields(row) {
@@ -1574,7 +1665,10 @@ async function callMedia(action, payload, env) {
   if (!value || typeof value !== 'object' || value.ok !== true || !value.data || typeof value.data !== 'object') {
     const message = value && typeof value === 'object' && typeof value.message === 'string'
       ? value.message : '媒体服务请求失败。';
-    throw new Error(message);
+    const failure = new Error(message);
+    failure.code = value && typeof value.code === 'string' && value.code.length > 0
+      ? value.code : 'MEDIA_RESPONSE_INVALID';
+    throw failure;
   }
   return value.data;
 }
@@ -1978,7 +2072,8 @@ function validHttpsUrl(value) {
   try {
     const parsed = new URL(String(value || '').trim());
     if (parsed.protocol !== 'https:' || !parsed.hostname || parsed.username || parsed.password) return '';
-    return parsed.toString().slice(0, 2048);
+    if (String(value || '').trim().length > 2048) return '';
+    return parsed.toString();
   } catch (_error) {
     return '';
   }
@@ -2001,8 +2096,8 @@ function validateCard(payload) {
     throw new Error('原价无效。');
   }
   const reviewText = String(payload.reviewText || '').trim();
-  if (reviewText.length < 2 || reviewText.length > MAX_CARD_REVIEW_LENGTH) {
-    throw new Error('我的评价需为 2–' + MAX_CARD_REVIEW_LENGTH + ' 个字符。');
+  if (reviewText.length > MAX_CARD_REVIEW_LENGTH) {
+    throw new Error('点评最多 ' + MAX_CARD_REVIEW_LENGTH + ' 个字符。');
   }
   const tasteScore = Number(payload.tasteScore);
   if (!Number.isInteger(tasteScore) || tasteScore < 1 || tasteScore > 10) {
@@ -2015,8 +2110,11 @@ async function publishCard(uid, payload, env) {
   const receiptSpec = stage1.publishReceiptSpec(uid, payload);
   const replay = await stage1.readPublishReceipt(uid, receiptSpec, env);
   if (replay) return replay;
-  const validated = validateCard(payload);
-  const point = roundedLocation(payload);
+  const modern = payload.consumptionMode !== undefined;
+  const normalized = await stage2.cardFields(payload, uid, env, undefined, !modern);
+  stage2.requireFriendsGate(normalized.visibility, env);
+  const validated = validateCard({ ...payload, ...normalized });
+  const point = modern ? { latE3: 0, lonE3: 0 } : roundedLocation(payload);
   const mediaIds = uniqueMediaIds(payload);
   const medias = [];
   for (const mediaId of mediaIds) {
@@ -2053,8 +2151,8 @@ async function publishCard(uid, payload, env) {
     mediaId: medias.length > 0 ? medias[0].id : '',
     latE3: point.latE3,
     lonE3: point.lonE3,
-    district: String(payload.district || '当前位置').slice(0, 80),
-    geohash: geohash(point.latE3 / 1000, point.lonE3 / 1000),
+    district: modern ? '' : String(payload.district || '历史发布位置').slice(0, 80),
+    geohash: modern ? '' : geohash(point.latE3 / 1000, point.lonE3 / 1000),
     status: 'APPROVED',
     schemaVersion: 2, migrationSource: 'SERVER', consumptionMode: 'UNSPECIFIED', visibility: 'PUBLIC',
     reviewState: 'PENDING_POST_REVIEW', publishedAt: new Date(now), modifiedAt: new Date(now),
@@ -2062,7 +2160,7 @@ async function publishCard(uid, payload, env) {
     createdAt: now,
     updatedAt: now
   };
-  Object.assign(record, stage1.derived(record));
+  Object.assign(record, stage2.storageFields(normalized));
   const mediaStore = collection(env, 'CardMedia');
   const committed = await collection(env, 'FoodCard').runTransaction({
     apply: async (transaction) => {
@@ -2083,9 +2181,16 @@ async function publishCard(uid, payload, env) {
         currentMedias.push(Object.assign(new CardMedia(), current, { cardId, status: 'APPROVED' }));
       }
       const committedAt = logicalWriteTime(owners[0].updatedAt);
-      Object.assign(record, { createdAt: committedAt, updatedAt: committedAt,
-        publishedAt: new Date(committedAt), modifiedAt: new Date(committedAt) });
-      stage1.upsertRows(transaction, [Object.assign(new FoodCard(), record), profileForWrite(owners[0], committedAt)]);
+      const currentFields = await stage2.cardFields(payload, uid, env,
+        (name, field, value) => stage1.txOne(transaction, env, name, field, value), !modern);
+      stage2.requireFriendsGate(currentFields.visibility, env);
+      const sequence = currentFields.visibility === 'FRIENDS' ? nextContentSequence(owners[0]) : contentSequence(owners[0]);
+      Object.assign(record, stage2.storageFields(currentFields), { createdAt: committedAt, updatedAt: committedAt,
+        publishedAt: new Date(committedAt), modifiedAt: new Date(committedAt),
+        friendVisibilitySince: currentFields.visibility === 'FRIENDS' ? new Date(committedAt) : null,
+        friendVisibilitySequence: currentFields.visibility === 'FRIENDS' ? sequence : 0 });
+      const counters = await stage2.prepareCounterTransition(transaction, null, record, owners[0], env, committedAt);
+      stage1.upsertRows(transaction, [Object.assign(new FoodCard(), record), profileForWrite(owners[0], committedAt, sequence), ...counters]);
       transaction.executeUpsert([Object.assign(new PublishRequestRecord(), {
         requestId: receiptSpec.receiptId, uid, operationType: 'PUBLISH_CARD', payloadHash: receiptSpec.payloadHash,
         resultEntityId: cardId, status: 'COMMITTED', createdAt: new Date(committedAt),
@@ -2119,16 +2224,19 @@ function uniqueMediaIds(payload) {
     if (ids.includes(id)) throw new Error('同一张实拍图不能重复添加。');
     ids.push(id);
   }
-  if (ids.length > MAX_CARD_PHOTOS) throw new Error(`一张卡片最多上传 ${MAX_CARD_PHOTOS} 张实拍图。`);
+  if (ids.length < 1 || ids.length > MAX_CARD_PHOTOS) {
+    throw accessError(`一张卡片必须包含 1–${MAX_CARD_PHOTOS} 张实拍图。`, 'VALIDATION_ERROR');
+  }
   return ids;
 }
 
-async function publicProfile(uid, env, metrics = null) {
+async function publicProfile(uid, env, metrics = null, readContext = null) {
   const fallback = { nickname: '食刻用户', avatarPath: '', avatarBucket: '' };
   if (!uid) return fallback;
   try {
-    if (metrics) metrics.profileDbQueries += 1;
-    const profile = await one(collection(env, 'UserProfile').query().equalTo('uid', uid));
+    if (metrics && !readContext) metrics.profileDbQueries += 1;
+    const profile = readContext ? readContext.profiles.get(String(uid))
+      : await one(collection(env, 'UserProfile').query().equalTo('uid', uid));
     if (!isAccountActive(profile)) return fallback;
     const output = profileResponse(profile, env);
     return {
@@ -2144,12 +2252,16 @@ async function publicProfile(uid, env, metrics = null) {
   }
 }
 
-async function publicPhotos(row, env, includePhoto, maxPhotoCount = MAX_CARD_PHOTOS, metrics = null) {
+async function publicPhotos(row, env, includePhoto, maxPhotoCount = MAX_CARD_PHOTOS, metrics = null, readContext = null) {
   if (!includePhoto) return [];
   const photoLimit = Math.max(1, Math.min(MAX_CARD_PHOTOS,
     Math.floor(Number(maxPhotoCount) || MAX_CARD_PHOTOS)));
-  if (metrics) metrics.mediaDbQueries += 1;
-  let medias = await collection(env, 'CardMedia').query().equalTo('cardId', String(row.id || ''))
+  const primary = readContext && photoLimit === 1 ? readContext.primaryMedia.get(String(row.mediaId || '')) : null;
+  // Card.mediaId is the recorded cover. Unlinked/legacy records retain the old query path.
+  const usePrimary = primary && primary.status === 'APPROVED' &&
+    String(primary.cardId || '') === String(row.id || '') && String(primary.ownerUid || '') === String(row.ownerUid || '');
+  if (metrics && !usePrimary) metrics.mediaDbQueries += 1;
+  let medias = usePrimary ? [primary] : await collection(env, 'CardMedia').query().equalTo('cardId', String(row.id || ''))
     .orderByAsc('createdAt').limit(photoLimit).get();
   if (medias.length === 0 && row.mediaId) {
     if (metrics) metrics.mediaDbQueries += 1;
@@ -2174,6 +2286,81 @@ async function publicPhotos(row, env, includePhoto, maxPhotoCount = MAX_CARD_PHO
     }
   }
   return photos;
+}
+
+async function createCardReadContext(rows, viewerUid, env, metrics = null) {
+  const profiles = new Map();
+  const uids = [...new Set([...rows.map((row) => String(row.ownerUid || '')), String(viewerUid || '')].filter(Boolean))];
+  for (let start = 0; start < uids.length; start += CARD_READ_BATCH_SIZE) {
+    const batch = uids.slice(start, start + CARD_READ_BATCH_SIZE);
+    if (metrics) metrics.profileDbQueries += 1;
+    const records = await collection(env, 'UserProfile').query().in('uid', batch).limit(batch.length).get();
+    for (const uid of batch) profiles.set(uid, null);
+    for (const record of records) profiles.set(String(record.uid), record);
+  }
+  const policy = createContentPolicy((name) => collection(env, name), one,
+    { profiles: [...profiles.values()].filter(Boolean) });
+  await policy.prepareCardReads(viewerUid, rows);
+  return { policy, profiles, primaryMedia: new Map() };
+}
+
+async function preparePrimaryPhotos(readContext, rows, env, metrics = null) {
+  const ids = [...new Set(rows.map((row) => String(row.mediaId || '')).filter(Boolean))];
+  for (let start = 0; start < ids.length; start += CARD_READ_BATCH_SIZE) {
+    const batch = ids.slice(start, start + CARD_READ_BATCH_SIZE);
+    if (metrics) metrics.mediaDbQueries += 1;
+    const records = await collection(env, 'CardMedia').query().in('id', batch).limit(batch.length).get();
+    for (const record of records) readContext.primaryMedia.set(String(record.id), record);
+  }
+}
+
+async function finalizeCardReads(cards, sourceRows, viewerUid, env, friendsOnly = false) {
+  if (cards.length === 0) return cards;
+  const ids = cards.map((card) => String(card.id));
+  const originals = new Map(sourceRows.map((row) => [String(row.id), row]));
+  const current = new Map();
+  let owners = null;
+  const mediaIds = [...new Set(cards.flatMap((card) => (card.photos || []).map((photo) => String(photo.id))))];
+  const currentMedia = new Map();
+  for (let start = 0; start < mediaIds.length; start += CARD_READ_BATCH_SIZE) {
+    const batch = mediaIds.slice(start, start + CARD_READ_BATCH_SIZE);
+    const rows = await collection(env, 'CardMedia').query().in('id', batch).limit(batch.length).get();
+    for (const row of rows) currentMedia.set(String(row.id), row);
+  }
+  // Refresh cards after media hydration; never reuse the first-phase authority cache.
+  for (let start = 0; start < ids.length; start += CARD_READ_BATCH_SIZE) {
+    const batch = ids.slice(start, start + CARD_READ_BATCH_SIZE);
+    const rows = await collection(env, 'FoodCard').query().in('id', batch).limit(batch.length).get();
+    for (const row of rows) current.set(String(row.id), row);
+  }
+  if (friendsOnly) {
+    owners = new Set([viewerUid]);
+    for (const relation of await friendshipRowsFor(viewerUid, env)) {
+      if (relation.status === 'ACCEPTED') owners.add(relation.memberAUid === viewerUid ? relation.memberBUid : relation.memberAUid);
+    }
+  }
+  const policy = contentPolicy(env);
+  await policy.prepareCardReads(viewerUid, [...current.values()]);
+  const result = [];
+  for (const card of cards) {
+    const row = current.get(String(card.id));
+    const original = originals.get(String(card.id));
+    if (!row || !original || String(row.updatedAt || '') !== String(original.updatedAt || '') ||
+        String(row.ownerUid || '') !== String(original.ownerUid || '') ||
+        String(row.mediaId || '') !== String(original.mediaId || '') ||
+        currentVisibility(row) !== currentVisibility(original) || row.status !== original.status ||
+        String(row.reviewState || '') !== String(original.reviewState || '') ||
+        (owners && !owners.has(row.ownerUid)) || !await policy.canReadCard(viewerUid, row)) continue;
+    const photosCurrent = (card.photos || []).every((photo) => {
+      const media = currentMedia.get(String(photo.id));
+      try {
+        return media && media.status === 'APPROVED' && String(media.ownerUid || '') === String(row.ownerUid || '') &&
+          String(media.cardId || '') === String(row.id) && approvedObjectKeyForMedia(media) === photo.path;
+      } catch (_error) { return false; }
+    });
+    if (photosCurrent) result.push(card);
+  }
+  return result;
 }
 
 async function cardActionSummary(cardId, viewerUid, env) {
@@ -2309,12 +2496,13 @@ async function publicComments(cardId, viewerUid, env) {
 }
 
 async function publicCard(row, env, distanceKm = 0, includePhoto = false, viewerUid = '', includeThread = false,
-  maxPhotoCount = MAX_CARD_PHOTOS, metrics = null) {
-  await contentPolicy(env).assertCardReadable(viewerUid, row);
+  maxPhotoCount = MAX_CARD_PHOTOS, metrics = null, readContext = null) {
+  const context = readContext || await createCardReadContext([row], viewerUid, env, metrics);
+  await context.policy.assertCardReadable(viewerUid, row);
   const ownerUid = String(row.ownerUid || '');
   const parts = [
-    publicPhotos(row, env, includePhoto, maxPhotoCount, metrics),
-    publicProfile(ownerUid, env, metrics)
+    publicPhotos(row, env, includePhoto, maxPhotoCount, metrics, context),
+    publicProfile(ownerUid, env, metrics, context)
   ];
   // Finish optional-profile accounting even when the parallel media query fails.
   if (metrics) await Promise.allSettled(parts);
@@ -2615,7 +2803,11 @@ async function listNearby(uid, payload, env) {
       for (const row of fresh) currentRows.set(String(row.id || ''), row);
     }
     rows = candidateIds.map((id) => currentRows.get(id)).filter(Boolean);
-    rows = await readableCardRows(rows, uid, env, true);
+    // These legacy coordinates are a publication location, never Merchant
+    // coordinates. Stage 3 will query reliable Merchant coordinates instead.
+    rows = rows.filter((row) => !row.merchantId && !['DELIVERY', 'DINE_IN'].includes(row.consumptionMode));
+    const readContext = await createCardReadContext(rows, uid, env, metrics);
+    rows = await readableCardRows(rows, uid, env, true, readContext);
     metrics.candidates = rows.length;
     const matched = rows.map((row) => ({
       row, distanceKm: haversineKm(point.latE3, point.lonE3, row.latE3, row.lonE3)
@@ -2632,11 +2824,12 @@ async function listNearby(uid, payload, env) {
     const cards = [];
     const hydrationStarted = Date.now();
     try {
+      await preparePrimaryPhotos(readContext, slice.map((item) => item.row), env, metrics);
       for (let start = 0; start < slice.length; start += NEARBY_CARD_HYDRATION_CONCURRENCY) {
         const batch = slice.slice(start, start + NEARBY_CARD_HYDRATION_CONCURRENCY);
         // Settle the already-started queries before emitting failure metrics.
         const results = await Promise.allSettled(batch.map((item) =>
-          readCardIfAllowed(item.row, env, Number(item.distanceKm.toFixed(3)), true, uid, false, 1, metrics)));
+          readCardIfAllowed(item.row, env, Number(item.distanceKm.toFixed(3)), true, uid, false, 1, metrics, readContext)));
         const failure = results.find((result) => result.status === 'rejected');
         if (failure) throw failure.reason;
         cards.push(...results.map((result) => result.value).filter(Boolean));
@@ -2645,9 +2838,11 @@ async function listNearby(uid, payload, env) {
       metrics.hydrationMs = Date.now() - hydrationStarted;
       metrics.cards = cards.length;
     }
+    const finalCards = await finalizeCardReads(cards, slice.map((item) => item.row), uid, env);
+    metrics.cards = finalCards.length;
     metrics.outcome = 'success';
     return {
-      cards,
+      cards: finalCards,
       nextPageToken: offset + pageSize < photoMatched.length
         ? (snapshotAvailable ? `c1:${epoch}:${offset + pageSize}` : String(offset + pageSize)) : '',
       district: String(payload.district || '')
@@ -2676,18 +2871,22 @@ async function listFriendRankings(uid, env) {
 
   const ownerUids = Array.from(allowedOwners);
   const rankedRows = [];
+  const rankingContext = { policy: createContentPolicy((name) => collection(env, name), one, { relationships: rows }) };
   const cards = collection(env, 'FoodCard');
   for (let start = 0; start < ownerUids.length; start += MAX_FRIEND_RANKING_QUERY_BATCH) {
     const ownerBatch = ownerUids.slice(start, start + MAX_FRIEND_RANKING_QUERY_BATCH);
-    const ownerRows = await Promise.all(ownerBatch.map((ownerUid) => cards.query()
+    const ownerResults = await Promise.allSettled(ownerBatch.map((ownerUid) => cards.query()
       .equalTo('ownerUid', ownerUid)
       .equalTo('status', 'APPROVED')
       .orderByDesc('tasteScore')
       .orderByDesc('createdAt')
       .limit(MAX_FRIEND_RANKING_SIZE)
       .get()));
+    const ownerFailure = ownerResults.find((result) => result.status === 'rejected');
+    if (ownerFailure) throw ownerFailure.reason;
+    const ownerRows = ownerResults.map((result) => result.value);
     const photoRows = ownerRows.flat().filter((row) => String(row.mediaId || '').length > 0);
-    rankedRows.push(...await readableCardRows(photoRows, uid, env));
+    rankedRows.push(...await readableCardRows(photoRows, uid, env, false, rankingContext));
   }
   const topRows = rankedRows
     .sort((first, second) => {
@@ -2696,11 +2895,13 @@ async function listFriendRankings(uid, env) {
     })
     .slice(0, MAX_FRIEND_RANKING_SIZE);
   const output = [];
+  const readContext = await createCardReadContext(topRows, uid, env);
+  await preparePrimaryPhotos(readContext, topRows, env);
   for (const row of topRows) {
-    const card = await readCardIfAllowed(row, env, 0, true, uid);
+    const card = await readCardIfAllowed(row, env, 0, true, uid, false, 1, null, readContext);
     if (card) output.push(card);
   }
-  return { cards: output };
+  return { cards: await finalizeCardReads(output, topRows, uid, env, true) };
 }
 
 async function cardDetail(uid, payload, env) {
@@ -3409,6 +3610,7 @@ async function setCardVisibility(uid, payload, env) {
   const cardId = String(payload.cardId || '').trim();
   const visibility = String(payload.visibility || '');
   if (!cardId || !['PUBLIC', 'FRIENDS'].includes(visibility)) throw new Error('可见范围参数无效。');
+  stage2.requireFriendsGate(visibility, env);
   const cards = collection(env, 'FoodCard');
   let output = null;
   const committed = await cards.runTransaction({
@@ -3420,15 +3622,15 @@ async function setCardVisibility(uid, payload, env) {
       const rows = await transaction.executeQuery(cards.query().equalTo('id', cardId).limit(1));
       const card = rows[0];
       if (!card || card.ownerUid !== uid || !readableCardState(card)) throw accessError('内容不存在、已失效或无权修改。');
-      if (payload.expectedModifiedAt != null && Number(payload.expectedModifiedAt) !==
-          (dateMillis(card.modifiedAt) === null ? Number(card.updatedAt || card.createdAt || 0) : dateMillis(card.modifiedAt))) {
-        throw accessError('内容已变化，请刷新。', 'CONFLICT');
-      }
       const current = currentVisibility(card);
       if (current === visibility) {
         output = { success: true, cardId, visibility, modifiedAt: dateMillis(card.modifiedAt) === null
           ? Number(card.updatedAt || card.createdAt || 0) : dateMillis(card.modifiedAt), unchanged: true };
         return true;
+      }
+      if (payload.expectedModifiedAt != null && Number(payload.expectedModifiedAt) !==
+          (dateMillis(card.modifiedAt) === null ? Number(card.updatedAt || card.createdAt || 0) : dateMillis(card.modifiedAt))) {
+        throw accessError('内容已变化，请刷新。', 'CONFLICT');
       }
       if (visibility === 'PUBLIC') throw accessError('扩大公开范围须提交待审编辑。', 'REVISION_REQUIRED');
       const previousSequence = Number(card.friendVisibilitySequence || 0);
@@ -3447,8 +3649,8 @@ async function setCardVisibility(uid, payload, env) {
         Object.assign(updated, { schemaVersion: 2, migrationSource: 'SERVER', reviewState: 'PENDING_POST_REVIEW', consumptionMode: 'UNSPECIFIED' });
         Object.assign(updated, stage1.derived(updated));
       }
-      transaction.executeUpsert([updated]);
-      transaction.executeUpsert([profileForWrite(owner, now, sequence)]);
+      const counters = await stage2.prepareCounterTransition(transaction, card, updated, owner, env, now);
+      stage1.upsertRows(transaction, [updated, profileForWrite(owner, now, sequence), ...counters]);
       output = { success: true, cardId, visibility: 'FRIENDS', publishedAt: now, modifiedAt: now,
         friendVisibilitySince: now, friendVisibilitySequence: sequence, lifecycleGeneration: generation, unchanged: false };
       return true;
@@ -4235,9 +4437,12 @@ async function reportCard(uid, payload, env) {
         const current = rows[0];
         if (!current || (current.status === 'REMOVED' && current.reviewState === 'TAKEN_DOWN')) return true;
         const now = Math.max(Date.now(), Number(current.updatedAt || 0) + 1, (dateMillis(current.modifiedAt) || 0) + 1);
-        transaction.executeUpsert([Object.assign(new FoodCard(), current, {
+        const owner = await stage1.txOne(transaction, env, 'UserProfile', 'uid', current.ownerUid);
+        const removed = Object.assign(new FoodCard(), current, {
           status: 'REMOVED', reviewState: 'TAKEN_DOWN', publishedAt: new Date(now), modifiedAt: new Date(now), updatedAt: now
-        })]);
+        });
+        const counters = await stage2.prepareCounterTransition(transaction, current, removed, owner, env, now);
+        stage1.upsertRows(transaction, [removed, ...counters]);
         return true;
       }
     });
@@ -4329,7 +4534,8 @@ async function moderateCard(uid, payload, env) {
         status: action === 'APPROVE' ? 'APPROVED' : 'REMOVED',
         publishedAt: new Date(now), modifiedAt: new Date(now), updatedAt: now
       });
-      transaction.executeUpsert([reviewed]);
+      const counters = await stage2.prepareCounterTransition(transaction, row, reviewed, owners[0], env, now);
+      stage1.upsertRows(transaction, [reviewed, ...counters]);
       return true;
     }
   });
@@ -4341,10 +4547,34 @@ async function moderateCard(uid, payload, env) {
 const stage1 = require('./stage1-services').createStage1Services({
   collection, one, transactionPolicy, contentPolicy, profileForWrite, logicalWriteTime, nextContentSequence,
   assertAdmin, validateCard, uniqueMediaIds, promotePendingMedia, refreshPublishCount, actionId, safeArray,
-  personalized: PERSONALIZED, models: OBJECT_TYPES
+  personalized: PERSONALIZED, models: OBJECT_TYPES, stage2: () => stage2, publicCard
+});
+
+const stage2 = require('./stage2-services').createStage2Services({
+  collection, one, models: OBJECT_TYPES, profileForWrite, logicalWriteTime, assertAdmin, contentPolicy
+});
+
+const stage3 = require('./stage3-services').createStage3Services({
+  collection, one, models: OBJECT_TYPES, contentPolicy, readableCardRows, readCardIfAllowed, stage1: () => stage1
 });
 
 const operations = {
+  'get-discovery-capabilities': async ({ accessToken }, env) => {
+    if (accessToken) await verifiedUid(accessToken, env);
+    return stage3.capabilities(env);
+  },
+  'list-map-merchants': async ({ accessToken, payload }, env) => stage3.listMapMerchants(accessToken ? await verifiedUid(accessToken, env) : '', payload, env),
+  'search-public-cards': async ({ accessToken, payload }, env) => stage3.searchPublicCards(accessToken ? await verifiedUid(accessToken, env) : '', payload, env),
+  'get-merchant-recommendations': async ({ accessToken, payload }, env) => stage3.getMerchantRecommendations(accessToken ? await verifiedUid(accessToken, env) : '', payload, env),
+  'get-stage2-capabilities': async ({ accessToken }, env) => { await verifiedUid(accessToken, env); return stage2.capabilities(env); },
+  'resolve-merchant': async ({ accessToken, payload }, env) => stage2.resolveMerchant(await verifiedUid(accessToken, env), payload, env),
+  'create-user-merchant': async ({ accessToken, payload }, env) => stage2.createUserMerchant(await verifiedUid(accessToken, env), payload, env),
+  'update-user-merchant': async ({ accessToken, payload }, env) => stage2.updateUserMerchant(await verifiedUid(accessToken, env), payload, env),
+  'get-merchant': async ({ accessToken, payload }, env) => stage2.getMerchant(await verifiedUid(accessToken, env), payload, env),
+  'list-moderation-merchants': async ({ accessToken, payload }, env) => stage2.listModerationMerchants(await verifiedUid(accessToken, env), payload, env),
+  'moderate-merchant': async ({ accessToken, payload }, env) => stage2.moderateMerchant(await verifiedUid(accessToken, env), payload, env),
+  'reconcile-merchant-counters': async ({ accessToken, payload }, env) => stage2.reconcileMerchantPublicCounters(await verifiedUid(accessToken, env), payload, env),
+  'get-card-edit-context': async ({ accessToken, payload }, env) => stage1.getEditContext(await verifiedUid(accessToken, env), payload, env),
   'get-revision-media': async ({ accessToken, payload }, env) => getRevisionMedia(await verifiedUid(accessToken, env), payload, env),
   'set-card-reaction': async ({ accessToken, payload }, env) => stage1.mutateReaction(await verifiedUid(accessToken, env), payload, env),
   'submit-card-revision': async ({ accessToken, payload }, env) => stage1.submitRevision(await verifiedUid(accessToken, env), payload, env),
@@ -4466,7 +4696,7 @@ function createHandler(operation) {
     try {
       const input = parseBody(event);
       const env = context && context.env ? context.env : {};
-      const data = await operations[operation](input, env);
+      const data = await withReadMetrics(operation, env, () => operations[operation](input, env));
       return callback({ ok: true, data, message: '' });
     } catch (error) {
       logger.error(`${operation} failed: ${safeLogError(error)}`);
@@ -4478,10 +4708,10 @@ function createHandler(operation) {
 async function executeOperation(operation, input, env = process.env) {
   if (!operations[operation]) throw new Error(`未知操作 ${operation}`);
   const safeInput = input && typeof input === 'object' ? input : {};
-  return operations[operation]({
+  return withReadMetrics(operation, env || {}, () => operations[operation]({
     accessToken: typeof safeInput.accessToken === 'string' ? safeInput.accessToken : '',
     payload: safeInput.payload && typeof safeInput.payload === 'object' ? safeInput.payload : {}
-  }, env || {});
+  }, env || {}));
 }
 
 module.exports = { createHandler, executeOperation, safeLogError, haversineKm, geohash };

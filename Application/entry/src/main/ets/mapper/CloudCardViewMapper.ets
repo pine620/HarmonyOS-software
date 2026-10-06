@@ -1,5 +1,5 @@
 import { EvidenceTone, ReviewCardViewData } from '../components/review/ReviewDisplay';
-import { categoryLabel } from '../components/FoodCover';
+import { foodCardCategoryLabel } from '../components/FoodCover';
 import { FoodCard } from '../model/CloudContracts';
 import { cardPriceText } from '../model/CardPrice';
 import { tasteScoreText as formatTasteScore } from '../model/TasteScore';
@@ -62,6 +62,8 @@ function timeLabel(timestamp: number): string {
 }
 
 function locationLabel(card: FoodCard): string {
+  if (card.merchantNameSnapshot !== undefined && card.merchantNameSnapshot.length > 0) return card.merchantNameSnapshot;
+  if (card.consumptionMode === 'DELIVERY' || card.consumptionMode === 'DINE_IN') return '店铺未关联';
   const parts: Array<string> = [];
   if (card.district.trim().length > 0) parts.push(card.district.trim());
   if (Number.isFinite(card.distanceKm) && card.distanceKm > 0) parts.push(`${card.distanceKm.toFixed(1)} km`);
@@ -82,7 +84,7 @@ export function mapFoodCardToReviewCardViewData(card: FoodCard): ReviewCardViewD
     id: card.id,
     productName,
     shop: card.shop.trim(),
-    categoryLabel: categoryLabel(card.category),
+    categoryLabel: foodCardCategoryLabel(card),
     coverUrl: card.photoUrl,
     coverLoading: card.photoPath.length > 0 && card.photoUrl.length === 0 && card.primaryPhotoResolved !== true,
     coverFailed: card.photoUrl.length === 0 && card.primaryPhotoLoadFailed === true,
@@ -95,7 +97,7 @@ export function mapFoodCardToReviewCardViewData(card: FoodCard): ReviewCardViewD
     evidenceLabel: evidenceLabel(card),
     evidenceTone: evidenceTone(card),
     authorName: card.authorNickname === undefined ? '' : card.authorNickname.trim(),
-    timeLabel: timeLabel(card.createdAt),
+    timeLabel: timeLabel(card.publishedAt === undefined ? card.createdAt : card.publishedAt),
     locationLabel: locationLabel(card)
   };
 }

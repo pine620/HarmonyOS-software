@@ -6,7 +6,7 @@ import {
 import { FriendRepository } from '../repository/FriendRepository';
 import { CardRepository } from '../repository/CardRepository';
 import { SocialAvatar } from '../components/social/SocialDisplay';
-import { categoryLabel, coverFor } from '../components/FoodCover';
+import { foodCardCategoryLabel, coverFor } from '../components/FoodCover';
 import { ErrorDetail, errorText } from '../common/ErrorKit';
 
 const MESSAGE_PAGE_SIZE = 50;
@@ -206,7 +206,7 @@ export struct ChatPage {
         Text(card.productName || '食刻卡片').fontSize(14).fontWeight(FontWeight.Bold)
           .fontColor($r('app.color.ink')).width('100%').maxLines(2)
           .textOverflow({ overflow: TextOverflow.Ellipsis });
-        Text(`${categoryLabel(card.category)} · ${this.priceText(card)}`).fontSize(11)
+        Text(`${foodCardCategoryLabel(card)} · ${this.priceText(card)}`).fontSize(11)
           .fontColor($r('app.color.muted')).width('100%').maxLines(1);
         Button('查看卡片').height(36).fontSize(12).backgroundColor($r('app.color.accent_soft'))
           .fontColor($r('app.color.accent_action')).onClick((): void => {

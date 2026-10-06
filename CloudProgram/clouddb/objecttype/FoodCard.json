@@ -139,90 +139,392 @@
       "notNull": true,
       "defaultValue": 0
     },
-    {"fieldName": "schemaVersion", "fieldType": "Integer", "defaultValue": 0},
-    {"fieldName": "migrationSource", "fieldType": "String"},
-    {"fieldName": "consumptionMode", "fieldType": "String"},
-    {"fieldName": "visibility", "fieldType": "String"},
-    {"fieldName": "merchantId", "fieldType": "String"},
-    {"fieldName": "merchantNameSnapshot", "fieldType": "String"},
-    {"fieldName": "merchantAddressSnapshot", "fieldType": "Text"},
-    {"fieldName": "categoryV2", "fieldType": "String"},
-    {"fieldName": "categoryVersion", "fieldType": "Integer", "defaultValue": 0},
-    {"fieldName": "itemPriceFen", "fieldType": "Long"},
-    {"fieldName": "dineInAvgFen", "fieldType": "Long"},
-    {"fieldName": "orderTotalFen", "fieldType": "Long"},
-    {"fieldName": "deliveryFeeFen", "fieldType": "Long"},
-    {"fieldName": "queryPriceFen", "fieldType": "Long"},
-    {"fieldName": "deliveryPlatformKey", "fieldType": "String"},
-    {"fieldName": "deliveryPlatformLabelSnapshot", "fieldType": "String"},
-    {"fieldName": "consumedAt", "fieldType": "Date"},
-    {"fieldName": "publishedAt", "fieldType": "Date"},
-    {"fieldName": "modifiedAt", "fieldType": "Date"},
-    {"fieldName": "edited", "fieldType": "Boolean", "defaultValue": false},
-    {"fieldName": "friendVisibilitySince", "fieldType": "Date"},
-    {"fieldName": "friendVisibilitySequence", "fieldType": "Long"},
-    {"fieldName": "reviewState", "fieldType": "String"},
-    {"fieldName": "deletedAt", "fieldType": "Date"},
-    {"fieldName": "purgeAt", "fieldType": "Date"},
-    {"fieldName": "lifecycleGeneration", "fieldType": "Long", "defaultValue": 0},
-    {"fieldName": "searchTextNormalized", "fieldType": "Text"}
+    {
+      "fieldName": "schemaVersion",
+      "fieldType": "Integer",
+      "defaultValue": 0
+    },
+    {
+      "fieldName": "migrationSource",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "consumptionMode",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "visibility",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "merchantId",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "merchantNameSnapshot",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "merchantAddressSnapshot",
+      "fieldType": "Text"
+    },
+    {
+      "fieldName": "categoryV2",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "categoryVersion",
+      "fieldType": "Integer",
+      "defaultValue": 0
+    },
+    {
+      "fieldName": "itemPriceFen",
+      "fieldType": "Long"
+    },
+    {
+      "fieldName": "dineInAvgFen",
+      "fieldType": "Long"
+    },
+    {
+      "fieldName": "orderTotalFen",
+      "fieldType": "Long"
+    },
+    {
+      "fieldName": "deliveryFeeFen",
+      "fieldType": "Long"
+    },
+    {
+      "fieldName": "queryPriceFen",
+      "fieldType": "Long"
+    },
+    {
+      "fieldName": "deliveryPlatformKey",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "deliveryPlatformLabelSnapshot",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "consumedAt",
+      "fieldType": "Date"
+    },
+    {
+      "fieldName": "publishedAt",
+      "fieldType": "Date"
+    },
+    {
+      "fieldName": "modifiedAt",
+      "fieldType": "Date"
+    },
+    {
+      "fieldName": "edited",
+      "fieldType": "Boolean",
+      "defaultValue": false
+    },
+    {
+      "fieldName": "friendVisibilitySince",
+      "fieldType": "Date"
+    },
+    {
+      "fieldName": "friendVisibilitySequence",
+      "fieldType": "Long"
+    },
+    {
+      "fieldName": "reviewState",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "deletedAt",
+      "fieldType": "Date"
+    },
+    {
+      "fieldName": "purgeAt",
+      "fieldType": "Date"
+    },
+    {
+      "fieldName": "lifecycleGeneration",
+      "fieldType": "Long",
+      "defaultValue": 0
+    },
+    {
+      "fieldName": "searchTextNormalized",
+      "fieldType": "Text"
+    }
   ],
   "indexes": [
     {
       "indexName": "status_createdAt_desc",
       "indexList": [
-        {"fieldName": "status", "sortType": "ASC"},
-        {"fieldName": "createdAt", "sortType": "DESC"},
-        {"fieldName": "id", "sortType": "ASC"}
+        {
+          "fieldName": "status",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "createdAt",
+          "sortType": "DESC"
+        },
+        {
+          "fieldName": "id",
+          "sortType": "ASC"
+        }
       ]
     },
     {
       "indexName": "status_category_createdAt",
       "indexList": [
-        {"fieldName": "status", "sortType": "ASC"},
-        {"fieldName": "category", "sortType": "ASC"},
-        {"fieldName": "createdAt", "sortType": "DESC"},
-        {"fieldName": "id", "sortType": "ASC"}
+        {
+          "fieldName": "status",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "category",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "createdAt",
+          "sortType": "DESC"
+        },
+        {
+          "fieldName": "id",
+          "sortType": "ASC"
+        }
       ]
     },
     {
       "indexName": "ownerUid_createdAt",
       "indexList": [
-        {"fieldName": "ownerUid", "sortType": "ASC"},
-        {"fieldName": "createdAt", "sortType": "DESC"}
+        {
+          "fieldName": "ownerUid",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "createdAt",
+          "sortType": "DESC"
+        }
       ]
     },
     {
       "indexName": "ownerUid_status_createdAt",
       "indexList": [
-        {"fieldName": "ownerUid", "sortType": "ASC"},
-        {"fieldName": "status", "sortType": "ASC"},
-        {"fieldName": "createdAt", "sortType": "DESC"}
+        {
+          "fieldName": "ownerUid",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "status",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "createdAt",
+          "sortType": "DESC"
+        }
       ]
     },
     {
       "indexName": "status_location_createdAt",
       "indexList": [
-        {"fieldName": "status", "sortType": "ASC"},
-        {"fieldName": "latE3", "sortType": "ASC"},
-        {"fieldName": "lonE3", "sortType": "ASC"},
-        {"fieldName": "createdAt", "sortType": "DESC"}
+        {
+          "fieldName": "status",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "latE3",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "lonE3",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "createdAt",
+          "sortType": "DESC"
+        }
       ]
     },
     {
       "indexName": "status_createdAt",
       "indexList": [
-        {"fieldName": "status", "sortType": "ASC"},
-        {"fieldName": "createdAt", "sortType": "ASC"}
+        {
+          "fieldName": "status",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "createdAt",
+          "sortType": "ASC"
+        }
       ]
     },
     {
       "indexName": "owner_status_score_time",
       "indexList": [
-        {"fieldName": "ownerUid", "sortType": "ASC"},
-        {"fieldName": "status", "sortType": "ASC"},
-        {"fieldName": "tasteScore", "sortType": "DESC"},
-        {"fieldName": "createdAt", "sortType": "DESC"}
+        {
+          "fieldName": "ownerUid",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "status",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "tasteScore",
+          "sortType": "DESC"
+        },
+        {
+          "fieldName": "createdAt",
+          "sortType": "DESC"
+        }
+      ]
+    },
+    {
+      "indexName": "merchant_id",
+      "indexList": [
+        {
+          "fieldName": "merchantId",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "id",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "owner_merchant_id",
+      "indexList": [
+        {
+          "fieldName": "ownerUid",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "merchantId",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "id",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "public_time",
+      "indexList": [
+        {
+          "fieldName": "visibility",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "status",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "publishedAt",
+          "sortType": "DESC"
+        },
+        {
+          "fieldName": "id",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "public_score",
+      "indexList": [
+        {
+          "fieldName": "visibility",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "status",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "tasteScore",
+          "sortType": "DESC"
+        },
+        {
+          "fieldName": "publishedAt",
+          "sortType": "DESC"
+        },
+        {
+          "fieldName": "id",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "public_price_asc",
+      "indexList": [
+        {
+          "fieldName": "visibility",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "status",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "queryPriceFen",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "publishedAt",
+          "sortType": "DESC"
+        },
+        {
+          "fieldName": "id",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "public_price_desc",
+      "indexList": [
+        {
+          "fieldName": "visibility",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "status",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "queryPriceFen",
+          "sortType": "DESC"
+        },
+        {
+          "fieldName": "publishedAt",
+          "sortType": "DESC"
+        },
+        {
+          "fieldName": "id",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "merchant_public_time",
+      "indexList": [
+        {
+          "fieldName": "merchantId",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "visibility",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "status",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "publishedAt",
+          "sortType": "DESC"
+        },
+        {
+          "fieldName": "id",
+          "sortType": "ASC"
+        }
       ]
     }
   ],
@@ -241,7 +543,11 @@
     },
     {
       "role": "Administrator",
-      "rights": ["Read", "Upsert", "Delete"]
+      "rights": [
+        "Read",
+        "Upsert",
+        "Delete"
+      ]
     }
   ]
 }

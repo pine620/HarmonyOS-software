@@ -58,6 +58,10 @@
     {
       "fieldName": "reviewReason",
       "fieldType": "String"
+    },
+    {
+      "fieldName": "requestPayloadHash",
+      "fieldType": "String"
     }
   ],
   "indexes": [
@@ -109,6 +113,23 @@
         {
           "fieldName": "submittedAt",
           "sortType": "ASC"
+        },
+        {
+          "fieldName": "revisionId",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "card_submitted",
+      "indexList": [
+        {
+          "fieldName": "cardId",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "submittedAt",
+          "sortType": "DESC"
         },
         {
           "fieldName": "revisionId",

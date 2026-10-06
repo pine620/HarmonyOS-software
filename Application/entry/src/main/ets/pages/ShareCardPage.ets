@@ -3,7 +3,7 @@ import { FoodCard } from '../model/CloudContracts';
 import { GroupConversationSummary, SendMessageRequest, SocialUser } from '../model/FriendModels';
 import { FriendRepository } from '../repository/FriendRepository';
 import { SocialAvatar } from '../components/social/SocialDisplay';
-import { categoryLabel, coverFor } from '../components/FoodCover';
+import { foodCardCategoryLabel, coverFor } from '../components/FoodCover';
 import { ErrorDetail, errorText } from '../common/ErrorKit';
 
 function emptyCard(): FoodCard {
@@ -141,7 +141,7 @@ export struct ShareCardPage {
         Text(this.card.productName || '食刻卡片').fontSize(17).fontWeight(FontWeight.Bold)
           .fontColor($r('app.color.ink')).width('100%').maxLines(2)
           .textOverflow({ overflow: TextOverflow.Ellipsis });
-        Text(`${categoryLabel(this.card.category)} · ${this.priceText()}`)
+        Text(`${foodCardCategoryLabel(this.card)} · ${this.priceText()}`)
           .fontSize(13).fontColor($r('app.color.muted')).width('100%');
       }.layoutWeight(1).alignItems(HorizontalAlign.Start);
     }

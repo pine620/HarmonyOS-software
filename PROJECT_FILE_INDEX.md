@@ -1,6 +1,6 @@
 # 项目文件索引
 
-按 2026-10-04 的现有文件结构整理，重点覆盖 `Application` 与 `CloudProgram`。先看下面的职责说明，完整文件清单在文末。首次运行见 [README](README.md)，后端操作见 [云端指南](CloudProgram/README.md)。
+按 2026-10-06 的现有发布文件结构整理，重点覆盖 `Application` 与 `CloudProgram`。先看下面的职责说明，完整文件清单在文末。首次运行见 [README](README.md)，后端操作见 [云端指南](CloudProgram/README.md)。
 
 路径从项目根目录起算。GitHub 仓库包含 Application 与 CloudProgram 的源码；三个不含签名的 build profile 随源码共享；本地签名、SDK 和云工程关联配置另列，不提交配置值。
 
@@ -60,8 +60,9 @@ CloudProgram/
 | --- | --- |
 | `entryability/EntryAbility.ets` | 主 Ability 生命周期、窗口与页加载、Want/分享入口、后台清理及接续 |
 | `Index.ets` | 主容器、隐私门槛、游客双页签/我的登录入口、账号五页签、Navigation 路由、待处理分享/通知入口 |
-| `NearbyPage.ets` | 不依赖定位的全部公开推荐、云端分类、分页、封面与预加载结果 |
-| `CreateCardPage.ets` | 手动录入商品/价格/评分、照片准备、定位、权利声明与发布 |
+| `NearbyPage.ets` | 公开推荐入口、能力门槛检查、发现页与旧列表回退 |
+| `DiscoveryFeed.ets` | 原生地图与推荐列表、区域／上一地区、搜索／筛选／排序、商家抽屉、分页及异步代次 |
+| `CreateCardPage.ets` | 外卖／到店发布和待审编辑、商家关联、金额、1–6 图、模式缓存、幂等重试与立即收窄 |
 | `CardDetailPage.ets` | 详情/图片/评价、点赞收藏、举报删除及系统/近场分享生命周期；评论入口已退场 |
 | `ShareCardPage.ets` | 单独的卡片分享页面和公开分享展示 |
 | `RankingPage.ets` | 附近/好友口味榜和分类筛选 |
@@ -86,6 +87,9 @@ CloudProgram/
 | `repository/CardRepository.ets` | 公开推荐/游客详情、卡片发布、附近/榜单、互动、举报/删除业务封装 |
 | `repository/FriendRepository.ets` | 用户搜索/资料、好友关系、私信与群聊业务封装 |
 | `repository/NotificationRepository.ets` | 通知列表、已读、全部已读和目标解析 |
+| `repository/CardEditRepository.ets` | 编辑上下文、Revision 提交／撤回及立即收窄 |
+| `repository/MerchantRepository.ets` | 商家能力、官方点解析、用户点创建／更新与读取 |
+| `repository/DiscoveryRepository.ets` | 地图商家、公开搜索、独立商家推荐和发现能力请求 |
 | `service/AuthService.ets` | 邮箱登录、华为兼容授权、绑定、退出/切换与销户流程协调 |
 | `service/AuthSessionStore.ets` | AGC SDK 初始化、验证码注册/登录、会话/Token、重认证与认证用户删除 |
 | `service/PrivacyStore.ets` | 隐私同意状态及初始化门槛 |
@@ -104,9 +108,20 @@ CloudProgram/
 | `service/ServiceCardCoverCache.ets` | 前台准备受限大小的 JPEG 封面、缓存校验与过期清理 |
 | `service/ServiceCardRemoteSyncService.ets` | 远程同步单独同意、Token/实例登记、更新和关闭清理 |
 | `service/ServiceCardInteraction.ets` | 服务卡片本地刷新消息常量与 JSON 事件解析 |
+| `service/DeliveryPlatformConfigService.ets` | 外卖平台 Remote Config、校验、默认值与有效缓存恢复 |
+| `service/MerchantLocationPicker.ets` | 主动商家选点与上次选点中心；不自动请求设备位置 |
+| `service/ModeFieldCache.ets` | 按账号／卡片保存两种模式的独立字段与 30 天期限 |
+| `service/PublishVisibilityStore.ets` | 按账号保存发布可见范围偏好 |
+| `service/SafeSourceLink.ets` | 外部来源链接校验 |
+| `service/DiscoveryCache.ets` | 按账号和查询保存短期结果，能力／账号／revision 变化时失效 |
+| `service/MapViewportStore.ets` | 本机地图浏览中心与缩放保存 |
+| `service/SearchHistoryStore.ets` | 本机成功搜索历史，去重并限制为 20 条 |
 | `model/CloudContracts.ets` | 用户、认证、卡片、媒体、位置与服务卡片主要 DTO |
 | `model/FriendModels.ets` | 好友、会话、私信和群聊模型 |
 | `model/NotificationModels.ets` | 通知项、分页、已读和目标响应模型 |
+| `model/DiscoveryModels.ets` | 地图、区域、搜索、排序、分页和覆盖状态 DTO |
+| `model/MerchantModels.ets` | 商家、坐标系、审核状态、选点和外卖平台配置 DTO |
+| `model/PublishingModels.ets` | 11 分类、旧分类桥接、整数分／未知金额输入转换 |
 | `model/CardPrice.ets`、`model/TasteScore.ets` | 价格和口味评分展示语义 |
 | `mapper/CloudCardViewMapper.ets` | 云卡片转 ReviewCard 展示数据，统一价格/时间/评分等文案 |
 | `components/review/ReviewDisplay.ets` | 评价卡、食物标签、价格/证据徽标和共用卡片布局 |
@@ -153,11 +168,11 @@ CloudProgram/
 
 每个目录均有 `runtime.js`（实际 JS 实现）、`function-config.json`（类型/handler/超时/鉴权）、`package.json` 与 `package-lock.json`（该对象独立依赖）、`tsconfig.json`（CommonJS 入口编译）。TS 导出负责包装响应，部署包必须带相邻 runtime 和生产依赖。media 另有 `check-deployment.mjs`供成员预检源码包/解包产物。
 
-service/media/location 各带一致的 `content-policy.js`，service 另带 `stage1-services.js`，部署时这些模块必须与 runtime 同包。`CloudProgram/scripts/package-cloud-object.mjs` 为部署成员准备编译入口、随包 JS 模块和独立依赖；不会自动部署 AGC。
+service/media/location 各带一致的 `content-policy.js`，service 另带 `stage1-services.js`（审核／任务／迁移）、`stage2-services.js`（发布／商家／计数）、`stage3-services.js`（地图／搜索／查询门槛）；部署时这些模块必须与 runtime 同包。`CloudProgram/scripts/package-cloud-object.mjs` 为部署成员准备编译入口、随包 JS 模块和独立依赖；不会自动部署 AGC。
 
 环境变量名称、用途及团队配置流程见云端指南；秘密只保存在 AGC 配置或团队约定的安全渠道。
 
-## CloudProgram：二十四个当前数据库对象
+## CloudProgram：二十五个当前数据库对象
 
 均位于 `CloudProgram/clouddb/objecttype/<对象名>.json`，包含字段、主键、索引和权限。
 
@@ -165,6 +180,7 @@ service/media/location 各带一致的 `content-policy.js`，service 另带 `sta
 | --- | --- |
 | UserProfile | 用户资料、食刻号、头像/头图媒体引用 |
 | FoodCard | 商品、价格、口味、E3 发布位置、归属和公开状态 |
+| Merchant | 商家来源、坐标系、审核、地图资格与三类公开推荐计数 |
 | CardMedia | 媒体归属/卡片关联、对象路径、摘要、尺寸与状态 |
 | Report | 卡片举报与下架治理 |
 | CardAction | 旧 LIKE 兼容与独立收藏关系 |
@@ -203,7 +219,7 @@ service/media/location 各带一致的 `content-policy.js`，service 另带 `sta
 以下按当前源码重新生成，排除依赖、构建产物、缓存、日志和本地配置。克隆 GitHub 仓库可获得下列文件；首次需补齐的两个 AGC 配置路径单独列在末尾。
 
 <details>
-<summary>Application：141 个文件</summary>
+<summary>Application：161 个文件</summary>
 
 ```text
 Application/.gitignore
@@ -238,20 +254,27 @@ Application/entry/oh-package-lock.json5
 Application/entry/oh-package.json5
 Application/entry/src/main/ets/common/BreakpointSystem.ets
 Application/entry/src/main/ets/common/ErrorKit.ets
+Application/entry/src/main/ets/components/DiscoveryCard.ets
+Application/entry/src/main/ets/components/DiscoveryMap.ets
 Application/entry/src/main/ets/components/FoodCover.ets
+Application/entry/src/main/ets/components/MerchantRecommendationSheet.ets
 Application/entry/src/main/ets/components/review/ReviewDisplay.ets
 Application/entry/src/main/ets/components/social/SocialDisplay.ets
 Application/entry/src/main/ets/entryability/EntryAbility.ets
 Application/entry/src/main/ets/mapper/CloudCardViewMapper.ets
 Application/entry/src/main/ets/model/CardPrice.ets
 Application/entry/src/main/ets/model/CloudContracts.ets
+Application/entry/src/main/ets/model/DiscoveryModels.ets
 Application/entry/src/main/ets/model/FriendModels.ets
+Application/entry/src/main/ets/model/MerchantModels.ets
 Application/entry/src/main/ets/model/NotificationModels.ets
+Application/entry/src/main/ets/model/PublishingModels.ets
 Application/entry/src/main/ets/model/TasteScore.ets
 Application/entry/src/main/ets/pages/CardDetailPage.ets
 Application/entry/src/main/ets/pages/CardHistoryPage.ets
 Application/entry/src/main/ets/pages/ChatPage.ets
 Application/entry/src/main/ets/pages/CreateCardPage.ets
+Application/entry/src/main/ets/pages/DiscoveryFeed.ets
 Application/entry/src/main/ets/pages/FavoriteCardsPage.ets
 Application/entry/src/main/ets/pages/FriendProfilePage.ets
 Application/entry/src/main/ets/pages/FriendSearchPage.ets
@@ -265,8 +288,11 @@ Application/entry/src/main/ets/pages/ProfileSubPages.ets
 Application/entry/src/main/ets/pages/RankingPage.ets
 Application/entry/src/main/ets/pages/ReceivedCommentsPage.ets
 Application/entry/src/main/ets/pages/ShareCardPage.ets
+Application/entry/src/main/ets/repository/CardEditRepository.ets
 Application/entry/src/main/ets/repository/CardRepository.ets
+Application/entry/src/main/ets/repository/DiscoveryRepository.ets
 Application/entry/src/main/ets/repository/FriendRepository.ets
+Application/entry/src/main/ets/repository/MerchantRepository.ets
 Application/entry/src/main/ets/repository/NotificationRepository.ets
 Application/entry/src/main/ets/service/AuthService.ets
 Application/entry/src/main/ets/service/AuthSessionStore.ets
@@ -274,14 +300,22 @@ Application/entry/src/main/ets/service/CardAppLink.ets
 Application/entry/src/main/ets/service/CardVisitStore.ets
 Application/entry/src/main/ets/service/CloudGateway.ets
 Application/entry/src/main/ets/service/ContinuationState.ets
+Application/entry/src/main/ets/service/DeliveryPlatformConfigService.ets
+Application/entry/src/main/ets/service/DiscoveryCache.ets
 Application/entry/src/main/ets/service/FriendRankingPreloadService.ets
 Application/entry/src/main/ets/service/ImagePreparationService.ets
 Application/entry/src/main/ets/service/LocationService.ets
+Application/entry/src/main/ets/service/MapViewportStore.ets
+Application/entry/src/main/ets/service/MerchantLocationPicker.ets
+Application/entry/src/main/ets/service/ModeFieldCache.ets
 Application/entry/src/main/ets/service/NearbyPerformanceTrace.ets
 Application/entry/src/main/ets/service/NearbyPreloadService.ets
 Application/entry/src/main/ets/service/PhotoUploadService.ets
 Application/entry/src/main/ets/service/PrivacyStore.ets
+Application/entry/src/main/ets/service/PublishVisibilityStore.ets
 Application/entry/src/main/ets/service/PushNotificationService.ets
+Application/entry/src/main/ets/service/SafeSourceLink.ets
+Application/entry/src/main/ets/service/SearchHistoryStore.ets
 Application/entry/src/main/ets/service/ServiceCardCoverCache.ets
 Application/entry/src/main/ets/service/ServiceCardInteraction.ets
 Application/entry/src/main/ets/service/ServiceCardRemoteSyncService.ets
@@ -322,6 +356,8 @@ Application/entry/src/main/resources/base/media/ic_send.svg
 Application/entry/src/main/resources/base/media/ic_service_card_chevron.svg
 Application/entry/src/main/resources/base/media/ic_service_card_photo.svg
 Application/entry/src/main/resources/base/media/ic_service_card_refresh.svg
+Application/entry/src/main/resources/base/media/map_marker.svg
+Application/entry/src/main/resources/base/media/map_marker_selected.svg
 Application/entry/src/main/resources/base/media/nav_create.svg
 Application/entry/src/main/resources/base/media/nav_friends.svg
 Application/entry/src/main/resources/base/media/nav_profile.svg
@@ -352,7 +388,7 @@ Application/scripts/summarize_preload_metrics.py
 </details>
 
 <details>
-<summary>CloudProgram：59 个文件</summary>
+<summary>CloudProgram：62 个文件</summary>
 
 ```text
 CloudProgram/AppScope/resources/rawfile/schema.json
@@ -376,6 +412,7 @@ CloudProgram/clouddb/objecttype/GroupMember.json
 CloudProgram/clouddb/objecttype/GroupMessage.json
 CloudProgram/clouddb/objecttype/IdentityBinding.json
 CloudProgram/clouddb/objecttype/MaintenanceJob.json
+CloudProgram/clouddb/objecttype/Merchant.json
 CloudProgram/clouddb/objecttype/NotificationEvent.json
 CloudProgram/clouddb/objecttype/PublishRequestRecord.json
 CloudProgram/clouddb/objecttype/PushRegistration.json
@@ -410,6 +447,8 @@ CloudProgram/cloudfunctions/shike-service/package.json
 CloudProgram/cloudfunctions/shike-service/runtime.js
 CloudProgram/cloudfunctions/shike-service/shikeService.ts
 CloudProgram/cloudfunctions/shike-service/stage1-services.js
+CloudProgram/cloudfunctions/shike-service/stage2-services.js
+CloudProgram/cloudfunctions/shike-service/stage3-services.js
 CloudProgram/cloudfunctions/shike-service/tsconfig.json
 CloudProgram/package-lock.json
 CloudProgram/package.json

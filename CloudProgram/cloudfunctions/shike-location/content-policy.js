@@ -66,7 +66,7 @@ FoodCard.fieldTypes = Object.freeze({
   searchTextNormalized: 'Text'
 });
 FoodCard.primaryKeys = Object.freeze(['id']);
-FoodCard.indexes = Object.freeze(['status,createdAt,id', 'status,category,createdAt,id', 'ownerUid,createdAt', 'ownerUid,status,createdAt', 'status,latE3,lonE3,createdAt', 'status,createdAt', 'ownerUid,status,tasteScore,createdAt']);
+FoodCard.indexes = Object.freeze(["status,createdAt,id", "status,category,createdAt,id", "ownerUid,createdAt", "ownerUid,status,createdAt", "status,latE3,lonE3,createdAt", "status,createdAt", "ownerUid,status,tasteScore,createdAt", "merchantId,id", "ownerUid,merchantId,id", "visibility,status,publishedAt,id", "visibility,status,tasteScore,publishedAt,id", "visibility,status,queryPriceFen,publishedAt,id", "visibility,status,queryPriceFen,publishedAt,id", "merchantId,visibility,status,publishedAt,id"]);
 
 class UserProfile extends PolicyDbModel {}
 UserProfile.fieldTypes = Object.freeze({
@@ -135,6 +135,7 @@ FoodCardRevision.fieldTypes = Object.freeze({
   "authorUid": "String",
   "baseModifiedAt": "Date",
   "baseLifecycleGeneration": "Long",
+  "requestPayloadHash": "String",
   "payloadJson": "Text",
   "mediaManifestJson": "Text",
   "status": "String",
@@ -143,7 +144,7 @@ FoodCardRevision.fieldTypes = Object.freeze({
   "reviewReason": "String"
 });
 FoodCardRevision.primaryKeys = Object.freeze(["revisionId"]);
-FoodCardRevision.indexes = Object.freeze(["cardId,status,submittedAt,revisionId", "authorUid,submittedAt,revisionId", "status,submittedAt,revisionId"]);
+FoodCardRevision.indexes = Object.freeze(["cardId,status,submittedAt,revisionId", "authorUid,submittedAt,revisionId", "status,submittedAt,revisionId", "cardId,submittedAt,revisionId"]);
 
 const policyModels = Object.freeze({ FoodCard, UserProfile, Friendship, FriendContentAccessGrant, IdentityBinding, FoodCardRevision });
 

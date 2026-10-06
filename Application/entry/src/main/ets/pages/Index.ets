@@ -69,6 +69,7 @@ struct Index {
   @State profile: UserProfile | undefined = undefined;
   @State profileRevision: number = 0;
   @State recommendationRevision: number = 0;
+  @StorageLink('contentMutationRevision') @Watch('onContentMutation') contentMutationRevision: number = 0;
   @StorageLink('friendRelationshipRevision') @Watch('onFriendRelationshipChanged') friendRelationshipRevision: number = 0;
   @State selectedTab: number = 0;
   @State sharedLinkMessage: string = '';
@@ -579,7 +580,11 @@ struct Index {
     FriendRankingPreloadService.invalidate();
     this.recommendationRevision += 1;
     this.profileRevision += 1;
-    this.selectTab(0);
+  }
+
+  private onContentMutation(): void {
+    NearbyPreloadService.invalidate(); FriendRankingPreloadService.invalidate();
+    this.recommendationRevision += 1; this.profileRevision += 1;
   }
 
   private onFriendRelationshipChanged(): void {
@@ -1038,7 +1043,7 @@ struct Index {
               })
             }.tabBar('好友')
             TabContent() {
-              CreateCardPage({ onPublished: (): void => this.cardPublished() })
+              CreateCardPage({ accountUid: this.profile === undefined ? '' : this.profile.uid, onPublished: (): void => this.cardPublished() })
             }.tabBar('制作')
           }
           TabContent() {

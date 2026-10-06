@@ -22,14 +22,21 @@ export class MediaServiceUnavailableError extends Error {
   }
 }
 
+export class CloudBusinessError extends Error {
+  code: string;
+  constructor(message: string, code: string) { super(message); this.name = 'CloudBusinessError'; this.code = code; }
+}
+
 interface ApiResponse<T> {
   ok: boolean;
+  code?: string;
   data: T;
   message: string;
 }
 
 interface CloudObjectResponse {
   ok: boolean;
+  code?: string;
   data: object;
   message: string;
 }
@@ -91,20 +98,29 @@ export class CloudGateway {
       ? matchedModule[1].replace(/[A-Za-z0-9_+=-]{48,}/g, '[redacted]')
         .replace(/[^A-Za-z0-9@./_:+\[\]-]/g, '?').slice(0, 160)
       : 'not-provided';
+    let reason: string = 'handler-error';
+    if (missingModule !== 'not-provided') reason = 'module-not-found';
+    else if (message.includes('Invalid package config') || message.includes('ERR_INVALID_PACKAGE_CONFIG')) reason = 'invalid-package-config';
+    else if (message.includes('Cannot read properties') || message.includes('Cannot set properties')) reason = 'invalid-receiver-or-property';
+    else if (message.includes('is not a function')) reason = 'not-callable';
+    else if (message.includes('is not defined')) reason = 'undefined-name';
+    else if (message.includes('SyntaxError')) reason = 'syntax-error';
     console.error('[MediaService] diagnostic; source=' + source + '; cloudObject=' + cloudObjectName +
-      '; version=$latest; operation=' + operation + '; code=' + code + '; missingModule=' + missingModule);
+      '; version=$latest; operation=' + operation + '; code=' + code + '; missingModule=' + missingModule +
+      '; reason=' + reason);
   }
 
-  private static isMediaHandlerModuleError(message: string): boolean {
+  private static isMediaHandlerLoadError(message: string): boolean {
     return message.includes('Call handler error') &&
-      (message.includes('Cannot find module') || message.includes('Cannot find package'));
+      (message.includes('Cannot find module') || message.includes('Cannot find package') ||
+        message.includes('Invalid package config') || message.includes('ERR_INVALID_PACKAGE_CONFIG'));
   }
 
   private static openMediaCircuit(operation: MediaOperation, generation: number): MediaServiceUnavailableError {
     if (generation === CloudGateway.mediaCircuitGeneration) {
       const wasOpen: boolean = CloudGateway.isMediaServiceUnavailable();
       CloudGateway.mediaCircuitOpenUntilMs = Date.now() + MEDIA_CIRCUIT_BREAK_MS;
-      if (!wasOpen) console.error('[MediaService] handler module load failed; operation=' + operation + '.');
+      if (!wasOpen) console.error('[MediaService] handler initialization failed; operation=' + operation + '.');
     }
     return new MediaServiceUnavailableError();
   }
@@ -124,7 +140,7 @@ export class CloudGateway {
         CloudGateway.logMediaHandlerError(operation, 'cloud-call', 'shike-media', message,
           CloudGateway.cloudHandlerCode(error as Object));
       }
-      if (CloudGateway.isMediaHandlerModuleError(message)) {
+      if (CloudGateway.isMediaHandlerLoadError(message)) {
         throw CloudGateway.openMediaCircuit(operation, generation);
       }
       if (message.includes('Call handler error')) {
@@ -187,6 +203,18 @@ export class CloudGateway {
     const mediaGeneration: number = CloudGateway.mediaCircuitGeneration;
     let raw: CloudObjectResponse | undefined = undefined;
     switch (name) {
+      case 'get-discovery-capabilities':
+        raw = await (CloudGateway.serviceObject as ShikeService).getDiscoveryCapabilities(envelope);
+        break;
+      case 'list-map-merchants':
+        raw = await (CloudGateway.serviceObject as ShikeService).listMapMerchants(envelope);
+        break;
+      case 'search-public-cards':
+        raw = await (CloudGateway.serviceObject as ShikeService).searchPublicCards(envelope);
+        break;
+      case 'get-merchant-recommendations':
+        raw = await (CloudGateway.serviceObject as ShikeService).getMerchantRecommendations(envelope);
+        break;
       case 'exchange-huawei-account':
         raw = await (CloudGateway.authObject as ShikeAuth).exchangeHuaweiAccount(envelope);
         break;
@@ -229,6 +257,33 @@ export class CloudGateway {
       case 'publish-cards':
         // Keep both spellings during rollout for older installed packages.
         raw = await (CloudGateway.serviceObject as ShikeService).publishCard(envelope);
+        break;
+      case 'get-stage2-capabilities':
+        raw = await (CloudGateway.serviceObject as ShikeService).getStage2Capabilities(envelope);
+        break;
+      case 'resolve-merchant':
+        raw = await (CloudGateway.serviceObject as ShikeService).resolveMerchant(envelope);
+        break;
+      case 'create-user-merchant':
+        raw = await (CloudGateway.serviceObject as ShikeService).createUserMerchant(envelope);
+        break;
+      case 'update-user-merchant':
+        raw = await (CloudGateway.serviceObject as ShikeService).updateUserMerchant(envelope);
+        break;
+      case 'get-merchant':
+        raw = await (CloudGateway.serviceObject as ShikeService).getMerchant(envelope);
+        break;
+      case 'list-moderation-merchants':
+        raw = await (CloudGateway.serviceObject as ShikeService).listModerationMerchants(envelope);
+        break;
+      case 'moderate-merchant':
+        raw = await (CloudGateway.serviceObject as ShikeService).moderateMerchant(envelope);
+        break;
+      case 'reconcile-merchant-counters':
+        raw = await (CloudGateway.serviceObject as ShikeService).reconcileMerchantCounters(envelope);
+        break;
+      case 'get-card-edit-context':
+        raw = await (CloudGateway.serviceObject as ShikeService).getCardEditContext(envelope);
         break;
       case 'get-card-detail':
         raw = await (CloudGateway.serviceObject as ShikeService).getCardDetail(envelope);
@@ -407,16 +462,16 @@ export class CloudGateway {
         const cloudObjectName: MediaCloudObjectName = name === 'get-public-media' && !authenticated
           ? 'shike-service' : 'shike-media';
         CloudGateway.logMediaHandlerError(mediaOperation, 'business-response', cloudObjectName, message,
-          'not-returned');
+          decoded.code === undefined ? 'not-returned' : decoded.code);
       }
-      if (mediaOperation !== undefined && CloudGateway.isMediaHandlerModuleError(message)) {
+      if (mediaOperation !== undefined && CloudGateway.isMediaHandlerLoadError(message)) {
         throw CloudGateway.openMediaCircuit(mediaOperation, mediaGeneration);
       }
       if (mediaOperation !== undefined && message.includes('Call handler error')) {
         console.error('[MediaService] handler returned an error; operation=' + mediaOperation + '.');
         throw new Error('实拍图服务处理请求失败，请稍后重试。');
       }
-      throw new Error(message);
+      throw new CloudBusinessError(message, decoded.code === undefined ? 'REQUEST_FAILED' : decoded.code);
     }
     return decoded.data;
   }

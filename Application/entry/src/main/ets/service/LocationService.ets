@@ -1,5 +1,6 @@
 import { abilityAccessCtrl, common, Permissions } from '@kit.AbilityKit';
 import { geoLocationManager } from '@kit.LocationKit';
+import { map, mapCommon } from '@kit.MapKit';
 import { RoundedLocation } from '../model/CloudContracts';
 import { NearbyPerformanceTrace } from './NearbyPerformanceTrace';
 
@@ -35,7 +36,7 @@ export class LocationService {
     const permissionResult = await manager.requestPermissionsFromUser(context, LOCATION_PERMISSIONS);
     if (permissionResult.authResults.length !== 2 || permissionResult.authResults[0] !== 0 ||
       permissionResult.authResults[1] !== 0) {
-      throw new Error('食刻需要同时获得模糊位置和精确位置授权，才能加载附近推荐或发布卡片。');
+      throw new Error('定位到我需要模糊位置和精确位置授权；未授权仍可手动浏览地图。');
     }
   }
 
@@ -45,6 +46,23 @@ export class LocationService {
       lonE3: location.lonE3,
       district: location.district
     };
+  }
+
+  /** Called only after the user confirms the map location action. No cloud write or persistent location cache. */
+  static async getMapLocation(context: common.UIAbilityContext): Promise<mapCommon.LatLng> {
+    await LocationService.ensureFullLocationPermission(context);
+    if (!geoLocationManager.isLocationEnabled()) throw new Error('定位服务未开启，仍可手动浏览地图。');
+    const request: geoLocationManager.SingleLocationRequest = {
+      locatingPriority: geoLocationManager.LocatingPriority.PRIORITY_ACCURACY, locatingTimeoutMs: 10000
+    };
+    const location: geoLocationManager.Location = await geoLocationManager.getCurrentLocation(request);
+    const point: mapCommon.LatLng = { latitude: location.latitude, longitude: location.longitude };
+    const coordinate: mapCommon.CoordinateLatLng = { coordinateType: mapCommon.CoordinateType.WGS84, location: point };
+    const adapted: Array<mapCommon.CoordinateLatLng> = await map.rectifyCoordinate(context, [coordinate]);
+    if (adapted.length !== 1 || adapted[0].coordinateType !== mapCommon.CoordinateType.GCJ02) {
+      throw new Error('当前地图查询仅支持已验证的 GCJ02 地区，请手动浏览默认区域。');
+    }
+    return adapted[0].location;
   }
 
   private static clearFastLocationCache(): void {

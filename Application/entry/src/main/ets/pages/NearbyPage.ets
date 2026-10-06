@@ -1,5 +1,5 @@
 import { common } from '@kit.AbilityKit';
-import { FoodCard, FoodCategory } from '../model/CloudContracts';
+import { FoodCard, FoodCategory, UserProfile } from '../model/CloudContracts';
 import { CardRepository } from '../repository/CardRepository';
 import { NearbyPreloadService } from '../service/NearbyPreloadService';
 import { NearbyPerformanceTrace, PreloadMetricState } from '../service/NearbyPerformanceTrace';
@@ -10,6 +10,11 @@ import { ServiceCardStore } from '../service/ServiceCardStore';
 import { ServiceCardRemoteSyncService } from '../service/ServiceCardRemoteSyncService';
 import { ErrorDetail, errorText } from '../common/ErrorKit';
 import { BreakpointSystem, LayoutBreakpoint } from '../common/BreakpointSystem';
+import { DiscoveryCapabilities, emptyCapabilities } from '../model/DiscoveryModels';
+import { DiscoveryRepository } from '../repository/DiscoveryRepository';
+import { DiscoveryCache } from '../service/DiscoveryCache';
+import { AuthService } from '../service/AuthService';
+import { DiscoveryFeed } from './DiscoveryFeed';
 
 interface CategoryOption {
   value: string;
@@ -45,7 +50,11 @@ export struct NearbyPage {
   @State waterfallWidthVp: number = 0;
   onOpenCard: (card: FoodCard) => void = (_card: FoodCard): void => {};
   @Prop @Watch('onRevisionChanged') revision: number = 0;
-  @Prop loggedIn: boolean = false;
+  @Prop @Watch('onAccountChanged') loggedIn: boolean = false;
+  @State discoveryCapabilities: DiscoveryCapabilities = emptyCapabilities();
+  private discoveryRepository: DiscoveryRepository = new DiscoveryRepository();
+  private capabilityGeneration: number = 0;
+  private pageActive: boolean = false;
   @State cards: Array<NearbyCardEntry> = [];
   @State status: string = '展示全部公开推荐，无需定位。';
   @State selectedCategory: string = 'all';
@@ -70,11 +79,14 @@ export struct NearbyPage {
   private firstCoverIds: Set<string> = new Set<string>();
 
   aboutToAppear(): void {
+    this.pageActive = true;
+    void this.loadDiscoveryCapabilities();
     PhotoUploadService.retryMediaService();
     void this.refresh();
   }
 
   aboutToDisappear(): void {
+    this.pageActive = false; this.capabilityGeneration++;
     this.finishFirstCover('cancelled');
     this.refreshGeneration += 1;
     this.photoHydrationGeneration = this.refreshGeneration;
@@ -106,9 +118,47 @@ export struct NearbyPage {
   }
 
   private onRevisionChanged(): void {
+    DiscoveryCache.clear();
+    void this.loadDiscoveryCapabilities();
     if (this.revision > 0) {
-      this.refresh();
+      if (!this.discoveryCapabilities.searchEnabled && !this.discoveryCapabilities.mapEnabled) this.refresh();
     }
+  }
+
+  private onAccountChanged(): void {
+    DiscoveryCache.clear(); this.discoveryCapabilities = emptyCapabilities();
+    this.refreshGeneration++; this.loading = false; this.loadingMore = false;
+    if (this.pageActive) { void this.loadDiscoveryCapabilities(); void this.refresh(false, true); }
+  }
+  private async loadDiscoveryCapabilities(): Promise<void> {
+    const generation: number = ++this.capabilityGeneration;
+    const profile: UserProfile | undefined = AuthService.profile(); const uid: string = profile === undefined ? '' : profile.uid;
+    try {
+      const capabilities: DiscoveryCapabilities = await this.discoveryRepository.capabilities();
+      const currentProfile: UserProfile | undefined = AuthService.profile();
+      if (!this.pageActive || generation !== this.capabilityGeneration || uid !== (currentProfile === undefined ? '' : currentProfile.uid)) return;
+      const wasEnabled: boolean = this.discoveryCapabilities.searchEnabled || this.discoveryCapabilities.mapEnabled;
+      if (this.discoveryCapabilities.searchEnabled !== capabilities.searchEnabled || this.discoveryCapabilities.mapEnabled !== capabilities.mapEnabled ||
+        this.discoveryCapabilities.searchReason !== capabilities.searchReason || this.discoveryCapabilities.mapReason !== capabilities.mapReason) this.discoveryCapabilities = capabilities;
+      if (!wasEnabled && (capabilities.searchEnabled || capabilities.mapEnabled)) {
+        this.refreshGeneration++; this.finishFirstCover('cancelled'); this.loading = false; this.loadingMore = false;
+        this.refreshQueued = false; this.refreshQueuedForRemoteSync = false; this.pendingServiceCard = undefined; this.pendingServiceCardRemoteSync = false;
+      } else if (wasEnabled && !capabilities.searchEnabled && !capabilities.mapEnabled) {
+        this.loading = false; this.loadingMore = false; void this.refresh(false, true);
+      }
+    } catch (_error) {
+      // A missing deployment or unavailable capability endpoint retains the existing list.
+      const currentProfile: UserProfile | undefined = AuthService.profile();
+      if (this.pageActive && generation === this.capabilityGeneration && uid === (currentProfile === undefined ? '' : currentProfile.uid)) {
+        const wasEnabled: boolean = this.discoveryCapabilities.searchEnabled || this.discoveryCapabilities.mapEnabled;
+        this.discoveryCapabilities = emptyCapabilities();
+        if (wasEnabled) { this.loading = false; this.loadingMore = false; void this.refresh(false, true); }
+      }
+    }
+  }
+  private discoveryUnavailable(): void {
+    DiscoveryCache.clear(); this.discoveryCapabilities = emptyCapabilities();
+    this.loading = false; this.loadingMore = false; void this.refresh(false, true);
   }
 
   private visibleCards(): Array<NearbyCardEntry> {
@@ -503,6 +553,14 @@ export struct NearbyPage {
   }
 
   build() {
+    Stack() {
+    if (this.discoveryCapabilities.searchEnabled || this.discoveryCapabilities.mapEnabled) {
+      DiscoveryFeed({ capabilities: this.discoveryCapabilities, revision: this.revision,
+        onPrimaryCard: (card: FoodCard, remoteSync: boolean): void => {
+          if (this.pageActive) this.enqueueServiceCardSync(this.getUIContext().getHostContext() as common.UIAbilityContext,
+            card, remoteSync, this.refreshGeneration);
+        }, onOpenCard: (card: FoodCard): void => this.onOpenCard(card), onUnavailable: (): void => this.discoveryUnavailable() })
+    } else {
     Column({ space: 14 }) {
       Row() {
         Column({ space: 4 }) {
@@ -571,5 +629,7 @@ export struct NearbyPage {
       right: BreakpointSystem.pagePadding(this.windowBreakpoint), top: 18, bottom: 6
     })
     .backgroundColor($r('app.color.canvas')).alignItems(HorizontalAlign.Start)
+    }
+    }.width('100%').height('100%')
   }
 }

@@ -4,6 +4,8 @@ const crypto = require('crypto');
 const ACCOUNT_TOKEN_URL = 'https://oauth-login.cloud.huawei.com/oauth2/v3/token';
 const ACCOUNT_TOKEN_INFO_URL =
   'https://oauth-api.cloud.huawei.com/rest.php?nsp_fmt=JSON&nsp_svc=huawei.oauth2.user.getTokenInfo';
+const AUTH_REQUEST_TIMEOUT_MS = 8000;
+const AUTH_FLOW_TIMEOUT_MS = 22000;
 
 function required(env, name) {
   const value = env[name] || process.env[name];
@@ -49,19 +51,52 @@ function validateTokenBinding(idToken, clientId, nonce) {
   return claims;
 }
 
-async function parseJsonResponse(response, failureMessage) {
-  const text = await response.text();
-  let body = {};
-  try {
-    body = text ? JSON.parse(text) : {};
-  } catch (_error) {
-    throw new Error(failureMessage);
-  }
-  if (!response.ok) throw new Error(failureMessage);
-  return body;
+function authRequestError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
 }
 
-async function accountTokenInfo(accessToken, expectedClientId = '') {
+async function requestAuthJson(url, options, stage, stageLabel, deadlineAt) {
+  const timeoutMs = Math.min(AUTH_REQUEST_TIMEOUT_MS, deadlineAt - Date.now());
+  if (timeoutMs <= 0) {
+    console.error(`[HuaweiAuth] stage=${stage}; code=AUTH_UPSTREAM_TIMEOUT; status=not-received`);
+    throw authRequestError('AUTH_UPSTREAM_TIMEOUT', `${stageLabel}超时，请重新发起华为登录。`);
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let status = 0;
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    status = response.status;
+    if (!response.ok) {
+      throw authRequestError('AUTH_UPSTREAM_HTTP_ERROR', `${stageLabel}失败（HTTP ${status}）。`);
+    }
+    const text = await response.text();
+    let body;
+    try { body = JSON.parse(text); } catch (_error) {
+      throw authRequestError('AUTH_UPSTREAM_INVALID_RESPONSE', `${stageLabel}返回格式无效。`);
+    }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      throw authRequestError('AUTH_UPSTREAM_INVALID_RESPONSE', `${stageLabel}返回格式无效。`);
+    }
+    return body;
+  } catch (error) {
+    let failure = error;
+    if (controller.signal.aborted) {
+      failure = authRequestError('AUTH_UPSTREAM_TIMEOUT', `${stageLabel}超时，请重新发起华为登录。`);
+    } else if (!error || typeof error.code !== 'string' || !error.code.startsWith('AUTH_UPSTREAM_')) {
+      failure = authRequestError('AUTH_UPSTREAM_NETWORK_ERROR', `${stageLabel}连接失败，请稍后重新登录。`);
+    }
+    // Record the phase and status, never authorization codes, tokens or bodies.
+    console.error(`[HuaweiAuth] stage=${stage}; code=${failure.code}; status=${status || 'not-received'}`);
+    throw failure;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function accountTokenInfo(accessToken, expectedClientId, deadlineAt) {
   if (!accessToken || String(accessToken).length > 8192) {
     throw new Error('华为账号用户凭证为空或格式不正确。');
   }
@@ -69,12 +104,11 @@ async function accountTokenInfo(accessToken, expectedClientId = '') {
     access_token: String(accessToken),
     open_id: 'OPENID'
   });
-  const response = await fetch(ACCOUNT_TOKEN_INFO_URL, {
+  const result = await requestAuthJson(ACCOUNT_TOKEN_INFO_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: parameters.toString()
-  });
-  const result = await parseJsonResponse(response, '华为账号用户凭证校验请求失败。');
+  }, 'ACCOUNT_TOKEN_INFO', '华为账号用户凭证校验', deadlineAt);
   const expiresIn = Number(result.expire_in);
   const uid = String(result.union_id || result.open_id || '');
   if (result.error || Number(result.type) !== 0 || !uid || !Number.isFinite(expiresIn) || expiresIn <= 0 ||
@@ -84,9 +118,9 @@ async function accountTokenInfo(accessToken, expectedClientId = '') {
   return { uid, expiresIn, scope: String(result.scope || '') };
 }
 
-async function clientApiToken(env) {
+async function clientApiToken(env, deadlineAt) {
   const base = env.SHIKE_AGC_AUTH_BASE || process.env.SHIKE_AGC_AUTH_BASE || 'https://connect-drcn.dbankcloud.cn';
-  const response = await fetch(`${base}/agc/apigw/oauth2/v1/token`, {
+  const body = await requestAuthJson(`${base}/agc/apigw/oauth2/v1/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -95,32 +129,31 @@ async function clientApiToken(env) {
       client_secret: required(env, 'SHIKE_AGC_CLIENT_SECRET'),
       useJwt: 1
     })
-  });
-  const body = await response.json();
-  if (!response.ok || !body.access_token) throw new Error('AGC 客户端鉴权失败。');
+  }, 'AGC_CLIENT_TOKEN', 'AGC 客户端鉴权', deadlineAt);
+  if (!body.access_token) throw new Error('AGC 客户端鉴权失败。');
   return String(body.access_token);
 }
 
-async function agcAuthRequest(env, path, body, userAccessToken = '') {
+async function agcAuthRequest(env, path, body, userAccessToken, deadlineAt) {
   const base = env.SHIKE_AGC_AUTH_BASE || process.env.SHIKE_AGC_AUTH_BASE || 'https://connect-drcn.dbankcloud.cn';
-  const apiToken = await clientApiToken(env);
+  const apiToken = await clientApiToken(env, deadlineAt);
   const headers = {
     'Content-Type': 'application/json',
     client_id: required(env, 'SHIKE_AGC_CLIENT_ID'),
     Authorization: `Bearer ${apiToken}`
   };
   if (userAccessToken) headers.access_token = userAccessToken;
-  const response = await fetch(`${base}${path}?productId=${encodeURIComponent(required(env, 'SHIKE_AGC_PROJECT_ID'))}`, {
+  const result = await requestAuthJson(`${base}${path}?productId=${encodeURIComponent(required(env, 'SHIKE_AGC_PROJECT_ID'))}`, {
     method: 'POST',
     headers,
     body: JSON.stringify(body)
-  });
-  const result = await response.json();
+  }, userAccessToken ? 'AGC_USER_LINK' : 'AGC_USER_SIGN_IN',
+  userAccessToken ? 'AGC 华为账号关联' : 'AGC 华为账号会话创建', deadlineAt);
   let ret = result.ret;
   if (typeof ret === 'string') {
     try { ret = JSON.parse(ret); } catch (_error) { ret = null; }
   }
-  if (!response.ok || !ret || Number(ret.code) !== 0) {
+  if (!ret || Number(ret.code) !== 0) {
     throw new Error(ret && ret.msg ? String(ret.msg) : 'AGC 认证请求失败。');
   }
   return result;
@@ -172,7 +205,7 @@ function issueIdentityTicket(legacyUid, agcUid, env) {
   return `v1.${base64Url(iv)}.${base64Url(ciphertext)}.${base64Url(tag)}`;
 }
 
-async function obtainHuaweiAccountIdentity(payload, env) {
+async function obtainHuaweiAccountIdentity(payload, env, deadlineAt) {
   const authorizationCode = String(payload.authorizationCode || '');
   const nonce = String(payload.nonce || '');
   if (!authorizationCode || authorizationCode.length > 4096 || !nonce || nonce.length > 255) {
@@ -187,17 +220,16 @@ async function obtainHuaweiAccountIdentity(payload, env) {
   });
   const redirectUri = String(env.SHIKE_ACCOUNT_REDIRECT_URI || process.env.SHIKE_ACCOUNT_REDIRECT_URI || '').trim();
   if (redirectUri) parameters.set('redirect_uri', redirectUri);
-  const response = await fetch(ACCOUNT_TOKEN_URL, {
+  const result = await requestAuthJson(ACCOUNT_TOKEN_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: parameters.toString()
-  });
-  const result = await parseJsonResponse(response, '华为账号一次性授权码交换失败，请重新登录。');
+  }, 'ACCOUNT_CODE_EXCHANGE', '华为账号一次性授权码交换', deadlineAt);
   if (!result.access_token || !result.id_token) {
     throw new Error('华为账号未返回完整的用户级凭证。');
   }
   validateTokenBinding(String(result.id_token), clientId, nonce);
-  const tokenInfo = await accountTokenInfo(String(result.access_token), clientId);
+  const tokenInfo = await accountTokenInfo(String(result.access_token), clientId, deadlineAt);
   return {
     accessToken: String(result.access_token),
     legacyUid: tokenInfo.uid,
@@ -206,14 +238,15 @@ async function obtainHuaweiAccountIdentity(payload, env) {
 }
 
 async function obtainUserCredential(payload, env) {
-  const huaweiAccount = await obtainHuaweiAccountIdentity(payload, env);
+  const deadlineAt = Date.now() + AUTH_FLOW_TIMEOUT_MS;
+  const huaweiAccount = await obtainHuaweiAccountIdentity(payload, env, deadlineAt);
   const agcResult = await agcAuthRequest(env, '/agc/apigw/oauth2/third/v1/user-signin', {
     provider: 1,
     token: huaweiAccount.accessToken,
     extraData: '',
     autoCreateUser: 1,
     useJwt: 1
-  });
+  }, '', deadlineAt);
   const accessToken = tokenValue(agcResult.accessToken);
   const userInfo = Array.isArray(agcResult.userInfo) ? agcResult.userInfo[0] : agcResult.userInfo;
   if (!accessToken.token || !userInfo || !userInfo.uid) {
@@ -239,12 +272,13 @@ async function obtainUserCredential(payload, env) {
 }
 
 async function linkHuaweiAccount(accessToken, payload, env) {
-  const huaweiAccount = await obtainHuaweiAccountIdentity(payload, env);
+  const deadlineAt = Date.now() + AUTH_FLOW_TIMEOUT_MS;
+  const huaweiAccount = await obtainHuaweiAccountIdentity(payload, env, deadlineAt);
   const result = await agcAuthRequest(env, '/agc/apigw/oauth2/third/v1/user-link', {
     provider: 1,
     token: huaweiAccount.accessToken,
     extraData: ''
-  }, requireUserAccessToken(accessToken));
+  }, requireUserAccessToken(accessToken), deadlineAt);
   const userInfo = Array.isArray(result.providerUserInfo) ? result.providerUserInfo[0] : result.providerUserInfo;
   if (!userInfo || !userInfo.uid) {
     throw new Error('AGC 未确认华为账号关联结果。');

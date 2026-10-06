@@ -83,15 +83,7 @@ FoodCard.fieldTypes = Object.freeze({
   searchTextNormalized: 'Text'
 });
 FoodCard.primaryKeys = Object.freeze(['id']);
-FoodCard.indexes = Object.freeze([
-  'status,createdAt,id',
-  'status,category,createdAt,id',
-  'ownerUid,createdAt',
-  'ownerUid,status,createdAt',
-  'status,latE3,lonE3,createdAt',
-  'status,createdAt',
-  'ownerUid,status,tasteScore,createdAt'
-]);
+FoodCard.indexes = Object.freeze(["status,createdAt,id", "status,category,createdAt,id", "ownerUid,createdAt", "ownerUid,status,createdAt", "status,latE3,lonE3,createdAt", "status,createdAt", "ownerUid,status,tasteScore,createdAt", "merchantId,id", "ownerUid,merchantId,id", "visibility,status,publishedAt,id", "visibility,status,tasteScore,publishedAt,id", "visibility,status,queryPriceFen,publishedAt,id", "visibility,status,queryPriceFen,publishedAt,id", "merchantId,visibility,status,publishedAt,id"]);
 
 function safeLogError(error) {
   const name = error && error.name ? String(error.name) : 'Error';
@@ -231,7 +223,8 @@ async function listNearbyCards(input, env) {
   const policy = contentPolicy(env);
   await policy.prepareCardReads(uid, approvedRows.filter((row) => currentVisibility(row) === 'PUBLIC'));
   for (const row of approvedRows) {
-    if (currentVisibility(row) === 'PUBLIC' && await policy.canReadCard(uid, row)) readableRows.push(row);
+    if (!row.merchantId && !['DELIVERY', 'DINE_IN'].includes(row.consumptionMode) &&
+      currentVisibility(row) === 'PUBLIC' && await policy.canReadCard(uid, row)) readableRows.push(row);
   }
   const matched = readableRows
     .map((row) => ({ row, distanceKm: haversineKm(point.latE3, point.lonE3, row.latE3, row.lonE3) }))

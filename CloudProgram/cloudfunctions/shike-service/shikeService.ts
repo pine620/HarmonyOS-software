@@ -42,6 +42,55 @@ async function executeCloudOperation(
 }
 
 export class ShikeService {
+  getDiscoveryCapabilities(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('get-discovery-capabilities', input);
+  }
+  listMapMerchants(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('list-map-merchants', input);
+  }
+  searchPublicCards(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('search-public-cards', input);
+  }
+  getMerchantRecommendations(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('get-merchant-recommendations', input);
+  }
+  getStage2Capabilities(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('get-stage2-capabilities', input);
+  }
+
+  resolveMerchant(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('resolve-merchant', input);
+  }
+
+  createUserMerchant(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('create-user-merchant', input);
+  }
+
+  updateUserMerchant(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('update-user-merchant', input);
+  }
+
+  getMerchant(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('get-merchant', input);
+  }
+
+  listModerationMerchants(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('list-moderation-merchants', input);
+  }
+
+  moderateMerchant(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('moderate-merchant', input);
+  }
+
+  reconcileMerchantCounters(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('reconcile-merchant-counters', input);
+  }
+
+  getCardEditContext(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('get-card-edit-context', input);
+  }
+
+
   getRevisionMedia(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('get-revision-media', input);
   }

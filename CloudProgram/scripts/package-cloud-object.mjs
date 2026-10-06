@@ -1,5 +1,6 @@
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { builtinModules, createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -12,7 +13,7 @@ const definitions = {
   'shike-auth': { entry: 'shikeAuth', className: 'ShikeAuth', modules: ['runtime.js'] },
   'shike-media': { entry: 'shikeMedia', className: 'ShikeMedia', modules: ['runtime.js', 'content-policy.js'] },
   'shike-service': { entry: 'shikeService', className: 'ShikeService',
-    modules: ['runtime.js', 'content-policy.js', 'stage1-services.js'] },
+    modules: ['runtime.js', 'content-policy.js', 'stage1-services.js', 'stage2-services.js', 'stage3-services.js'] },
   'shike-location': { entry: 'shikeLocation', className: 'ShikeLocation', modules: ['runtime.js', 'content-policy.js'] }
 };
 
@@ -86,6 +87,13 @@ function verifyArtifact(artifactRoot, definition, sourceManifest, sourceLock) {
     if (!rootEntries.includes(name)) throw new Error('Required root file is missing or has the wrong case: ' + name);
     requireFile(join(artifactRoot, name));
   }
+  const artifactManifest = readJson(join(artifactRoot, 'package.json'));
+  if (!artifactManifest || Array.isArray(artifactManifest) ||
+    artifactManifest.name !== sourceManifest.name || artifactManifest.version !== sourceManifest.version ||
+    artifactManifest.engines?.node !== '20.x' ||
+    (artifactManifest.type !== undefined && artifactManifest.type !== 'commonjs')) {
+    throw new Error('Deployment package.json must be valid JSON for this Node.js 20 CommonJS object.');
+  }
   const entry = readFileSync(join(artifactRoot, entryName), 'utf8');
   if (!entry.includes('exports.' + definition.className + ' =')) {
     throw new Error(entryName + ' does not contain the expected CommonJS class export.');
@@ -153,6 +161,20 @@ function publishSourceEntry(sourceRoot, artifactRoot, definition) {
   return destination;
 }
 
+function verifyArchive(archive, artifactRoot, required) {
+  const names = new Set(run('unzip', ['-Z1', archive], artifactRoot, true).split(/\r?\n/).filter(Boolean));
+  for (const name of required) {
+    if (!names.has(name)) throw new Error('ZIP root file is missing: ' + name);
+    const archived = run('unzip', ['-p', archive, name], artifactRoot, true);
+    if (archived !== readFileSync(join(artifactRoot, name), 'utf8')) {
+      throw new Error('ZIP content does not match the verified deployment file: ' + name);
+    }
+  }
+  const manifestText = run('unzip', ['-p', archive, 'package.json'], artifactRoot, true);
+  JSON.parse(manifestText);
+  return createHash('sha256').update(manifestText, 'utf8').digest('hex');
+}
+
 function prepareObject(name) {
   const definition = definitions[name];
   const sourceRoot = join(cloudRoot, 'cloudfunctions', name);
@@ -195,8 +217,10 @@ function prepareObject(name) {
   const archive = artifactRoot + '.zip';
   // cwd is the artifact root: the ZIP contains shikeService.js directly,
   // never an outer shike-service/ or deployment directory.
+  let manifestHash;
   try {
     run('zip', ['-q', '-r', archive, ...readdirSync(artifactRoot).sort()], artifactRoot);
+    manifestHash = verifyArchive(archive, artifactRoot, required);
   } catch (error) {
     rmSync(archive, { force: true });
     throw error;
@@ -204,6 +228,7 @@ function prepareObject(name) {
   console.log('[' + name + '] Deployment package prepared; root files: ' + required.join(', '));
   console.log('Source handler: ' + sourceHandler);
   console.log('ZIP: ' + archive);
+  console.log('ZIP package.json SHA256: ' + manifestHash);
   console.log('Handler: ' + config.handler + '; functionType=1; Node.js 20.x.');
   console.log('No cloud deployment or application test was performed. Deploy the function source directory or upload this ZIP.');
 }

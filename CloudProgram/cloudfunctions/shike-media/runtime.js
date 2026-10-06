@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('crypto');
+const { AsyncLocalStorage } = require('async_hooks');
 const fs = require('fs/promises');
 const { cloud } = require('@hw-agconnect/cloud-server');
 const { createContentPolicy, policyModels, accessError } = require('./content-policy');
@@ -11,6 +12,7 @@ const MAX_PHOTO_BYTES = 2 * 1024 * 1024;
 const MAX_REQUEST_AGE_MS = 60 * 1000;
 const STORAGE_CLIENT_NAME = 'shike-media-storage-server';
 let storageReady = false;
+const readMetricsScope = new AsyncLocalStorage();
 
 class CloudDbModel {
   getFieldTypeMap() { return new Map(Object.entries(this.constructor.fieldTypes)); }
@@ -68,7 +70,60 @@ function collection(env, name) {
   const zoneName = String((env && env.SHIKE_DB_ZONE) || process.env.SHIKE_DB_ZONE || 'shike');
   const objectType = OBJECT_TYPES[name];
   if (!objectType) throw new Error(`未知云数据库对象类型 ${name}`);
-  return cloud.database({ zoneName }).collection(objectType);
+  const target = cloud.database({ zoneName }).collection(objectType);
+  const metrics = readMetricsScope.getStore();
+  if (!metrics) return target;
+  return new Proxy(target, { get(object, property) {
+    if (property === 'query') return (...args) => measuredQuery(object.query(...args), name, metrics);
+    const value = Reflect.get(object, property, object);
+    if (property === 'constructor') return value;
+    return typeof value === 'function' ? value.bind(object) : value;
+  } });
+}
+
+function measuredQuery(target, name, metrics) {
+  const proxy = new Proxy(target, { get(object, property) {
+    if (property === 'get') return async (...args) => {
+      const started = Date.now();
+      metrics.queryGetCount += 1;
+      metrics.byObject[name] = (metrics.byObject[name] || 0) + 1;
+      try {
+        const rows = await object.get(...args);
+        metrics.queriedRows += Array.isArray(rows) ? rows.length : 0;
+        return rows;
+      } catch (error) {
+        metrics.queryFailures += 1;
+        if (String(error && error.message || error).includes('3007009')) metrics.busyErrors += 1;
+        throw error;
+      } finally { metrics.dbMs += Date.now() - started; }
+    };
+    const value = Reflect.get(object, property, object);
+    if (property === 'constructor') return value;
+    if (typeof value !== 'function') return value;
+    return (...args) => {
+      const result = value.apply(object, args);
+      return result === object ? proxy : result;
+    };
+  } });
+  return proxy;
+}
+
+async function withReadMetrics(operation, env, action) {
+  const flag = env && env.SHIKE_READ_METRICS_ENABLED !== undefined
+    ? env.SHIKE_READ_METRICS_ENABLED : process.env.SHIKE_READ_METRICS_ENABLED;
+  if (String(flag || '').trim().toLowerCase() !== 'true') return action();
+  const metrics = { queryGetCount: 0, queriedRows: 0, queryFailures: 0, busyErrors: 0, dbMs: 0, byObject: {} };
+  return readMetricsScope.run(metrics, async () => {
+    const started = Date.now();
+    let outcome = 'error';
+    try { const result = await action(); outcome = 'success'; return result; }
+    finally {
+      // Query.get calls only: excludes transactions, Storage and auth SDK requests.
+      console.info(`read.metrics operation=${operation} outcome=${outcome} queryGetCount=${metrics.queryGetCount} ` +
+        `queriedRows=${metrics.queriedRows} queryFailures=${metrics.queryFailures} busyErrors=${metrics.busyErrors} ` +
+        `dbMs=${metrics.dbMs} totalMs=${Date.now() - started} byObject=${JSON.stringify(metrics.byObject)}`);
+    }
+  });
 }
 
 async function one(query) {
@@ -211,7 +266,7 @@ async function readApproved(payload, env) {
   }
   const bytes = await readFileBytes(storageBucket(env).file(key));
   if (bytes.length === 0 || bytes.length > MAX_PHOTO_BYTES) throw new Error('图片内容无效或超过允许大小。');
-  return { dataBase64: bytes.toString('base64'), byteSize: bytes.length };
+  return { mimeType: String(media.mimeType || 'image/jpeg'), dataBase64: bytes.toString('base64'), byteSize: bytes.length };
 }
 
 async function readRevision(payload, env) {
@@ -324,9 +379,7 @@ async function getPublicMedia(input, env) {
   const objectKey = String(payload.cloudPath || '').trim();
   if (bucketName !== required(env, 'SHIKE_STORAGE_BUCKET')) throw new Error('图片所属云存储实例无效。');
   const response = await readApproved({ key: objectKey, viewerUid: identity.canonicalUid }, env);
-  const mediaId = mediaIdFromApprovedObjectKey(objectKey);
-  const media = await one(collection(env, 'CardMedia').query().equalTo('id', mediaId));
-  return { mimeType: String(media && media.mimeType || 'image/jpeg'), ...response };
+  return response;
 }
 
 async function execute(input, env) {
@@ -345,4 +398,9 @@ function safeLogError(error) {
   return error instanceof Error ? error.message.replace(/(accessToken|authorization|signature|body)=[^\s,]+/ig, '$1=[REDACTED]') : 'unknown error';
 }
 
-module.exports = { execute, prepareCardPhoto, uploadCardPhoto, getPublicMedia, safeLogError };
+module.exports = {
+  execute: (input, env) => withReadMetrics('execute', env, () => execute(input, env)),
+  prepareCardPhoto, uploadCardPhoto,
+  getPublicMedia: (input, env) => withReadMetrics('get-public-media', env, () => getPublicMedia(input, env)),
+  safeLogError
+};

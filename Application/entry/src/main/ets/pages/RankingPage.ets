@@ -4,7 +4,7 @@ import { CardRepository } from '../repository/CardRepository';
 import { LocationService } from '../service/LocationService';
 import { FriendRankingPreloadService } from '../service/FriendRankingPreloadService';
 import { AuthService } from '../service/AuthService';
-import { categoryLabel, coverFor } from '../components/FoodCover';
+import { foodCardCategoryLabel, coverFor } from '../components/FoodCover';
 import { tasteScoreLabel } from '../model/TasteScore';
 import { ErrorDetail, errorText } from '../common/ErrorKit';
 
@@ -125,7 +125,7 @@ export struct RankingPage {
 
   private categoryAndShopText(card: FoodCard): string {
     const shop = this.shopText(card);
-    return shop.length > 0 ? `${categoryLabel(card.category)} · ${shop}` : categoryLabel(card.category);
+    return shop.length > 0 ? `${foodCardCategoryLabel(card)} · ${shop}` : foodCardCategoryLabel(card);
   }
 
   private distanceText(card: FoodCard): string {
