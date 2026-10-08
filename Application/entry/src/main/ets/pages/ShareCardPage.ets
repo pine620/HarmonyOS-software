@@ -1,3 +1,5 @@
+import { CardRepository } from '../repository/CardRepository';
+import { AccountRequestGuard } from '../service/AccountRequestGuard';
 import { common } from '@kit.AbilityKit';
 import { FoodCard } from '../model/CloudContracts';
 import { GroupConversationSummary, SendMessageRequest, SocialUser } from '../model/FriendModels';
@@ -19,6 +21,15 @@ function emptyCard(): FoodCard {
 
 @Component
 export struct ShareCardPage {
+  @StorageLink('stage47AppActive') @Watch('onAppActiveChanged') appActive: boolean = true;
+  private shareVisible: boolean = true;
+  private onAppActiveChanged(): void { if (!this.appActive) this.aboutToDisappear(); else if (this.shareVisible) this.aboutToAppear(); }
+
+  @StorageLink('accountContentRevision') @Watch('onAccountChanged') accountContentRevision: number = 0;
+  @State contentAllowed: boolean = false;
+  private generation: number = 0;
+  private onAccountChanged(): void { this.aboutToDisappear(); if (this.shareVisible && this.appActive) this.aboutToAppear(); }
+  aboutToDisappear(): void { this.generation++; this.contentAllowed = false; this.friends = []; this.groups = []; }
   @Prop card: FoodCard = emptyCard();
   onOpenChat: (friend: SocialUser) => void = (_friend: SocialUser): void => {};
   onOpenGroup: (group: GroupConversationSummary) => void = (_group: GroupConversationSummary): void => {};
@@ -34,16 +45,21 @@ export struct ShareCardPage {
   private repository: FriendRepository = new FriendRepository();
 
   aboutToAppear(): void {
+    this.generation++; this.contentAllowed = false;
+    void this.loadCurrentCard();
     this.loadFriends();
     this.loadGroups();
   }
 
+  private async loadCurrentCard(): Promise<void> { const generation: number = this.generation; try { const card: FoodCard = await new CardRepository().detail(this.getUIContext().getHostContext() as common.UIAbilityContext, this.card.id); if (generation !== this.generation) return; this.card = card; this.contentAllowed = true; } catch (error) { if (generation === this.generation) { this.contentAllowed = false; this.status = errorText(error as ErrorDetail); } } }
+
   private async loadFriends(): Promise<void> {
     if (this.loading) return;
-    this.loading = true;
+    this.loading = true; const generation: number = this.generation; const owner: string = AccountRequestGuard.owner();
     try {
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
       const response = await this.repository.listFriends(context);
+      if (generation !== this.generation || owner !== AccountRequestGuard.owner()) return;
       this.friends = response.friends;
       this.status = '';
     } catch (error) {
@@ -55,10 +71,11 @@ export struct ShareCardPage {
 
   private async loadGroups(): Promise<void> {
     if (this.groupsLoading) return;
-    this.groupsLoading = true;
+    this.groupsLoading = true; const generation: number = this.generation; const owner: string = AccountRequestGuard.owner();
     try {
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
       const response = await this.repository.listGroupConversations(context);
+      if (generation !== this.generation || owner !== AccountRequestGuard.owner()) return;
       this.groups = response.groups;
     } catch (error) {
       this.status = `群聊加载失败：${errorText(error as ErrorDetail)}`;
@@ -68,7 +85,7 @@ export struct ShareCardPage {
   }
 
   private async shareWith(friend: SocialUser): Promise<void> {
-    if (this.sendingUid.length > 0) return;
+    if (!this.contentAllowed || this.sendingUid.length > 0) return;
     this.sendingUid = friend.uid;
     try {
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -98,7 +115,7 @@ export struct ShareCardPage {
   }
 
   private async shareWithGroup(group: GroupConversationSummary): Promise<void> {
-    if (this.sendingGroupId.length > 0) return;
+    if (!this.contentAllowed || this.sendingGroupId.length > 0) return;
     this.sendingGroupId = group.id;
     try {
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -160,7 +177,7 @@ export struct ShareCardPage {
       }.layoutWeight(1).alignItems(HorizontalAlign.Start);
       Button(this.sendingUid === friend.uid ? '发送中' : (this.sentUid === friend.uid ? '打开聊天' : '发送'))
         .height(48)
-        .enabled(this.sendingUid.length === 0).backgroundColor($r('app.color.accent_action'))
+        .enabled(this.contentAllowed && this.sendingUid.length === 0).backgroundColor($r('app.color.accent_action'))
         .fontColor($r('app.color.on_accent_action')).onClick((): void => {
           this.handleFriendAction(friend);
         });
@@ -180,7 +197,7 @@ export struct ShareCardPage {
         Text(`${group.memberCount} 人群聊`).fontSize(12).fontColor($r('app.color.muted')).width('100%');
       }.layoutWeight(1).alignItems(HorizontalAlign.Start);
       Button(this.sendingGroupId === group.id ? '发送中' : (this.sentGroupId === group.id ? '打开群聊' : '发送'))
-        .height(48).enabled(this.sendingGroupId.length === 0).backgroundColor($r('app.color.accent_action'))
+        .height(48).enabled(this.contentAllowed && this.sendingGroupId.length === 0).backgroundColor($r('app.color.accent_action'))
         .fontColor($r('app.color.on_accent_action')).onClick((): void => {
           this.handleGroupAction(group);
         });
@@ -196,7 +213,7 @@ export struct ShareCardPage {
             .width('100%');
           Text('只显示已互相确认的食刻好友').fontSize(13).fontColor($r('app.color.muted')).width('100%');
         }.width('100%').alignItems(HorizontalAlign.Start);
-        this.cardPreview();
+        if (this.contentAllowed) { this.cardPreview(); } else { Text('正在重新验证卡片，发送暂不可用。'); }
         if (this.status.length > 0) {
           Text(this.status).fontSize(12).lineHeight(18).fontColor($r('app.color.warning')).width('100%')
             .padding(10).backgroundColor($r('app.color.accent_soft')).borderRadius(12);
@@ -258,6 +275,6 @@ export struct ShareCardPage {
       }
       .width('100%').height('100%').padding({ left: 16, right: 16, top: 14, bottom: 20 })
       .backgroundColor($r('app.color.canvas')).alignItems(HorizontalAlign.Start);
-    }.title('发送卡片');
+    }.title('发送卡片').onShown((): void => { this.shareVisible = true; this.aboutToAppear(); }).onHidden((): void => { this.shareVisible = false; this.aboutToDisappear(); });
   }
 }

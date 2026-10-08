@@ -24,6 +24,17 @@ import {
  * envelope.
  */
 export class AuthSessionStore {
+  private static sessionGeneration: number = 0;
+  private static businessOwner: string = '';
+  private static nativeTokenRequest: Promise<string> | undefined = undefined;
+  private static nativeTokenGeneration: number = 0;
+  private static nativeTokenForced: boolean = false;
+  static generation(): number { return AuthSessionStore.sessionGeneration; }
+  static owner(): string { return AuthSessionStore.businessOwner; }
+  static setBusinessOwner(uid: string): void {
+    if (uid !== AuthSessionStore.businessOwner) { AuthSessionStore.businessOwner = uid; AuthSessionStore.sessionGeneration++; AppStorage.setOrCreate('authSessionRevision', AuthSessionStore.sessionGeneration); }
+  }
+
   private static auth: AGConnectAuth | undefined = undefined;
   private static initialized: boolean = false;
   private static nativeEmailSession: boolean = false;
@@ -62,6 +73,7 @@ export class AuthSessionStore {
   }
 
   static async registerEmail(rawEmail: string, verifyCode: string): Promise<void> {
+    AuthSessionStore.sessionGeneration++; AppStorage.setOrCreate('authSessionRevision', AuthSessionStore.sessionGeneration);
     const auth: AGConnectAuth = AuthSessionStore.requireAuth();
     const email: string = AuthSessionStore.normalizeEmail(rawEmail);
     const code: string = verifyCode.trim();
@@ -88,6 +100,7 @@ export class AuthSessionStore {
   }
 
   static async signInWithEmail(rawEmail: string, verifyCode: string): Promise<void> {
+    AuthSessionStore.sessionGeneration++; AppStorage.setOrCreate('authSessionRevision', AuthSessionStore.sessionGeneration);
     const auth: AGConnectAuth = AuthSessionStore.requireAuth();
     const email: string = AuthSessionStore.normalizeEmail(rawEmail);
     const code: string = verifyCode.trim();
@@ -136,8 +149,27 @@ export class AuthSessionStore {
    * AGC access token to the shared AuthProvider.
    */
   static async getNativeAccessToken(forceRefresh: boolean = false): Promise<string> {
+    const generation: number = AuthSessionStore.sessionGeneration;
+    const pending: Promise<string> | undefined = AuthSessionStore.nativeTokenRequest;
+    if (pending !== undefined) {
+      if (AuthSessionStore.nativeTokenGeneration === generation && (!forceRefresh || AuthSessionStore.nativeTokenForced)) return pending;
+      try { await pending; } catch (_error) { }
+      if (generation !== AuthSessionStore.sessionGeneration) throw new Error('账号已变化，请重新获取登录凭证。');
+      return AuthSessionStore.getNativeAccessToken(forceRefresh);
+    }
+    // Independent auth channel: token refresh never waits for a read queue slot.
+    const request: Promise<string> = AuthSessionStore.fetchNativeAccessToken(forceRefresh, generation);
+    AuthSessionStore.nativeTokenRequest = request;
+    AuthSessionStore.nativeTokenGeneration = generation;
+    AuthSessionStore.nativeTokenForced = forceRefresh;
+    try { return await request; }
+    finally { if (AuthSessionStore.nativeTokenRequest === request) AuthSessionStore.nativeTokenRequest = undefined; }
+  }
+
+  private static async fetchNativeAccessToken(forceRefresh: boolean, generation: number): Promise<string> {
     if (AuthSessionStore.initialized && AuthSessionStore.auth !== undefined) {
       const user: AGConnectUser | null = await AuthSessionStore.auth.getCurrentUser();
+      if (generation !== AuthSessionStore.sessionGeneration) throw new Error('账号已变化，请重新获取登录凭证。');
       if (user !== null) {
         AuthSessionStore.nativeEmailSession = true;
         const now: number = Date.now();
@@ -148,6 +180,7 @@ export class AuthSessionStore {
         const shouldForceRefresh: boolean = forceRefresh ||
           (AuthSessionStore.cachedExpiresAt > 0 && now + 60000 >= AuthSessionStore.cachedExpiresAt);
         const tokenResult: TokenResult = await user.getToken(shouldForceRefresh);
+        if (generation !== AuthSessionStore.sessionGeneration) throw new Error('账号已变化，请重新获取登录凭证。');
         const token: string = tokenResult.getString();
         if (token.length === 0) {
           throw new Error('AGC Auth 未返回有效的访问凭证。');
@@ -162,6 +195,7 @@ export class AuthSessionStore {
   }
 
   static setLegacyAccessToken(accessToken: string, expiresAt: number): void {
+    AuthSessionStore.sessionGeneration++; AppStorage.setOrCreate('authSessionRevision', AuthSessionStore.sessionGeneration);
     AuthSessionStore.legacyAccessToken = accessToken;
     AuthSessionStore.legacyExpiresAt = AuthSessionStore.normalizeExpiry(expiresAt);
     AuthSessionStore.invalidateCachedToken();
@@ -185,6 +219,7 @@ export class AuthSessionStore {
   }
 
   static async signOut(): Promise<void> {
+    AuthSessionStore.sessionGeneration++; AppStorage.setOrCreate('authSessionRevision', AuthSessionStore.sessionGeneration);
     try {
       if (AuthSessionStore.auth !== undefined) {
         const user: AGConnectUser | null = await AuthSessionStore.auth.getCurrentUser();
@@ -203,6 +238,7 @@ export class AuthSessionStore {
   }
 
   static async deleteUser(): Promise<void> {
+    AuthSessionStore.sessionGeneration++; AppStorage.setOrCreate('authSessionRevision', AuthSessionStore.sessionGeneration);
     const auth: AGConnectAuth = AuthSessionStore.requireAuth();
     const user: AGConnectUser | null = await auth.getCurrentUser();
     if (user === null) {

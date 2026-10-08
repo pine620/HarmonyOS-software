@@ -1,3 +1,8 @@
+import { SecondaryActionStyle } from '../common/Stage47Ui';
+import { FoodListRepository } from '../repository/FoodListRepository';
+import { FoodListItemsPage, FoodListItem } from '../model/FoodListModels';
+import { AccountRequestGuard } from '../service/AccountRequestGuard';
+import { MealPollPage } from './MealPollPage';
 import { common } from '@kit.AbilityKit';
 import { FoodCard } from '../model/CloudContracts';
 import {
@@ -23,14 +28,22 @@ function messageTime(timestamp: number): string {
 
 @Component
 export struct GroupChatPage {
+  @StorageLink('stage47AppActive') @Watch('onAppActiveChanged') appActive: boolean = true;
+  private destinationVisible: boolean = true;
+  private onAppActiveChanged(): void { if (!this.appActive) this.aboutToDisappear(); else if (this.destinationVisible) this.aboutToAppear(); }
+
   @Prop group: GroupConversationSummary = emptyGroupConversation();
   onOpenCard: (card: FoodCard) => void = (_card: FoodCard): void => {};
   onGroupChanged: () => void = (): void => {};
   @StorageLink('socialForegroundRevision') @Watch('onSocialForegroundChanged') socialForegroundRevision: number = 0;
+  @State showMealPoll: boolean = false;
+  @State selectedPollId: string = '';
   @State detail: GroupChatDetailResponse | undefined = undefined;
   @State messages: Array<GroupMessage> = [];
   @State nextBeforeToken: string = '';
   @State textDraft: string = '';
+  @State favoriteCursor: string = '';
+  private pageGeneration: number = 0;
   @State cardCandidates: Array<FoodCard> = [];
   @State cardPickerVisible: boolean = false;
   @State loading: boolean = false;
@@ -47,12 +60,14 @@ export struct GroupChatPage {
   private refreshTimer: number | undefined = undefined;
 
   aboutToAppear(): void {
+    this.detail = undefined; this.detailLoading = false; this.pageGeneration++; this.messages = []; this.cardCandidates = []; this.loading = false; this.loadingOlder = false;
     this.loadDetail();
     this.loadMessages(true);
     this.startAutoRefresh();
   }
 
   aboutToDisappear(): void {
+    this.detail = undefined; this.detailLoading = false; this.pageGeneration++; this.messages = []; this.cardCandidates = []; this.cardPickerVisible = false; this.favoriteCursor = ''; this.loading = false; this.loadingOlder = false; this.cardsLoading = false; this.sending = false;
     if (this.refreshTimer !== undefined) {
       clearInterval(this.refreshTimer);
       this.refreshTimer = undefined;
@@ -60,6 +75,7 @@ export struct GroupChatPage {
   }
 
   private onSocialForegroundChanged(): void {
+    if (!this.destinationVisible || !this.appActive) return;
     if (this.socialForegroundRevision > 0) {
       this.loadDetail();
       this.loadMessages(true);
@@ -88,20 +104,24 @@ export struct GroupChatPage {
 
   private async loadDetail(): Promise<void> {
     if (this.detailLoading) return;
-    this.detailLoading = true;
+    const generation: number = this.pageGeneration; const owner: string = AccountRequestGuard.owner(); this.detailLoading = true;
     try {
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      this.detail = await this.friendRepository.groupDetail(context, this.group.id);
+      const detail: GroupChatDetailResponse = await this.friendRepository.groupDetail(context, this.group.id);
+      if (generation !== this.pageGeneration || owner !== AccountRequestGuard.owner()) return;
+      this.detail = detail;
     } catch (error) {
+      if (generation !== this.pageGeneration || owner !== AccountRequestGuard.owner()) return; this.detail = undefined;
       this.status = `群聊信息加载失败：${errorText(error as ErrorDetail)}`;
     } finally {
-      this.detailLoading = false;
+      if (generation === this.pageGeneration) this.detailLoading = false;
     }
   }
 
   private async loadMessages(reset: boolean): Promise<void> {
     if (this.loading || this.loadingOlder) return;
     if (!reset && this.nextBeforeToken.length === 0) return;
+    const generation: number = this.pageGeneration; const owner: string = AccountRequestGuard.owner();
     if (reset) this.loading = true;
     else this.loadingOlder = true;
     try {
@@ -112,52 +132,45 @@ export struct GroupChatPage {
         pageSize: GROUP_MESSAGE_PAGE_SIZE
       };
       const response = await this.friendRepository.listGroupMessages(context, request);
+      if (generation !== this.pageGeneration || owner !== AccountRequestGuard.owner()) return;
       this.messages = reset ? response.messages : response.messages.concat(this.messages);
       this.nextBeforeToken = response.nextBeforeToken;
     } catch (error) {
+      if (generation !== this.pageGeneration) return; this.messages = [];
       this.status = `群消息加载失败：${errorText(error as ErrorDetail)}`;
     } finally {
-      this.loading = false;
-      this.loadingOlder = false;
+      if (generation === this.pageGeneration) { this.loading = false; this.loadingOlder = false; }
     }
   }
 
-  private async loadCardCandidates(): Promise<void> {
-    if (this.cardsLoading) return;
-    this.cardsLoading = true;
-    try {
-      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      const collections = await Promise.all([
-        this.cardRepository.myFavoriteCards(context), this.cardRepository.myCards(context)
-      ]);
-      const combined: Array<FoodCard> = [];
-      collections[0].forEach((card: FoodCard): void => {
-        if (card.status === 'APPROVED') combined.push(card);
-      });
-      collections[1].forEach((card: FoodCard): void => {
-        if (card.status === 'APPROVED' && !this.containsCard(combined, card.id)) combined.push(card);
-      });
-      this.cardCandidates = combined;
-    } catch (error) {
-      this.status = `卡片加载失败：${errorText(error as ErrorDetail)}`;
-    } finally {
-      this.cardsLoading = false;
-    }
+  private async loadCardCandidates(more: boolean = false): Promise<void> {
+    if (this.cardsLoading) return; const generation: number = this.pageGeneration; this.cardsLoading = true;
+    try { const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      const page: FoodListItemsPage = await new FoodListRepository().items('FAVORITES', more ? this.favoriteCursor : '');
+      if (generation !== this.pageGeneration) return;
+      const combined: Array<FoodCard> = more ? this.cardCandidates.slice() : [];
+      for (const item of page.items) { const card: FoodCard | null = item.card; if (card !== null && !this.containsCard(combined, card.id)) combined.push(card); }
+      if (!more) { const own: Array<FoodCard> = await this.cardRepository.myCards(context); if (generation !== this.pageGeneration) return; for (const card of own) if (card.status === 'APPROVED' && !this.containsCard(combined, card.id)) combined.push(card); }
+      this.cardCandidates = combined; this.favoriteCursor = page.nextCursor;
+    } catch (error) { if (generation === this.pageGeneration) this.status = `卡片加载失败：${errorText(error as ErrorDetail)}`; }
+    finally { if (generation === this.pageGeneration) this.cardsLoading = false; }
   }
 
   private async sendRequest(request: SendGroupMessageRequest): Promise<void> {
     if (this.sending) return;
-    this.sending = true;
+    const generation: number = this.pageGeneration; const owner: string = AccountRequestGuard.owner(); this.sending = true;
     try {
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
       const message = await this.friendRepository.sendGroupMessage(context, request);
+      if (generation !== this.pageGeneration || owner !== AccountRequestGuard.owner()) return;
       this.messages = this.messages.concat([message]);
       this.textDraft = '';
       this.status = '已发送。';
     } catch (error) {
+      if (generation !== this.pageGeneration || owner !== AccountRequestGuard.owner()) return;
       this.status = `发送失败：${errorText(error as ErrorDetail)}`;
     } finally {
-      this.sending = false;
+      if (generation === this.pageGeneration) this.sending = false;
     }
   }
 
@@ -263,7 +276,9 @@ export struct GroupChatPage {
 
   @Builder
   private messageContent(message: GroupMessage): void {
-    if (message.kind === 'CARD') {
+    if (message.kind === 'MEAL_POLL') {
+      Button('选餐投票 · 打开查看').height(48).onClick((): void => { this.selectedPollId = message.referenceId === undefined ? '' : message.referenceId; this.showMealPoll = true; }).attributeModifier(new SecondaryActionStyle());
+    } else if (message.kind === 'CARD') {
       if (message.sharedCard !== undefined) this.sharedCard(message.sharedCard);
       else {
         Text('卡片暂不可查看').fontSize(13).fontColor($r('app.color.muted')).padding(12)
@@ -348,7 +363,7 @@ export struct GroupChatPage {
           LoadingProgress().width(22).height(22).color($r('app.color.accent_action'));
           Text('正在读取可分享卡片').fontSize(13).fontColor($r('app.color.muted'));
         }.width('100%').height(56).justifyContent(FlexAlign.Center);
-      } else if (this.cardPickerVisible && this.cardCandidates.length === 0) {
+      } else if (this.cardPickerVisible && this.cardCandidates.length === 0 && this.favoriteCursor.length === 0) {
         Text('暂无可发送卡片，先收藏或发布一张公开卡片。').fontSize(12).fontColor($r('app.color.muted'))
           .width('100%').padding(8);
       } else if (this.cardPickerVisible) {
@@ -358,6 +373,7 @@ export struct GroupChatPage {
           }, (card: FoodCard): string => card.id);
         }.width('100%').height(96).listDirection(Axis.Horizontal).scrollBar(BarState.Off).edgeEffect(EdgeEffect.Spring);
       }
+      if (this.cardPickerVisible && this.favoriteCursor.length > 0) { Button('加载更多收藏').height(48).enabled(!this.cardsLoading).onClick((): void => { void this.loadCardCandidates(true); }).attributeModifier(new SecondaryActionStyle()); }
     }
     .width('100%').padding(10).backgroundColor($r('app.color.surface')).borderRadius(18)
     .border({ width: 1, color: $r('app.color.line') });
@@ -415,9 +431,11 @@ export struct GroupChatPage {
 
   build() {
     NavDestination() {
+      if (this.showMealPoll) { MealPollPage({ groupId: this.group.id, pollId: this.selectedPollId, onDone: (): void => { this.showMealPoll = false; void this.loadMessages(true); }, onOpenCard: (card: FoodCard): void => this.onOpenCard(card) }) } else {
       Stack({ alignContent: Alignment.Bottom }) {
         Column({ space: 10 }) {
           this.header();
+          Button('发起群选餐投票').height(48).onClick((): void => { this.selectedPollId = ''; this.showMealPoll = true; }).attributeModifier(new SecondaryActionStyle());
           if (this.status.length > 0) {
             Text(this.status).fontSize(12).lineHeight(18).fontColor($r('app.color.warning')).width('100%')
               .padding(9).backgroundColor($r('app.color.accent_soft')).borderRadius(12);
@@ -463,6 +481,7 @@ export struct GroupChatPage {
           this.membersSheet();
         }
       }.width('100%').height('100%').backgroundColor($r('app.color.canvas'));
-    }.title(this.group.name);
+      }
+    }.title(this.group.name).onShown((): void => { this.destinationVisible = true; this.aboutToAppear(); }).onHidden((): void => { this.destinationVisible = false; this.aboutToDisappear(); });
   }
 }

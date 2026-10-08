@@ -1,3 +1,6 @@
+import { OperationsRepository } from '../repository/OperationsRepository';
+import { OperationsCapabilities } from '../model/OperationsModels';
+import { AuthSessionStore } from '../service/AuthSessionStore';
 import { UserProfile } from '../model/CloudContracts';
 import { AuthService } from '../service/AuthService';
 
@@ -13,6 +16,20 @@ export struct ProfilePage {
   @Consume('pathStack') pathStack: NavPathStack;
   @Prop @Watch('onRevisionChanged') revision: number = 0;
   @StorageLink('profileAvatarRevision') @Watch('onAvatarRevisionChanged') profileAvatarRevision: number = 0;
+  @State administrator: boolean = false;
+  @StorageLink('stage47AppActive') @Watch('onOperationsEnvironment') appActive: boolean = true;
+  @StorageLink('authSessionRevision') @Watch('onOperationsEnvironment') sessionRevision: number = 0;
+  private operationsGeneration: number = 0;
+  private operationsVisible: boolean = false;
+  private onOperationsEnvironment(): void { this.operationsGeneration++; this.administrator = false; if (this.operationsVisible && this.appActive) void this.loadOperationsCapabilities(); }
+  private async loadOperationsCapabilities(): Promise<void> {
+    const generation: number = ++this.operationsGeneration; const profile: UserProfile | undefined = AuthService.profile();
+    const session: number = AuthSessionStore.generation(); if (profile === undefined || !this.appActive) return;
+    try { const capabilities: OperationsCapabilities = await new OperationsRepository().capabilities({ priority: 'metadata', mayContinue: async (): Promise<boolean> => this.operationsVisible && this.appActive && generation === this.operationsGeneration && session === AuthSessionStore.generation() });
+      if (this.operationsVisible && this.appActive && generation === this.operationsGeneration && session === AuthSessionStore.generation() && AuthService.profile()?.uid === profile.uid) this.administrator = capabilities.administrator;
+    } catch (_error) { if (generation === this.operationsGeneration) this.administrator = false; }
+  }
+  aboutToDisappear(): void { this.operationsVisible = false; this.onOperationsEnvironment(); }
   @State profile: UserProfile | undefined = undefined;
 
   aboutToAppear(): void {
@@ -130,7 +147,7 @@ export struct ProfilePage {
         .fontColor($r('app.color.ink')).width('100%');
       Row({ space: 4 }) {
         this.shortcut('我的卡片', $r('app.media.ic_profile_cards'), 'profile-published');
-        this.shortcut('收藏', $r('app.media.ic_profile_favorite'), 'profile-favorites');
+        this.shortcut('我的收藏', $r('app.media.ic_profile_favorite'), 'profile-favorites');
         this.shortcut('浏览记录', $r('app.media.ic_profile_history'), 'profile-history');
       }.width('100%');
     }
@@ -139,6 +156,53 @@ export struct ProfilePage {
     .border({ width: 1, color: $r('app.color.line') });
   }
 
+  @Builder
+  private planningRow(label: string, icon: Resource, route: string, divider: boolean) {
+    Column({ space: 0 }) {
+      Button() {
+        Row({ space: 12 }) {
+          Image(icon).width(22).height(22).fillColor($r('app.color.muted')).accessibilityLevel('no')
+          Text(label).fontSize(15).fontColor($r('app.color.ink')).layoutWeight(1)
+            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+          Text('›').fontSize(23).fontColor($r('app.color.muted')).accessibilityLevel('no')
+        }.width('100%').alignItems(VerticalAlign.Center)
+      }
+      .type(ButtonType.Normal).width('100%').constraintSize({ minHeight: 56 })
+      .padding({ left: 14, right: 14, top: 12, bottom: 12 }).backgroundColor(Color.Transparent)
+      .accessibilityText(label).onClick((): void => this.pathStack.pushPathByName(route, null))
+      if (divider) {
+        Row() {
+          Blank().width(48)
+          Divider().color($r('app.color.line')).layoutWeight(1)
+        }.width('100%').padding({ right: 14 })
+      }
+    }.width('100%')
+  }
+
+  @Builder
+  private planningEntries() {
+    Column({ space: 10 }) {
+      Text('饮食与记录').fontSize(13).fontColor($r('app.color.muted')).width('100%')
+      Column({ space: 0 }) {
+        this.planningRow('今天吃什么', $r('app.media.ic_planning_meal'), 'today-eat', true)
+        this.planningRow('主动偏好', $r('app.media.ic_planning_preference'), 'taste-preference', true)
+        this.planningRow('选餐历史', $r('app.media.ic_profile_history'), 'meal-history', false)
+      }.width('100%').backgroundColor($r('app.color.surface')).borderRadius(16)
+        .border({ width: 1, color: $r('app.color.line') })
+      Text('内容管理').fontSize(13).fontColor($r('app.color.muted')).width('100%').margin({ top: 8 })
+      Column({ space: 0 }) {
+        this.planningRow('待修改内容', $r('app.media.ic_profile_cards'), 'review-requests', true)
+        this.planningRow('我的举报', $r('app.media.ic_profile_history'), 'my-reports', true)
+        this.planningRow('删除记录', $r('app.media.ic_profile_history'), 'deleted-cards', this.administrator)
+        if (this.administrator) { this.planningRow('审核中心', $r('app.media.ic_profile_settings'), 'moderation-center', false) }
+      }.width('100%').backgroundColor($r('app.color.surface')).borderRadius(16).border({ width: 1, color: $r('app.color.line') })
+      Text('本机与隐私').fontSize(13).fontColor($r('app.color.muted')).width('100%').margin({ top: 8 })
+      Column({ space: 0 }) {
+        this.planningRow('本机草稿箱', $r('app.media.ic_planning_draft'), 'drafts', true)
+      }.width('100%').backgroundColor($r('app.color.surface')).borderRadius(16)
+        .border({ width: 1, color: $r('app.color.line') })
+    }.width('100%').alignItems(HorizontalAlign.Start)
+  }
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
       if ((this.profile?.coverUrl || '').length > 0) {
@@ -152,7 +216,7 @@ export struct ProfilePage {
       List({ space: 0 }) {
         ListItem() { this.profileHero(); }
         ListItem() {
-          Column() { this.shortcuts(); }
+          Column({ space: 14 }) { this.shortcuts(); this.planningEntries(); }
             .width('100%').padding({ left: 14, right: 14, top: 8, bottom: 8 })
             .backgroundColor($r('app.color.canvas'));
         }
@@ -162,5 +226,6 @@ export struct ProfilePage {
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
     }
     .width('100%').height('100%').backgroundColor($r('app.color.canvas'))
+      .onVisibleAreaChange([0, 1], (_visible: boolean, ratio: number): void => { const shown: boolean = ratio > 0; if (shown === this.operationsVisible) return; this.operationsVisible = shown; this.onOperationsEnvironment(); })
   }
 }

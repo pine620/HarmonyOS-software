@@ -4,10 +4,10 @@ export type FoodConsumptionMode = 'UNSPECIFIED' | 'DELIVERY' | 'DINE_IN';
 export type FoodCategoryV2 = 'NOODLES' | 'RICE_SET' | 'HOT_POT' | 'GRILL_FRIED' | 'SNACK' |
   'FAST_WESTERN' | 'BREAKFAST_BAKERY' | 'DESSERT' | 'DRINK' | 'PACKAGED' | 'OTHER';
 export type FoodVisibility = 'PUBLIC' | 'FRIENDS';
-export type CardReviewState = 'LEGACY_APPROVED' | 'PENDING_POST_REVIEW' | 'APPROVED' | 'TAKEN_DOWN';
+export type CardReviewState = 'LEGACY_APPROVED' | 'PENDING_POST_REVIEW' | 'APPROVED' | 'TAKEN_DOWN' | 'REQUEST_CHANGE';
 export type CardReactionType = 'LIKE' | 'DISLIKE';
 export type CardRevisionStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'WITHDRAWN';
-export type MaintenanceJobType = 'PURGE_CARD' | 'DELETE_ACCOUNT' | 'BACKFILL_CARD' | 'MIGRATE_REACTION' | 'PURGE_CONVERSATION';
+export type MaintenanceJobType = 'PURGE_GROUP' | 'MODERATION_AUDIT' | 'PURGE_CARD' | 'DELETE_ACCOUNT' | 'BACKFILL_CARD' | 'MIGRATE_REACTION' | 'PURGE_CONVERSATION' | 'MIGRATE_PERSONAL_COLLECTION' | 'MIGRATE_PERSONAL_COLLECTION_BATCH';
 export type MaintenanceJobStatus = 'PENDING' | 'RUNNING' | 'RETRY_WAIT' | 'DONE' | 'CANCELLED' | 'FAILED';
 
 /** Cloud DB Date values cross the JSON boundary as millisecond numbers. */
@@ -467,6 +467,11 @@ export interface RoundedLocation {
 }
 
 export interface FoodCard {
+  authorUid?: string;
+  viewerWanted?: boolean;
+  collectionReady?: boolean;
+  collectionStatus?: string;
+  recommendationReasons?: Array<string>;
   id: string;
   // Optional while old deployments and historical rows retain their legacy shape.
   schemaVersion?: number;
@@ -493,6 +498,7 @@ export interface FoodCard {
   friendVisibilitySince?: number;
   friendVisibilitySequence?: number;
   reviewState?: CardReviewState;
+  reviewReason?: string;
   deletedAt?: number;
   purgeAt?: number;
   lifecycleGeneration?: number;

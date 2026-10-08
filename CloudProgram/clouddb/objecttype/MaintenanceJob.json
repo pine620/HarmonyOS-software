@@ -72,6 +72,14 @@
     {
       "fieldName": "updatedAt",
       "fieldType": "Date"
+    },
+    {
+      "fieldName": "authCredentialCiphertext",
+      "fieldType": "Text"
+    },
+    {
+      "fieldName": "authProviderUid",
+      "fieldType": "String"
     }
   ],
   "indexes": [
@@ -139,6 +147,48 @@
         },
         {
           "fieldName": "generation",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "type_due",
+      "indexList": [
+        {
+          "fieldName": "status",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "jobType",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "runAfterAt",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "jobId",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "type_lease",
+      "indexList": [
+        {
+          "fieldName": "status",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "jobType",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "leaseUntilAt",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "jobId",
           "sortType": "ASC"
         }
       ]

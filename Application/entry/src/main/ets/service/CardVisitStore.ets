@@ -12,6 +12,8 @@ export interface CardVisit {
   category: FoodCategory;
   priceText: string;
   visitedAt: number;
+  coverPath?: string;
+  coverBucket?: string;
 }
 
 function visitKey(uid: string): string {
@@ -22,7 +24,8 @@ function encodeVisit(visit: CardVisit): string {
   return [
     encodeURIComponent(visit.cardId), visit.visitedAt.toString(),
     encodeURIComponent(visit.productName), encodeURIComponent(visit.category),
-    encodeURIComponent(visit.priceText)
+    encodeURIComponent(visit.priceText), encodeURIComponent(visit.coverPath || ''),
+    encodeURIComponent(visit.coverBucket || '')
   ].join('|');
 }
 
@@ -34,7 +37,7 @@ function visitCategory(value: string): FoodCategory {
 
 function decodeVisit(raw: string): CardVisit | undefined {
   const fields: Array<string> = raw.split('|');
-  if (fields.length !== 5) return undefined;
+  if (fields.length !== 5 && fields.length !== 7) return undefined;
   const visitedAt: number = Number(fields[1]);
   if (!Number.isFinite(visitedAt) || visitedAt <= 0) return undefined;
   try {
@@ -45,7 +48,9 @@ function decodeVisit(raw: string): CardVisit | undefined {
       cardId, visitedAt,
       productName: decodeURIComponent(fields[2]),
       category: visitCategory(decodeURIComponent(fields[3])),
-      priceText: storedPrice.startsWith('¥') ? storedPrice : ''
+      priceText: storedPrice.startsWith('¥') ? storedPrice : '',
+      coverPath: fields.length === 7 ? decodeURIComponent(fields[5]) : '',
+      coverBucket: fields.length === 7 ? decodeURIComponent(fields[6]) : ''
     };
   } catch (_error) {
     return undefined;
@@ -75,7 +80,7 @@ export class CardVisitStore {
       productName: card.productName.slice(0, 64),
       category: card.category,
       priceText: cardPriceText(card, ''),
-      visitedAt: Date.now()
+      visitedAt: Date.now(), coverPath: card.photoPath, coverBucket: card.photoBucket
     };
     const next: Array<CardVisit> = [visit];
     for (const stored of CardVisitStore.list(context, uid)) {
@@ -85,6 +90,15 @@ export class CardVisitStore {
     const store: preferences.Preferences = preferences.getPreferencesSync(context, { name: STORE_NAME });
     store.putSync(visitKey(uid), rows);
     store.flushSync();
+  }
+
+  static backfillCover(context: common.Context, uid: string, card: FoodCard): void {
+    const visits: Array<CardVisit> = CardVisitStore.list(context, uid);
+    const found: CardVisit | undefined = visits.find((visit: CardVisit): boolean => visit.cardId === card.id);
+    if (found === undefined || found.coverPath === card.photoPath && found.coverBucket === card.photoBucket) return;
+    found.coverPath = card.photoPath; found.coverBucket = card.photoBucket;
+    const store: preferences.Preferences = preferences.getPreferencesSync(context, { name: STORE_NAME });
+    store.putSync(visitKey(uid), visits.map((visit: CardVisit): string => encodeVisit(visit))); store.flushSync();
   }
 
   static remove(context: common.Context, uid: string, cardId: string): void {

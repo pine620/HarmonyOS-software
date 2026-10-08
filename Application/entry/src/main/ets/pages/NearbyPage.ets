@@ -51,6 +51,10 @@ export struct NearbyPage {
   onOpenCard: (card: FoodCard) => void = (_card: FoodCard): void => {};
   @Prop @Watch('onRevisionChanged') revision: number = 0;
   @Prop @Watch('onAccountChanged') loggedIn: boolean = false;
+  @Prop showPreferencePrompt: boolean = false;
+  onSetupPreference: () => void = (): void => {};
+  onSkipPreference: () => void = (): void => {};
+  onOpenMeal: () => void = (): void => {};
   @State discoveryCapabilities: DiscoveryCapabilities = emptyCapabilities();
   private discoveryRepository: DiscoveryRepository = new DiscoveryRepository();
   private capabilityGeneration: number = 0;
@@ -82,7 +86,7 @@ export struct NearbyPage {
     this.pageActive = true;
     void this.loadDiscoveryCapabilities();
     PhotoUploadService.retryMediaService();
-    void this.refresh();
+
   }
 
   aboutToDisappear(): void {
@@ -553,83 +557,11 @@ export struct NearbyPage {
   }
 
   build() {
-    Stack() {
-    if (this.discoveryCapabilities.searchEnabled || this.discoveryCapabilities.mapEnabled) {
-      DiscoveryFeed({ capabilities: this.discoveryCapabilities, revision: this.revision,
-        onPrimaryCard: (card: FoodCard, remoteSync: boolean): void => {
-          if (this.pageActive) this.enqueueServiceCardSync(this.getUIContext().getHostContext() as common.UIAbilityContext,
-            card, remoteSync, this.refreshGeneration);
-        }, onOpenCard: (card: FoodCard): void => this.onOpenCard(card), onUnavailable: (): void => this.discoveryUnavailable() })
-    } else {
-    Column({ space: 14 }) {
-      Row() {
-        Column({ space: 4 }) {
-          Text('全部推荐').fontSize(26).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'))
-          Text('公开美食分享 · 不限距离').fontSize(13).fontColor($r('app.color.leaf'))
-        }.alignItems(HorizontalAlign.Start)
-        Blank()
-        Button(this.loading ? '更新中' : '刷新').enabled(!this.loading).height(48).fontSize(14)
-          .backgroundColor($r('app.color.accent_soft')).fontColor($r('app.color.accent_action'))
-          .onClick((): void => this.retryPhotosAndRefresh())
-      }.width('100%')
-
-      Text('分类浏览 · 全部公开推荐').fontSize(12)
-        .fontColor($r('app.color.muted')).width('100%')
-
-      Scroll() {
-        Row({ space: 8 }) {
-          ForEach(CATEGORY_OPTIONS, (option: CategoryOption) => {
-            this.categoryChip(option)
-          }, (option: CategoryOption) => option.value)
-        }.padding({ right: 4 })
-      }.width('100%').height(48).scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
-
-      Text(this.displayStatus()).fontSize(12).fontColor($r('app.color.muted')).width('100%').maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-
-      if (this.mediaServiceUnavailable) {
-        Text('实拍图服务暂时不可用。已显示可用缓存，点击刷新重试。')
-          .fontSize(12).lineHeight(18).fontColor($r('app.color.warning')).width('100%')
-          .padding(10).backgroundColor($r('app.color.accent_soft')).borderRadius(12)
-      }
-
-      if (this.visibleCards().length === 0) {
-        this.emptyState()
-      } else {
-        WaterFlow() {
-          ForEach(this.visibleCards(), (entry: NearbyCardEntry, index: number) => {
-            FlowItem() {
-              this.cardView(entry, index)
-            }.width('100%')
-          }, (entry: NearbyCardEntry) => this.nearbyCardRenderKey(entry))
-        }
-        .width('100%').layoutWeight(1).scrollBar(BarState.Off).edgeEffect(EdgeEffect.Spring)
-        .columnsTemplate(BreakpointSystem.columnsTemplate(this.windowBreakpoint))
-        .columnsGap(BreakpointSystem.CARD_GAP).rowsGap(BreakpointSystem.CARD_GAP)
-        .onAreaChange((_oldArea: Area, newArea: Area): void => {
-          const width: number = Number(newArea.width);
-          if (Number.isFinite(width) && width > 0 && this.waterfallWidthVp !== width) {
-            this.waterfallWidthVp = width;
-          }
-        })
-        .onScrollIndex((first: number, last: number): void => this.hydrateVisibleRange(first, last))
-        .onReachEnd((): void => {
-          this.loadMore();
-        })
-      }
-      if (this.nextPageToken.length > 0) {
-        Button(this.loadingMore ? '正在加载…' : '加载更多推荐')
-          .width('100%').height(48).enabled(!this.loading && !this.loadingMore)
-          .fontColor($r('app.color.accent_action')).backgroundColor($r('app.color.accent_soft'))
-          .onClick((): void => { void this.loadMore(); });
-      }
-    }
-    .width('100%').height('100%').padding({
-      left: BreakpointSystem.pagePadding(this.windowBreakpoint),
-      right: BreakpointSystem.pagePadding(this.windowBreakpoint), top: 18, bottom: 6
-    })
-    .backgroundColor($r('app.color.canvas')).alignItems(HorizontalAlign.Start)
-    }
-    }.width('100%').height('100%')
+    DiscoveryFeed({ capabilities: this.discoveryCapabilities, revision: this.revision,
+      showPreferencePrompt: this.showPreferencePrompt, onSetupPreference: this.onSetupPreference,
+      onSkipPreference: this.onSkipPreference, onOpenMeal: this.onOpenMeal,
+      onPrimaryCard: (card: FoodCard, remoteSync: boolean): void => {
+        if (this.pageActive && card.visibility !== 'FRIENDS') this.enqueueServiceCardSync(this.getUIContext().getHostContext() as common.UIAbilityContext, card, remoteSync, this.refreshGeneration);
+      }, onOpenCard: (card: FoodCard): void => this.onOpenCard(card), onUnavailable: (): void => this.discoveryUnavailable() })
   }
 }

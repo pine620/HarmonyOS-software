@@ -13,80 +13,14 @@ class PolicyDbModel {
 }
 
 class FoodCard extends PolicyDbModel {}
-FoodCard.fieldTypes = Object.freeze({
-  id: 'String',
-  ownerUid: 'String',
-  productName: 'String',
-  brand: 'String',
-  priceFen: 'Integer',
-  priceLabel: 'String',
-  originalPriceFen: 'Integer',
-  specification: 'String',
-  shop: 'String',
-  sellingPointsJson: 'Text',
-  publicOffersJson: 'Text',
-  reviewText: 'Text',
-  tasteScore: 'Integer',
-  sourceLink: 'Text',
-  category: 'String',
-  mediaId: 'String',
-  latE3: 'Integer',
-  lonE3: 'Integer',
-  district: 'String',
-  geohash: 'String',
-  status: 'String',
-  createdAt: 'Long',
-  updatedAt: 'Long',
-  schemaVersion: 'Integer',
-  migrationSource: 'String',
-  consumptionMode: 'String',
-  visibility: 'String',
-  merchantId: 'String',
-  merchantNameSnapshot: 'String',
-  merchantAddressSnapshot: 'Text',
-  categoryV2: 'String',
-  categoryVersion: 'Integer',
-  itemPriceFen: 'Long',
-  dineInAvgFen: 'Long',
-  orderTotalFen: 'Long',
-  deliveryFeeFen: 'Long',
-  queryPriceFen: 'Long',
-  deliveryPlatformKey: 'String',
-  deliveryPlatformLabelSnapshot: 'String',
-  consumedAt: 'Date',
-  publishedAt: 'Date',
-  modifiedAt: 'Date',
-  edited: 'Boolean',
-  friendVisibilitySince: 'Date',
-  friendVisibilitySequence: 'Long',
-  reviewState: 'String',
-  deletedAt: 'Date',
-  purgeAt: 'Date',
-  lifecycleGeneration: 'Long',
-  searchTextNormalized: 'Text'
-});
+FoodCard.fieldTypes = Object.freeze({"id": "String", "ownerUid": "String", "productName": "String", "brand": "String", "priceFen": "Integer", "priceLabel": "String", "originalPriceFen": "Integer", "specification": "String", "shop": "String", "sellingPointsJson": "Text", "publicOffersJson": "Text", "reviewText": "Text", "tasteScore": "Integer", "sourceLink": "Text", "category": "String", "mediaId": "String", "latE3": "Integer", "lonE3": "Integer", "district": "String", "geohash": "String", "status": "String", "createdAt": "Long", "updatedAt": "Long", "schemaVersion": "Integer", "migrationSource": "String", "consumptionMode": "String", "visibility": "String", "merchantId": "String", "merchantNameSnapshot": "String", "merchantAddressSnapshot": "Text", "categoryV2": "String", "categoryVersion": "Integer", "itemPriceFen": "Long", "dineInAvgFen": "Long", "orderTotalFen": "Long", "deliveryFeeFen": "Long", "queryPriceFen": "Long", "deliveryPlatformKey": "String", "deliveryPlatformLabelSnapshot": "String", "consumedAt": "Date", "publishedAt": "Date", "modifiedAt": "Date", "edited": "Boolean", "friendVisibilitySince": "Date", "friendVisibilitySequence": "Long", "reviewState": "String", "deletedAt": "Date", "purgeAt": "Date", "lifecycleGeneration": "Long", "searchTextNormalized": "Text", "reviewReason": "String"});
 FoodCard.primaryKeys = Object.freeze(['id']);
-FoodCard.indexes = Object.freeze(["status,createdAt,id", "status,category,createdAt,id", "ownerUid,createdAt", "ownerUid,status,createdAt", "status,latE3,lonE3,createdAt", "status,createdAt", "ownerUid,status,tasteScore,createdAt", "merchantId,id", "ownerUid,merchantId,id", "visibility,status,publishedAt,id", "visibility,status,tasteScore,publishedAt,id", "visibility,status,queryPriceFen,publishedAt,id", "visibility,status,queryPriceFen,publishedAt,id", "merchantId,visibility,status,publishedAt,id"]);
+FoodCard.indexes = Object.freeze(["status,createdAt,id", "status,category,createdAt,id", "ownerUid,createdAt", "ownerUid,status,createdAt", "status,latE3,lonE3,createdAt", "status,createdAt", "ownerUid,status,tasteScore,createdAt", "merchantId,id", "ownerUid,merchantId,id", "visibility,status,publishedAt,id", "visibility,status,tasteScore,publishedAt,id", "visibility,status,queryPriceFen,publishedAt,id", "visibility,status,queryPriceFen,publishedAt,id", "merchantId,visibility,status,publishedAt,id", "status,tasteScore,publishedAt,id", "ownerUid,status,createdAt,id"]);
 
 class UserProfile extends PolicyDbModel {}
-UserProfile.fieldTypes = Object.freeze({
-  uid: 'String',
-  nickname: 'String',
-  avatarUrl: 'String',
-  nicknameValue: 'String',
-  avatarMediaId: 'String',
-  avatarStorageUid: 'String',
-  coverMediaId: 'String',
-  coverStorageUid: 'String',
-  friendCode: 'String',
-  accountStatus: 'String',
-  publishCount: 'Integer',
-  createdAt: 'Long',
-  updatedAt: 'Long',
-  contentSequence: 'Long'
-});
+UserProfile.fieldTypes = Object.freeze({"uid": "String", "nickname": "String", "avatarUrl": "String", "nicknameValue": "String", "avatarMediaId": "String", "avatarStorageUid": "String", "coverMediaId": "String", "coverStorageUid": "String", "friendCode": "String", "accountStatus": "String", "publishCount": "Integer", "createdAt": "Long", "updatedAt": "Long", "contentSequence": "Long", "deletionJobId": "String"});
 UserProfile.primaryKeys = Object.freeze(['uid']);
-UserProfile.indexes = Object.freeze(['nicknameValue', 'friendCode']);
+UserProfile.indexes = Object.freeze(["nicknameValue", "friendCode"]);
 
 class Friendship extends PolicyDbModel {}
 Friendship.fieldTypes = Object.freeze({
@@ -261,18 +195,16 @@ function createContentPolicy(getCollection, readOne, initialState = null) {
     const current = relationship || await relation(authorUid, viewerUid);
     if (current && current.status === 'BLOCKED') return false;
     if (current && current.status === 'ACCEPTED') return true;
-    const grant = await readOne(getCollection('FriendContentAccessGrant').query()
-      .equalTo('authorUid', authorUid).equalTo('viewerUid', viewerUid));
-    if (!grant || grant.revoked !== false) return false;
-    const since = dateMillis(card.friendVisibilitySince);
-    const through = dateMillis(grant.accessThroughAt);
-    const cardSequence = Number(card.friendVisibilitySequence);
-    const throughSequence = Number(grant.accessThroughSequence);
-    // Both server chronology and logical sequence must agree. Missing sequence
-    // denies access instead of guessing an order for equal millisecond times.
-    return since !== null && through !== null && since <= through &&
-      Number.isSafeInteger(cardSequence) && cardSequence > 0 &&
-      Number.isSafeInteger(throughSequence) && throughSequence >= cardSequence;
+    return false;
+
+  }
+
+  async function assertProfileReadable(viewerUid, authorUid) {
+    await assertAccountActive(authorUid);
+    if (viewerUid) await assertAccountActive(viewerUid);
+    const relationship = await relation(authorUid, viewerUid);
+    if (relationship && relationship.status === 'BLOCKED') throw accessError('该主页当前不可访问。');
+    return relationship;
   }
 
   async function canReadCard(viewerUid, card) {
@@ -312,20 +244,29 @@ function createContentPolicy(getCollection, readOne, initialState = null) {
 
   async function canReadRevisionMedia(viewerUid, media, revisionId, administrator = false) {
     if (!viewerUid || !media || media.status !== 'APPROVED' || !isAccountActive(await profile(viewerUid))) return false;
+    if (!revisionId && media.ownerUid === viewerUid) { const own = await readOne(getCollection('FoodCard').query().equalTo('id',media.cardId)); if (own && own.ownerUid === viewerUid && own.reviewState === 'REQUEST_CHANGE' && own.deletedAt == null && own.purgeAt == null) return true; }
     const revision = await readOne(getCollection('FoodCardRevision').query().equalTo('revisionId', String(revisionId || '')));
     if (!revision || !isAccountActive(await profile(revision.authorUid)) || media.ownerUid !== revision.authorUid) return false;
     const author = viewerUid === revision.authorUid;
     if (author ? !['PENDING', 'REJECTED'].includes(revision.status) : !administrator || revision.status !== 'PENDING') return false;
     const card = await readOne(getCollection('FoodCard').query().equalTo('id', String(revision.cardId)));
-    if (!card || card.ownerUid !== revision.authorUid || !readableCardState(card)) return false;
+    if (!card || card.ownerUid !== revision.authorUid || !(readableCardState(card) || card.reviewState === 'REQUEST_CHANGE' && card.deletedAt == null && card.purgeAt == null)) return false;
     let ids;
     try { ids = JSON.parse(String(revision.mediaManifestJson || '[]')); } catch (_error) { return false; }
     return Array.isArray(ids) && ids.includes(String(media.id)) &&
       [String(card.id), 'revision:' + String(revision.revisionId)].includes(String(media.cardId));
   }
 
-  return { prepareCardReads, assertAccountActive, isCardPubliclyVisible, canReadCard, canReadFriendCard,
-    assertCardReadable, canReadMedia, canReadRevisionMedia };
+  async function canReadModerationMedia(viewerUid,media,administrator=false) {
+    if (!viewerUid || !media || media.status !== 'APPROVED' || !isAccountActive(await profile(viewerUid))) return false;
+    if (!isAccountActive(await profile(media.ownerUid))) return false;
+    const card=await readOne(getCollection('FoodCard').query().equalTo('id',media.cardId));
+    if (!card || card.ownerUid !== media.ownerUid || card.deletedAt != null || card.purgeAt != null) return false;
+    return administrator || viewerUid === card.ownerUid && card.reviewState === 'REQUEST_CHANGE';
+  }
+
+  return { prepareCardReads, assertAccountActive, assertProfileReadable, isCardPubliclyVisible, canReadCard, canReadFriendCard,
+    assertCardReadable, canReadMedia, canReadRevisionMedia, canReadModerationMedia };
 }
 
 module.exports = { createContentPolicy, policyModels, isAccountActive, readableCardState,

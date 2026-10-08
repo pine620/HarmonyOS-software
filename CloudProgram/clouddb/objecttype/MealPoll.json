@@ -1,0 +1,150 @@
+{
+  "objectTypeName": "MealPoll",
+  "fields": [
+    {
+      "fieldName": "pollId",
+      "fieldType": "String",
+      "notNull": true,
+      "belongPrimaryKey": true
+    },
+    {
+      "fieldName": "groupId",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "creatorUid",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "title",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "mode",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "visibilityMode",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "consumptionMode",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "status",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "deadlineAt",
+      "fieldType": "Date"
+    },
+    {
+      "fieldName": "acceptingOptions",
+      "fieldType": "Boolean"
+    },
+    {
+      "fieldName": "closeOutcome",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "closeReason",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "winnerOptionId",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "winnerResolvedAt",
+      "fieldType": "Date"
+    },
+    {
+      "fieldName": "resultCountsJson",
+      "fieldType": "Text"
+    },
+    {
+      "fieldName": "createdAt",
+      "fieldType": "Date"
+    },
+    {
+      "fieldName": "updatedAt",
+      "fieldType": "Date"
+    },
+    {
+      "fieldName": "version",
+      "fieldType": "Long"
+    },
+    {
+      "fieldName": "requestPayloadHash",
+      "fieldType": "String"
+    }
+  ],
+  "indexes": [
+    {
+      "indexName": "index_1",
+      "indexList": [
+        {
+          "fieldName": "groupId",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "createdAt",
+          "sortType": "DESC"
+        },
+        {
+          "fieldName": "pollId",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "index_2",
+      "indexList": [
+        {
+          "fieldName": "groupId",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "status",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "pollId",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "creator_uid",
+      "indexList": [
+        {
+          "fieldName": "creatorUid",
+          "sortType": "ASC"
+        }
+      ]
+    }
+  ],
+  "permissions": [
+    {
+      "role": "World",
+      "rights": []
+    },
+    {
+      "role": "Authenticated",
+      "rights": []
+    },
+    {
+      "role": "Creator",
+      "rights": []
+    },
+    {
+      "role": "Administrator",
+      "rights": [
+        "Read",
+        "Upsert",
+        "Delete"
+      ]
+    }
+  ]
+}

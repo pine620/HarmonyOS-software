@@ -1,4 +1,5 @@
 'use strict';
+const { errorCode, requestId, READ_OPT_VERSION } = require('./read-errors');
 
 const crypto = require('crypto');
 const { AsyncLocalStorage } = require('async_hooks');
@@ -37,7 +38,7 @@ IdentityBinding.fieldTypes = Object.freeze({
   status: 'String', createdAt: 'Long', updatedAt: 'Long'
 });
 IdentityBinding.primaryKeys = Object.freeze(['id']);
-IdentityBinding.indexes = Object.freeze(['provider,providerUid', 'canonicalUid']);
+IdentityBinding.indexes = Object.freeze({"provider_providerUid": ["provider", "providerUid"], "canonicalUid": ["canonicalUid"], "canonicalUid_id": ["canonicalUid", "id"]});
 
 const OBJECT_TYPES = Object.freeze({ ...policyModels, CardMedia, IdentityBinding });
 
@@ -93,7 +94,7 @@ function measuredQuery(target, name, metrics) {
         return rows;
       } catch (error) {
         metrics.queryFailures += 1;
-        if (String(error && error.message || error).includes('3007009')) metrics.busyErrors += 1;
+        if (errorCode(error) === '3007009') metrics.busyErrors += 1;
         throw error;
       } finally { metrics.dbMs += Date.now() - started; }
     };
@@ -108,7 +109,7 @@ function measuredQuery(target, name, metrics) {
   return proxy;
 }
 
-async function withReadMetrics(operation, env, action) {
+async function withReadMetrics(operation, env, action, id) {
   const flag = env && env.SHIKE_READ_METRICS_ENABLED !== undefined
     ? env.SHIKE_READ_METRICS_ENABLED : process.env.SHIKE_READ_METRICS_ENABLED;
   if (String(flag || '').trim().toLowerCase() !== 'true') return action();
@@ -119,7 +120,7 @@ async function withReadMetrics(operation, env, action) {
     try { const result = await action(); outcome = 'success'; return result; }
     finally {
       // Query.get calls only: excludes transactions, Storage and auth SDK requests.
-      console.info(`read.metrics operation=${operation} outcome=${outcome} queryGetCount=${metrics.queryGetCount} ` +
+      console.info(`read.metrics operation=${operation} requestId=${id || 'not-provided'} functionVersion=${READ_OPT_VERSION} outcome=${outcome} queryGetCount=${metrics.queryGetCount} ` +
         `queriedRows=${metrics.queriedRows} queryFailures=${metrics.queryFailures} busyErrors=${metrics.busyErrors} ` +
         `dbMs=${metrics.dbMs} totalMs=${Date.now() - started} byObject=${JSON.stringify(metrics.byObject)}`);
     }
@@ -139,7 +140,7 @@ function identityBindingId(provider, providerUid) {
   return crypto.createHash('sha256').update(`shike-identity:${String(provider)}:${String(providerUid)}`).digest('hex');
 }
 
-async function verifiedIdentity(accessToken, env) {
+async function verifiedIdentity(accessToken, env, readOnly = false) {
   if (!accessToken || String(accessToken).length > 8192) throw new Error('未登录或登录状态已失效。');
   let providerUid = '';
   try {
@@ -155,7 +156,7 @@ async function verifiedIdentity(accessToken, env) {
   if (binding && String(binding.status || 'ACTIVE') !== 'ACTIVE') throw accessError('账号身份已停用。', 'ACCOUNT_INACTIVE');
   const canonicalUid = binding ? String(binding.canonicalUid || providerUid) : providerUid;
   await contentPolicy(env).assertAccountActive(canonicalUid, true);
-  if (!binding) {
+  if (!binding && !readOnly) {
     const now = Date.now();
     await bindings.upsert({
       id, provider: 'AGC', providerUid, canonicalUid, status: 'ACTIVE', createdAt: now, updatedAt: now
@@ -266,6 +267,12 @@ async function readApproved(payload, env) {
   }
   const bytes = await readFileBytes(storageBucket(env).file(key));
   if (bytes.length === 0 || bytes.length > MAX_PHOTO_BYTES) throw new Error('图片内容无效或超过允许大小。');
+  const current = await one(collection(env, 'CardMedia').query().equalTo('id', mediaId));
+  if (!current || current.cardId !== media.cardId || current.ownerUid !== media.ownerUid ||
+      approvedObjectKey(String(current.storageUid || current.ownerUid), mediaId) !== key ||
+      !await contentPolicy(env).canReadMedia(String(payload && payload.viewerUid || ''), current)) {
+    throw accessError('图片已不可访问。');
+  }
   return { mimeType: String(media.mimeType || 'image/jpeg'), dataBase64: bytes.toString('base64'), byteSize: bytes.length };
 }
 
@@ -282,7 +289,21 @@ async function readRevision(payload, env) {
         String(payload.revisionId || ''), payload.administrator === true)) throw accessError('编辑图片不可访问。');
   const bytes = await readFileBytes(storageBucket(env).file(key));
   if (bytes.length === 0 || bytes.length > MAX_PHOTO_BYTES) throw new Error('图片内容无效或超过允许大小。');
+  const fresh = await one(collection(env, 'CardMedia').query().equalTo('id', id));
+  if (!fresh || fresh.cardId !== media.cardId || approvedObjectKey(String(fresh.storageUid || fresh.ownerUid), id) !== key ||
+      !await contentPolicy(env).canReadRevisionMedia(String(payload.viewerUid || ''), fresh, String(payload.revisionId || ''), payload.administrator === true)) throw accessError('编辑图片已失效。');
   return { dataBase64: bytes.toString('base64'), byteSize: bytes.length };
+}
+
+async function readModeration(payload,env) {
+  const key=validKey(payload.key),mediaId=mediaIdFromApprovedObjectKey(key);
+  const media=await one(collection(env,'CardMedia').query().equalTo('id',mediaId));
+  if(!media || approvedObjectKey(String(media.storageUid||media.ownerUid),mediaId)!==key || !await contentPolicy(env).canReadModerationMedia(String(payload.viewerUid||''),media,payload.administrator===true))throw accessError('审核图片不可访问。');
+  const bytes=await readFileBytes(storageBucket(env).file(key));
+  const fresh=await one(collection(env,'CardMedia').query().equalTo('id',mediaId));
+  if(!fresh || fresh.cardId!==media.cardId || approvedObjectKey(String(fresh.storageUid||fresh.ownerUid),mediaId)!==key || !await contentPolicy(env).canReadModerationMedia(String(payload.viewerUid||''),fresh,payload.administrator===true))throw accessError('审核图片已失效。');
+  if(!bytes.length || bytes.length>MAX_PHOTO_BYTES)throw new Error('审核图片大小无效。');
+  return {dataBase64:bytes.toString('base64'),byteSize:bytes.length};
 }
 
 async function promote(payload, env) {
@@ -373,7 +394,7 @@ async function uploadCardPhoto(input, env) {
 }
 
 async function getPublicMedia(input, env) {
-  const identity = await verifiedIdentity(input && input.accessToken, env);
+  const identity = await verifiedIdentity(input && input.accessToken, env, true);
   const payload = input && input.payload || {};
   const bucketName = String(payload.bucketName || '').trim();
   const objectKey = String(payload.cloudPath || '').trim();
@@ -388,6 +409,7 @@ async function execute(input, env) {
     case 'write-approved': return writeApproved(request.payload, env);
     case 'read-approved': return readApproved(request.payload, env);
     case 'read-revision': return readRevision(request.payload, env);
+    case 'read-moderation': return readModeration(request.payload, env);
     case 'promote': return promote(request.payload, env);
     case 'remove': return remove(request.payload, env);
     default: throw new Error('未知的媒体服务操作。');
@@ -399,8 +421,8 @@ function safeLogError(error) {
 }
 
 module.exports = {
-  execute: (input, env) => withReadMetrics('execute', env, () => execute(input, env)),
+  execute: (input, env) => withReadMetrics('execute', env, () => execute(input, env), requestId(input)),
   prepareCardPhoto, uploadCardPhoto,
-  getPublicMedia: (input, env) => withReadMetrics('get-public-media', env, () => getPublicMedia(input, env)),
+  getPublicMedia: (input, env) => withReadMetrics('get-public-media', env, () => getPublicMedia(input, env), requestId(input)),
   safeLogError
 };

@@ -1,4 +1,5 @@
 import { common } from '@kit.AbilityKit';
+import { ReadRequestOptions } from '../service/ReadScheduler';
 import {
   CardActionResponse, CardComment, CardDetailRequest, CardIdRequest, CardPhoto, CommentReactionResponse, CreateCardCommentRequest,
   DeleteCardCommentRequest, EmptyRequest, FoodCard, FriendRankingsResponse, MyCardsResponse, NearbyCardsRequest, NearbyCardsResponse,
@@ -207,15 +208,15 @@ export class CardRepository {
     return cards;
   }
 
-  async detail(context: common.Context, cardId: string): Promise<FoodCard> {
+  async detail(context: common.Context, cardId: string, options: ReadRequestOptions = {}): Promise<FoodCard> {
     const request: CardDetailRequest = { cardId, includeComments: false };
     const traceTaskId: number = NearbyPerformanceTrace.start('shike.detail.metadata');
     try {
       if (AuthService.profile() !== undefined && CloudGateway.hasSession()) {
         await AuthService.ensureSession(context);
-        return await CloudGateway.callAuthenticated<FoodCard>('get-card-detail', request);
+        return await CloudGateway.callAuthenticated<FoodCard>('get-card-detail', request, options);
       }
-      return await CloudGateway.callPublic<FoodCard>('get-card-detail', request);
+      return await CloudGateway.callPublic<FoodCard>('get-card-detail', request, options);
     } finally {
       NearbyPerformanceTrace.finish('shike.detail.metadata', traceTaskId);
     }

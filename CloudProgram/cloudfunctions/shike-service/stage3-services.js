@@ -156,9 +156,9 @@ function createStage3Services(ctx) {
     } else if (spec.sort === 'SCORE_DESC') q = q.orderByDesc('tasteScore');
     return q.orderByDesc('publishedAt').orderByAsc('id');
   }
-  function candidateMatches(row, spec, category, phase, at) {
+  function candidateMatches(row, spec, category, phase, at, publicOnly = true) {
     const published = dateMillis(row.publishedAt);
-    if (row.visibility !== 'PUBLIC' || row.status !== 'APPROVED' || published === null || published > at ||
+    if ((publicOnly && row.visibility !== 'PUBLIC') || row.status !== 'APPROVED' || published === null || published > at ||
       (spec.mode !== 'ALL' && row.consumptionMode !== spec.mode) || (category && row.categoryV2 !== category) ||
       (spec.merchantId && row.merchantId !== spec.merchantId) ||
       (spec.keyword && !String(row.searchTextNormalized || '').includes(spec.keyword))) return false;
@@ -299,7 +299,8 @@ function createStage3Services(ctx) {
       address: String(merchant.address || '').slice(0, 100), latitude: merchant.latitudeE6 / 1e6,
       longitude: merchant.longitudeE6 / 1e6, coordinateSystem: 'GCJ02' } };
   }
-  return { capabilities, listMapMerchants, searchPublicCards: search, getMerchantRecommendations };
+  return { capabilities, listMapMerchants, searchPublicCards: search, getMerchantRecommendations,
+    querySpec, matchesHardFilters: (row, spec, at) => (spec.categories.length === 0 || spec.categories.includes(row.categoryV2)) && candidateMatches(row, spec, '', 'known', at, false) };
 }
 
 module.exports = { createStage3Services };

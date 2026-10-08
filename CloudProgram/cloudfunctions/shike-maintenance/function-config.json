@@ -1,0 +1,5 @@
+{
+  "handler": "shikeMaintenance.handler",
+  "functionType": 0,
+  "triggers": []
+}

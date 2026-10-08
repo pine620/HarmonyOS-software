@@ -326,7 +326,7 @@ function createStage2Services(ctx) {
     providerVerificationEnabled: !!setting(env, 'SHIKE_HUAWEI_SITE_API_KEY') && setting(env, 'SHIKE_HUAWEI_POI_VERIFIED') === 'true' }; }
   return { cardFields, storageFields, requireFriendsGate, prepareCounterTransition, prepareAccountCounterRemoval,
     reconcileMerchantPublicCounters, resolveMerchant, createUserMerchant, updateUserMerchant, getMerchant,
-    listModerationMerchants, moderateMerchant, capabilities, normalize };
+    listModerationMerchants, moderateMerchant, capabilities, normalize, mapEligible };
 }
 
 module.exports = { createStage2Services };

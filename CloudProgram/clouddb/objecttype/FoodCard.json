@@ -250,6 +250,10 @@
     {
       "fieldName": "searchTextNormalized",
       "fieldType": "Text"
+    },
+    {
+      "fieldName": "reviewReason",
+      "fieldType": "String"
     }
   ],
   "indexes": [
@@ -519,6 +523,48 @@
         },
         {
           "fieldName": "publishedAt",
+          "sortType": "DESC"
+        },
+        {
+          "fieldName": "id",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "status_score_published_id",
+      "indexList": [
+        {
+          "fieldName": "status",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "tasteScore",
+          "sortType": "DESC"
+        },
+        {
+          "fieldName": "publishedAt",
+          "sortType": "DESC"
+        },
+        {
+          "fieldName": "id",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "owner_status_created_id",
+      "indexList": [
+        {
+          "fieldName": "ownerUid",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "status",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "createdAt",
           "sortType": "DESC"
         },
         {

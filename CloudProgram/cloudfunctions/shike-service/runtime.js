@@ -11,6 +11,15 @@ const MAX_PHOTO_BYTES = 2 * 1024 * 1024;
 const MAX_CARD_PHOTOS = 6;
 const CARD_READ_BATCH_SIZE = 10;
 const readMetricsScope = new AsyncLocalStorage();
+const readRequestScope = new AsyncLocalStorage();
+const readPhaseScope = new AsyncLocalStorage();
+const { requestId, errorCode, errorResponse, READ_OPT_VERSION } = require('./read-errors');
+function withReadPhase(phase, action) {
+  return readPhaseScope.run(phase, async () => {
+    try { return await action(); }
+    catch (error) { try { if (error && typeof error === 'object') error.readStage = phase; } catch (_) { } throw error; }
+  });
+}
 const NEARBY_CARD_HYDRATION_CONCURRENCY = 4;
 const NEARBY_CACHE_TTL_SECONDS = 25;
 const NEARBY_CACHE_TIMEOUT_MS = 400;
@@ -69,83 +78,14 @@ class CloudDbModel {
 }
 
 class UserProfile extends CloudDbModel {}
-UserProfile.fieldTypes = Object.freeze({
-  uid: 'String',
-  nickname: 'String',
-  avatarUrl: 'String',
-  nicknameValue: 'String',
-  avatarMediaId: 'String',
-  avatarStorageUid: 'String',
-  coverMediaId: 'String',
-  coverStorageUid: 'String',
-  friendCode: 'String',
-  accountStatus: 'String',
-  publishCount: 'Integer',
-  createdAt: 'Long',
-  updatedAt: 'Long',
-  contentSequence: 'Long'
-});
+UserProfile.fieldTypes = Object.freeze({"uid": "String", "nickname": "String", "avatarUrl": "String", "nicknameValue": "String", "avatarMediaId": "String", "avatarStorageUid": "String", "coverMediaId": "String", "coverStorageUid": "String", "friendCode": "String", "accountStatus": "String", "publishCount": "Integer", "createdAt": "Long", "updatedAt": "Long", "contentSequence": "Long", "deletionJobId": "String"});
 UserProfile.primaryKeys = Object.freeze(['uid']);
-UserProfile.indexes = Object.freeze([
-  'nicknameValue',
-  'friendCode'
-]);
+UserProfile.indexes = Object.freeze(["nicknameValue", "friendCode"]);
 
 class FoodCard extends CloudDbModel {}
-FoodCard.fieldTypes = Object.freeze({
-  id: 'String',
-  ownerUid: 'String',
-  productName: 'String',
-  brand: 'String',
-  priceFen: 'Integer',
-  priceLabel: 'String',
-  originalPriceFen: 'Integer',
-  specification: 'String',
-  shop: 'String',
-  sellingPointsJson: 'Text',
-  publicOffersJson: 'Text',
-  reviewText: 'Text',
-  tasteScore: 'Integer',
-  sourceLink: 'Text',
-  category: 'String',
-  mediaId: 'String',
-  latE3: 'Integer',
-  lonE3: 'Integer',
-  district: 'String',
-  geohash: 'String',
-  status: 'String',
-  createdAt: 'Long',
-  updatedAt: 'Long',
-  schemaVersion: 'Integer',
-  migrationSource: 'String',
-  consumptionMode: 'String',
-  visibility: 'String',
-  merchantId: 'String',
-  merchantNameSnapshot: 'String',
-  merchantAddressSnapshot: 'Text',
-  categoryV2: 'String',
-  categoryVersion: 'Integer',
-  itemPriceFen: 'Long',
-  dineInAvgFen: 'Long',
-  orderTotalFen: 'Long',
-  deliveryFeeFen: 'Long',
-  queryPriceFen: 'Long',
-  deliveryPlatformKey: 'String',
-  deliveryPlatformLabelSnapshot: 'String',
-  consumedAt: 'Date',
-  publishedAt: 'Date',
-  modifiedAt: 'Date',
-  edited: 'Boolean',
-  friendVisibilitySince: 'Date',
-  friendVisibilitySequence: 'Long',
-  reviewState: 'String',
-  deletedAt: 'Date',
-  purgeAt: 'Date',
-  lifecycleGeneration: 'Long',
-  searchTextNormalized: 'Text'
-});
+FoodCard.fieldTypes = Object.freeze({"id": "String", "ownerUid": "String", "productName": "String", "brand": "String", "priceFen": "Integer", "priceLabel": "String", "originalPriceFen": "Integer", "specification": "String", "shop": "String", "sellingPointsJson": "Text", "publicOffersJson": "Text", "reviewText": "Text", "tasteScore": "Integer", "sourceLink": "Text", "category": "String", "mediaId": "String", "latE3": "Integer", "lonE3": "Integer", "district": "String", "geohash": "String", "status": "String", "createdAt": "Long", "updatedAt": "Long", "schemaVersion": "Integer", "migrationSource": "String", "consumptionMode": "String", "visibility": "String", "merchantId": "String", "merchantNameSnapshot": "String", "merchantAddressSnapshot": "Text", "categoryV2": "String", "categoryVersion": "Integer", "itemPriceFen": "Long", "dineInAvgFen": "Long", "orderTotalFen": "Long", "deliveryFeeFen": "Long", "queryPriceFen": "Long", "deliveryPlatformKey": "String", "deliveryPlatformLabelSnapshot": "String", "consumedAt": "Date", "publishedAt": "Date", "modifiedAt": "Date", "edited": "Boolean", "friendVisibilitySince": "Date", "friendVisibilitySequence": "Long", "reviewState": "String", "deletedAt": "Date", "purgeAt": "Date", "lifecycleGeneration": "Long", "searchTextNormalized": "Text", "reviewReason": "String"});
 FoodCard.primaryKeys = Object.freeze(['id']);
-FoodCard.indexes = Object.freeze(["status,createdAt,id", "status,category,createdAt,id", "ownerUid,createdAt", "ownerUid,status,createdAt", "status,latE3,lonE3,createdAt", "status,createdAt", "ownerUid,status,tasteScore,createdAt", "merchantId,id", "ownerUid,merchantId,id", "visibility,status,publishedAt,id", "visibility,status,tasteScore,publishedAt,id", "visibility,status,queryPriceFen,publishedAt,id", "visibility,status,queryPriceFen,publishedAt,id", "merchantId,visibility,status,publishedAt,id"]);
+FoodCard.indexes = Object.freeze(["status,createdAt,id", "status,category,createdAt,id", "ownerUid,createdAt", "ownerUid,status,createdAt", "status,latE3,lonE3,createdAt", "status,createdAt", "ownerUid,status,tasteScore,createdAt", "merchantId,id", "ownerUid,merchantId,id", "visibility,status,publishedAt,id", "visibility,status,tasteScore,publishedAt,id", "visibility,status,queryPriceFen,publishedAt,id", "visibility,status,queryPriceFen,publishedAt,id", "merchantId,visibility,status,publishedAt,id", "status,tasteScore,publishedAt,id", "ownerUid,status,createdAt,id"]);
 
 class Merchant extends CloudDbModel {}
 Merchant.fieldTypes = Object.freeze({
@@ -198,16 +138,9 @@ CardMedia.primaryKeys = Object.freeze(['id']);
 CardMedia.indexes = Object.freeze(['cardId', 'cardId,createdAt', 'ownerUid,createdAt']);
 
 class Report extends CloudDbModel {}
-Report.fieldTypes = Object.freeze({
-  id: 'String',
-  reporterUid: 'String',
-  cardId: 'String',
-  reason: 'String',
-  status: 'String',
-  createdAt: 'Long'
-});
+Report.fieldTypes = Object.freeze({"id": "String", "reporterUid": "String", "cardId": "String", "reason": "String", "status": "String", "createdAt": "Long", "targetType": "String", "targetId": "String", "updatedAt": "Long", "resolutionAction": "String", "resolutionReason": "String", "resolvedByUid": "String", "resolvedAt": "Long"});
 Report.primaryKeys = Object.freeze(['id']);
-Report.indexes = Object.freeze(['cardId', 'reporterUid,createdAt']);
+Report.indexes = Object.freeze(["cardId", "reporterUid,createdAt", "status,createdAt,id", "reporterUid,createdAt,id"]);
 
 class CardAction extends CloudDbModel {}
 CardAction.fieldTypes = Object.freeze({
@@ -221,25 +154,14 @@ CardAction.primaryKeys = Object.freeze(['id']);
 CardAction.indexes = Object.freeze([
   'actorUid,kind,createdAt,id',
   'cardId',
-  'actorUid,createdAt'
+  'actorUid,createdAt',
+  'cardId,kind,id'
 ]);
 
 class CardComment extends CloudDbModel {}
-CardComment.fieldTypes = Object.freeze({
-  id: 'String',
-  cardId: 'String',
-  authorUid: 'String',
-  parentId: 'String',
-  replyToNickname: 'String',
-  replyToUid: 'String',
-  content: 'Text',
-  status: 'String',
-  createdAt: 'Long',
-  updatedAt: 'Long'
-});
+CardComment.fieldTypes = Object.freeze({"id": "String", "cardId": "String", "authorUid": "String", "parentId": "String", "replyToNickname": "String", "replyToUid": "String", "content": "Text", "status": "String", "createdAt": "Long", "updatedAt": "Long"});
 CardComment.primaryKeys = Object.freeze(['id']);
-CardComment.indexes = Object.freeze(['cardId,createdAt', 'authorUid,createdAt', 'parentId,createdAt',
-  'replyToUid,createdAt']);
+CardComment.indexes = Object.freeze(["cardId,createdAt", "cardId,createdAt", "authorUid,createdAt", "parentId,createdAt", "replyToUid,createdAt", "authorUid"]);
 
 class CommentReaction extends CloudDbModel {}
 CommentReaction.fieldTypes = Object.freeze({
@@ -267,16 +189,9 @@ Friendship.primaryKeys = Object.freeze(['id']);
 Friendship.indexes = Object.freeze(['memberAUid', 'memberBUid', 'requesterUid', 'addresseeUid']);
 
 class FriendReport extends CloudDbModel {}
-FriendReport.fieldTypes = Object.freeze({
-  id: 'String',
-  reporterUid: 'String',
-  targetUid: 'String',
-  reason: 'String',
-  status: 'String',
-  createdAt: 'Long'
-});
+FriendReport.fieldTypes = Object.freeze({"id": "String", "reporterUid": "String", "cardId": "String", "reason": "String", "status": "String", "createdAt": "Long", "targetType": "String", "targetId": "String", "updatedAt": "Long", "resolutionAction": "String", "resolutionReason": "String", "resolvedByUid": "String", "resolvedAt": "Long"});
 FriendReport.primaryKeys = Object.freeze(['id']);
-FriendReport.indexes = Object.freeze(['targetUid', 'reporterUid']);
+FriendReport.indexes = Object.freeze(["cardId", "reporterUid,createdAt", "status,createdAt,id", "reporterUid,createdAt,id"]);
 
 class Conversation extends CloudDbModel {}
 Conversation.fieldTypes = Object.freeze({
@@ -348,6 +263,7 @@ GroupMessage.fieldTypes = Object.freeze({
   kind: 'String',
   text: 'Text',
   cardId: 'String',
+  referenceId: 'String',
   createdAt: 'Long'
 });
 GroupMessage.primaryKeys = Object.freeze(['id']);
@@ -399,7 +315,7 @@ IdentityBinding.fieldTypes = Object.freeze({
   updatedAt: 'Long'
 });
 IdentityBinding.primaryKeys = Object.freeze(['id']);
-IdentityBinding.indexes = Object.freeze(['provider,providerUid', 'canonicalUid']);
+IdentityBinding.indexes = Object.freeze({"provider_providerUid": ["provider", "providerUid"], "canonicalUid": ["canonicalUid"], "canonicalUid_id": ["canonicalUid", "id"]});
 
 class AuthMigrationTicket extends CloudDbModel {}
 AuthMigrationTicket.fieldTypes = Object.freeze({
@@ -487,33 +403,53 @@ FoodCardRevision.indexes = Object.freeze([
 ]);
 
 class MaintenanceJob extends CloudDbModel {}
-MaintenanceJob.fieldTypes = Object.freeze({
-  jobId: 'String',
-  jobType: 'String',
-  entityId: 'String',
-  ownerUid: 'String',
-  generation: 'Long',
-  status: 'String',
-  runAfterAt: 'Date',
-  leaseUntilAt: 'Date',
-  leaseOwner: 'String',
-  attemptCount: 'Integer',
-  cursor: 'String',
-  checkpointJson: 'Text',
-  lastErrorCode: 'String',
-  createdAt: 'Date',
-  updatedAt: 'Date'
-});
+MaintenanceJob.fieldTypes = Object.freeze({"jobId": "String", "jobType": "String", "entityId": "String", "ownerUid": "String", "generation": "Long", "status": "String", "runAfterAt": "Date", "leaseUntilAt": "Date", "leaseOwner": "String", "attemptCount": "Integer", "cursor": "String", "checkpointJson": "Text", "lastErrorCode": "String", "createdAt": "Date", "updatedAt": "Date", "authCredentialCiphertext": "Text", "authProviderUid": "String"});
 MaintenanceJob.primaryKeys = Object.freeze(['jobId']);
-MaintenanceJob.indexes = Object.freeze([
-  'status,runAfterAt,jobId',
-  'status,leaseUntilAt,jobId',
-  'ownerUid,jobType,jobId',
-  'entityId,jobType,generation'
-]);
+MaintenanceJob.indexes = Object.freeze(["status,runAfterAt,jobId", "status,leaseUntilAt,jobId", "ownerUid,jobType,jobId", "entityId,jobType,generation", "status,jobType,runAfterAt,jobId", "status,jobType,leaseUntilAt,jobId"]);
+
+class TastePreference extends CloudDbModel {}
+TastePreference.fieldTypes = Object.freeze({"uid": "String", "likedCategoriesJson": "Text", "lessCategoriesJson": "Text", "preferredMode": "String", "budgetMinFen": "Long", "budgetMaxFen": "Long", "updatedAt": "Date", "version": "Long"});
+TastePreference.primaryKeys = Object.freeze(["uid"]);
+TastePreference.indexes = Object.freeze(["uid"]);
+
+class FoodList extends CloudDbModel {}
+FoodList.fieldTypes = Object.freeze({"listId": "String", "ownerUid": "String", "name": "String", "coverCardId": "String", "sortOrder": "Long", "createdAt": "Date", "updatedAt": "Date", "version": "Long", "deletedAt": "Date"});
+FoodList.primaryKeys = Object.freeze(["listId"]);
+FoodList.indexes = Object.freeze(["ownerUid,sortOrder,listId"]);
+
+class FoodListItem extends CloudDbModel {}
+FoodListItem.fieldTypes = Object.freeze({"listId": "String", "cardId": "String", "ownerUid": "String", "sortKey": "Long", "createdAt": "Date"});
+FoodListItem.primaryKeys = Object.freeze(["listId", "cardId"]);
+FoodListItem.indexes = Object.freeze(["listId,sortKey,cardId", "ownerUid,cardId,listId"]);
+
+class PersonalFoodState extends CloudDbModel {}
+PersonalFoodState.fieldTypes = Object.freeze({"ownerUid": "String", "cardId": "String", "state": "String", "privateNote": "Text", "eatenAt": "Date", "personalScore": "Integer", "createdAt": "Date", "updatedAt": "Date", "version": "Long"});
+PersonalFoodState.primaryKeys = Object.freeze(["ownerUid", "cardId"]);
+PersonalFoodState.indexes = Object.freeze(["ownerUid,state,updatedAt,cardId"]);
+
+class MealChoiceHistory extends CloudDbModel {}
+MealChoiceHistory.fieldTypes = Object.freeze({"historyId": "String", "uid": "String", "cardId": "String", "merchantId": "String", "consumptionMode": "String", "selectedAt": "Date"});
+MealChoiceHistory.primaryKeys = Object.freeze(["historyId"]);
+MealChoiceHistory.indexes = Object.freeze(["uid,selectedAt,historyId"]);
+
+class MealPoll extends CloudDbModel {}
+MealPoll.fieldTypes = Object.freeze({"pollId": "String", "groupId": "String", "creatorUid": "String", "title": "String", "mode": "String", "visibilityMode": "String", "consumptionMode": "String", "status": "String", "deadlineAt": "Date", "acceptingOptions": "Boolean", "closeOutcome": "String", "closeReason": "String", "winnerOptionId": "String", "winnerResolvedAt": "Date", "resultCountsJson": "Text", "createdAt": "Date", "updatedAt": "Date", "version": "Long", "requestPayloadHash": "String"});
+MealPoll.primaryKeys = Object.freeze(["pollId"]);
+MealPoll.indexes = Object.freeze(["groupId,createdAt,pollId", "groupId,status,pollId", "creatorUid"]);
+
+class MealPollOption extends CloudDbModel {}
+MealPollOption.fieldTypes = Object.freeze({"pollId": "String", "optionId": "String", "addedByUid": "String", "cardId": "String", "merchantId": "String", "status": "String", "createdAt": "Date"});
+MealPollOption.primaryKeys = Object.freeze(["pollId", "optionId"]);
+MealPollOption.indexes = Object.freeze(["pollId,optionId", "addedByUid"]);
+
+class MealPollVote extends CloudDbModel {}
+MealPollVote.fieldTypes = Object.freeze({"pollId": "String", "voterUid": "String", "optionId": "String", "updatedAt": "Date"});
+MealPollVote.primaryKeys = Object.freeze(["pollId", "voterUid"]);
+MealPollVote.indexes = Object.freeze(["pollId,optionId,voterUid", "voterUid"]);
 
 const OBJECT_TYPES = Object.freeze({
   UserProfile, FoodCard, CardMedia, Report, CardAction, CardComment, CommentReaction,
+  TastePreference, FoodList, FoodListItem, PersonalFoodState, MealChoiceHistory, MealPoll, MealPollOption, MealPollVote,
   Friendship, FriendReport, Conversation, ChatMessage, GroupConversation, GroupMember, GroupMessage,
   NotificationEvent, PushRegistration, WidgetRegistration,
   IdentityBinding, AuthMigrationTicket,
@@ -1161,6 +1097,7 @@ function parseBody(event) {
   if (typeof candidate === 'string') candidate = JSON.parse(candidate);
   return {
     accessToken: typeof candidate.accessToken === 'string' ? candidate.accessToken : '',
+    readRequestId: candidate.readRequestId,
     payload: candidate.payload && typeof candidate.payload === 'object' ? candidate.payload : {}
   };
 }
@@ -1186,13 +1123,15 @@ function measuredQuery(target, name, metrics) {
       const started = Date.now();
       metrics.queryGetCount += 1;
       metrics.byObject[name] = (metrics.byObject[name] || 0) + 1;
+      const phase = readPhaseScope.getStore() || 'candidate-and-identity';
+      metrics.byPhase[phase] = (metrics.byPhase[phase] || 0) + 1;
       try {
         const rows = await object.get(...args);
         metrics.queriedRows += Array.isArray(rows) ? rows.length : 0;
         return rows;
       } catch (error) {
         metrics.queryFailures += 1;
-        if (String(error && error.message || error).includes('3007009')) metrics.busyErrors += 1;
+        if (errorCode(error) === '3007009') metrics.busyErrors += 1;
         throw error;
       } finally { metrics.dbMs += Date.now() - started; }
     };
@@ -1207,20 +1146,25 @@ function measuredQuery(target, name, metrics) {
   return proxy;
 }
 
-async function withReadMetrics(operation, env, action) {
+async function withReadMetrics(operation, env, action, id, attempt = 1) {
   const flag = env && env.SHIKE_READ_METRICS_ENABLED !== undefined
     ? env.SHIKE_READ_METRICS_ENABLED : process.env.SHIKE_READ_METRICS_ENABLED;
   if (String(flag || '').trim().toLowerCase() !== 'true') return action();
-  const metrics = { queryGetCount: 0, queriedRows: 0, queryFailures: 0, busyErrors: 0, dbMs: 0, byObject: {} };
+  const metrics = { queryGetCount: 0, queriedRows: 0, queryFailures: 0, busyErrors: 0, dbMs: 0, byObject: {}, byPhase: {} };
   return readMetricsScope.run(metrics, async () => {
     const started = Date.now();
     let outcome = 'error';
-    try { const result = await action(); outcome = 'success'; return result; }
+    let returnedCount = 0, scanned = 0, consumed = 0, fetched = 0, code = '';
+    try { const result = await action(); outcome = 'success';
+      returnedCount = result && (result.cards || result.candidates || result.items || []).length || 0;
+      scanned = result && result.scannedCandidateCount || 0; consumed = result && result.consumedCandidateCount || 0;
+      fetched = result && result.fetchedCandidateCount || 0;
+      return result; } catch (error) { code = errorCode(error); throw error; }
     finally {
       // Query.get calls only: excludes transactions, Storage and auth SDK requests.
-      console.info(`read.metrics operation=${operation} outcome=${outcome} queryGetCount=${metrics.queryGetCount} ` +
+      console.info(`read.metrics operation=${operation} requestId=${id || 'not-provided'} attempt=${attempt} functionVersion=${READ_OPT_VERSION} outcome=${outcome} code=${code || 'OK'} returnedCount=${returnedCount} scanned=${scanned} consumed=${consumed} fetched=${fetched} queryGetCount=${metrics.queryGetCount} ` +
         `queriedRows=${metrics.queriedRows} queryFailures=${metrics.queryFailures} busyErrors=${metrics.busyErrors} ` +
-        `dbMs=${metrics.dbMs} totalMs=${Date.now() - started} byObject=${JSON.stringify(metrics.byObject)}`);
+        `dbMs=${metrics.dbMs} totalMs=${Date.now() - started} byObject=${JSON.stringify(metrics.byObject)} byPhase=${JSON.stringify(metrics.byPhase)}`);
     }
   });
 }
@@ -1228,6 +1172,17 @@ async function withReadMetrics(operation, env, action) {
 async function one(query) {
   const rows = await query.limit(1).get();
   return rows.length > 0 ? rows[0] : null;
+}
+
+async function readCardRowsByIds(ids, env) {
+  const unique = [...new Set(ids.filter(Boolean))];
+  const result = new Map();
+  for (let start = 0; start < unique.length; start += CARD_READ_BATCH_SIZE) {
+    const batch = unique.slice(start, start + CARD_READ_BATCH_SIZE);
+    const rows = await collection(env, 'FoodCard').query().in('id', batch).limit(batch.length).get();
+    for (const row of rows) result.set(String(row.id), row);
+  }
+  return result;
 }
 
 function contentPolicy(env) {
@@ -1433,18 +1388,18 @@ async function verifiedAgcUid(accessToken) {
   }
 }
 
-async function verifiedIdentity(accessToken, env) {
+async function verifiedIdentity(accessToken, env, readOnly = false) {
   const providerUid = await verifiedAgcUid(accessToken);
   const binding = await identityBinding('AGC', providerUid, env);
   if (binding && String(binding.status || 'ACTIVE') !== 'ACTIVE') throw accessError('账号身份已停用。', 'ACCOUNT_INACTIVE');
   const canonicalUid = binding ? String(binding.canonicalUid || providerUid) : providerUid;
   await contentPolicy(env).assertAccountActive(canonicalUid, true);
-  await ensureIdentityBinding('AGC', providerUid, canonicalUid, env);
+  if (!readOnly) await ensureIdentityBinding('AGC', providerUid, canonicalUid, env);
   return { providerUid, canonicalUid };
 }
 
-async function verifiedUid(accessToken, env) {
-  const identity = await verifiedIdentity(accessToken, env);
+async function verifiedUid(accessToken, env, readOnly = false) {
+  const identity = await verifiedIdentity(accessToken, env, readOnly);
   return identity.canonicalUid;
 }
 
@@ -1655,7 +1610,7 @@ async function callMedia(action, payload, env) {
   const signature = crypto.createHmac('sha256', required(env, 'SHIKE_MEDIA_INTERNAL_KEY')).update(body).digest('hex');
   const result = await cloud.function().call({
     name: 'shike-media',
-    data: { method: 'execute', params: [{ body, signature }] }
+    data: { method: 'execute', params: [{ body, signature, readRequestId: readRequestScope.getStore() }] }
   });
   let value = result && typeof result.getValue === 'function' ? result.getValue() : result;
   if (value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, 'result')) value = value.result;
@@ -1728,6 +1683,11 @@ async function getPublicMedia(uid, payload, env) {
   if (bytes.length === 0 || bytes.length > MAX_PHOTO_BYTES || bytes.length !== Number(response.byteSize || 0)) {
     throw new Error('图片内容无效或超过允许大小。');
   }
+  const current = await one(collection(env, 'CardMedia').query().equalTo('id', mediaId));
+  if (!current || current.cardId !== media.cardId || current.ownerUid !== media.ownerUid ||
+      approvedObjectKeyForMedia(current) !== objectKey || !await contentPolicy(env).canReadMedia(uid, current)) {
+    throw accessError('图片已不可访问。');
+  }
   return { mimeType: String(media.mimeType || 'image/jpeg'), dataBase64: bytes.toString('base64'), byteSize: bytes.length };
 }
 
@@ -1738,6 +1698,9 @@ async function getRevisionMedia(uid, payload, env) {
   const revisionId = String(payload.revisionId || '');
   if (!await contentPolicy(env).canReadRevisionMedia(uid, media, revisionId, administrator)) throw accessError('编辑图片不可访问。');
   const response = await callMedia('read-revision', { key: approvedObjectKeyForMedia(media), viewerUid: uid, revisionId, administrator }, env);
+  const fresh = await one(collection(env, 'CardMedia').query().equalTo('id', media.id));
+  if (!fresh || fresh.cardId !== media.cardId || approvedObjectKeyForMedia(fresh) !== approvedObjectKeyForMedia(media) ||
+      !await contentPolicy(env).canReadRevisionMedia(uid, fresh, revisionId, isAdministrator(uid, env))) throw accessError('编辑图片已失效。');
   const bytes = Buffer.from(String(response.dataBase64 || ''), 'base64');
   if (!bytes.length || bytes.length > MAX_PHOTO_BYTES || bytes.length !== Number(response.byteSize || 0)) throw new Error('编辑图片返回无效。');
   return { mimeType: String(media.mimeType || 'image/jpeg'), dataBase64: bytes.toString('base64'), byteSize: bytes.length };
@@ -2363,6 +2326,27 @@ async function finalizeCardReads(cards, sourceRows, viewerUid, env, friendsOnly 
   return result;
 }
 
+function previewCard(row, context, env) {
+  const author = context.profiles.get(String(row.ownerUid)) || {};
+  const media = context.primaryMedia.get(String(row.mediaId || ''));
+  let photo = null;
+  if (media && media.status === 'APPROVED' && media.cardId === row.id && media.ownerUid === row.ownerUid) {
+    try { photo = { id: String(media.id), url: '', path: approvedObjectKeyForMedia(media),
+      bucket: required(env, 'SHIKE_STORAGE_BUCKET'), width: Number(media.width || 0), height: Number(media.height || 0) }; }
+    catch (_error) { photo = null; }
+  }
+  return { ...cardContractFields(row), id: String(row.id), productName: String(row.productName || ''),
+    category: String(row.category || 'other'), brand: '', priceFen: Number(row.priceFen || 0),
+    priceLabel: String(row.priceLabel || ''), originalPriceFen: 0, specification: '', shop: '',
+    sellingPoints: [], publicOffers: [], reviewText: '', tasteScore: 0, sourceLink: '',
+    photoUrl: '', photoPath: photo ? photo.path : '', photoBucket: photo ? photo.bucket : '',
+    photoWidth: photo ? photo.width : 0, photoHeight: photo ? photo.height : 0,
+    photos: photo ? [photo] : [], authorUid: String(row.ownerUid), authorNickname: String(author.nicknameValue || '食刻用户'),
+    authorAvatarUrl: '', authorAvatarPath: '', authorAvatarBucket: '',
+    district: String(row.district || ''), distanceKm: 0, status: 'APPROVED', createdAt: Number(row.createdAt || 0),
+    likeCount: 0, favoriteCount: 0, viewerLiked: false, viewerFavorited: false, comments: [] };
+}
+
 async function cardActionSummary(cardId, viewerUid, env) {
   return stage1.reactionSummary(cardId, viewerUid, env);
 }
@@ -2469,6 +2453,7 @@ async function publicComments(cardId, viewerUid, env) {
       id: String(row.id || ''),
       parentId: String(row.parentId || ''),
       replyToNickname: String(row.replyToNickname || ''),
+      authorUid: String(row.authorUid || ''),
       authorNickname: author.nickname,
       authorAvatarUrl: '',
       authorAvatarPath: author.avatarPath,
@@ -2496,9 +2481,10 @@ async function publicComments(cardId, viewerUid, env) {
 }
 
 async function publicCard(row, env, distanceKm = 0, includePhoto = false, viewerUid = '', includeThread = false,
-  maxPhotoCount = MAX_CARD_PHOTOS, metrics = null, readContext = null) {
+  maxPhotoCount = MAX_CARD_PHOTOS, metrics = null, readContext = null, reviewAccess = false) {
   const context = readContext || await createCardReadContext([row], viewerUid, env, metrics);
-  await context.policy.assertCardReadable(viewerUid, row);
+  if (reviewAccess && viewerUid === row.ownerUid && stage1.editableState(row)) await context.policy.assertAccountActive(viewerUid);
+  else await context.policy.assertCardReadable(viewerUid, row);
   const ownerUid = String(row.ownerUid || '');
   const parts = [
     publicPhotos(row, env, includePhoto, maxPhotoCount, metrics, context),
@@ -2529,6 +2515,7 @@ async function publicCard(row, env, distanceKm = 0, includePhoto = false, viewer
     sellingPoints: safeArray(row.sellingPointsJson),
     publicOffers: safeArray(row.publicOffersJson),
     reviewText: String(row.reviewText || ''),
+    reviewReason: reviewAccess ? String(row.reviewReason || '') : '',
     tasteScore: Number(row.tasteScore || 0),
     sourceLink: row.sourceLink || '',
     category: row.category,
@@ -2537,6 +2524,7 @@ async function publicCard(row, env, distanceKm = 0, includePhoto = false, viewer
     photoBucket: primaryPhoto.bucket,
     photoWidth: primaryPhoto.width,
     photoHeight: primaryPhoto.height,
+    authorUid: ownerUid,
     authorNickname: author.nickname,
     authorAvatarUrl: '',
     authorAvatarPath: author.avatarPath,
@@ -2548,6 +2536,8 @@ async function publicCard(row, env, distanceKm = 0, includePhoto = false, viewer
     viewerLiked: actions.viewerLiked,
     dislikeCount: Number(actions.dislikeCount || 0), myReaction: String(actions.myReaction || ''),
     viewerFavorited: actions.viewerFavorited,
+    ...(includeThread ? { viewerWanted: actions.viewerWanted, collectionReady: actions.collectionReady,
+      collectionStatus: actions.collectionStatus } : {}),
     commentCount: thread.commentCount,
     comments: thread.comments,
     district: row.district || '当前位置',
@@ -2907,7 +2897,10 @@ async function listFriendRankings(uid, env) {
 async function cardDetail(uid, payload, env) {
   const row = await one(collection(env, 'FoodCard').query().equalTo('id', String(payload.cardId || '')));
   await contentPolicy(env).assertCardReadable(uid, row);
-  return publicCard(row, env, 0, true, uid, payload.includeComments === false ? 'NO_COMMENTS' : true);
+  const detail = await publicCard(row, env, 0, true, uid, payload.includeComments === false ? 'NO_COMMENTS' : true);
+  const current = await finalizeCardReads([detail], [row], uid, env);
+  if (!current.length) throw accessError('内容已不可访问或已变化，请刷新。', 'CONTENT_UNAVAILABLE');
+  return current[0];
 }
 
 async function myCards(uid, env) {
@@ -2921,42 +2914,11 @@ async function myCards(uid, env) {
 }
 
 async function friendProfile(uid, payload, env) {
-  const friendUid = String(payload.friendUid || '').trim();
-  if (!friendUid || friendUid === uid) throw new Error('好友资料无效。');
-  const relationship = await friendshipBetween(uid, friendUid, env);
-  if (!relationship || String(relationship.status || '') !== 'ACCEPTED') {
-    throw new Error('只有互为好友后才能查看好友主页动态。');
-  }
-  const record = await one(collection(env, 'UserProfile').query().equalTo('uid', friendUid));
-  if (!record || String(record.accountStatus || 'ACTIVE') !== 'ACTIVE') {
-    throw new Error('该好友资料暂时不可用。');
-  }
-  const page = socialPage(payload);
-  const requestedSize = Number(payload.pageSize || 12);
-  const pageSize = Number.isFinite(requestedSize) ? Math.floor(Math.min(MAX_PAGE_SIZE, Math.max(1, requestedSize))) : 12;
-  const cardPage = await scanCardPage(() => collection(env, 'FoodCard').query().equalTo('ownerUid', friendUid)
-    .equalTo('status', 'APPROVED').orderByDesc('createdAt'), uid, env, page.offset, pageSize);
-  const cards = cardPage.cards;
-  const profile = profileResponse(record, env);
-  return {
-    profile: {
-      user: {
-        uid: profile.uid,
-        friendCode: profile.friendCode,
-        nickname: profile.nickname,
-        avatarUrl: '',
-        avatarPath: profile.avatarPath,
-        avatarBucket: profile.avatarBucket,
-        publishCount: profile.publishCount,
-        friendshipState: 'FRIEND',
-        requestId: ''
-      },
-      coverPath: profile.coverPath || '',
-      coverBucket: profile.coverBucket || ''
-    },
-    cards,
-    nextPageToken: cardPage.hasMore ? String(cardPage.nextOffset) : ''
-  };
+  const page = await stage7.userPage(uid, { userUid: String(payload.friendUid || ''),
+    cursor: String(payload.pageToken || ''), pageSize: Number(payload.pageSize || 12) }, env);
+  return { profile: { user: { ...page.profile, friendCode: '', avatarUrl: '',
+    friendshipState: page.relationshipState === 'FRIEND' ? 'FRIEND' : 'NONE', requestId: '' },
+    coverPath: page.profile.coverPath || '', coverBucket: page.profile.coverBucket || '' }, cards: page.cards, nextPageToken: page.nextCursor };
 }
 
 async function myFavoriteCards(uid, env) {
@@ -3368,14 +3330,6 @@ async function prepareConversationCleanup(transaction, uid, otherUid, state, env
   return { job, conversation: rows[0] || null };
 }
 
-function accessGrant(author, viewerUid, now, revoked = false) {
-  return Object.assign(new FriendContentAccessGrant(), {
-    authorUid: String(author.uid), viewerUid, accessThroughAt: new Date(now),
-    accessThroughSequence: nextContentSequence(author), revoked,
-    revokedAt: revoked ? new Date(now) : null, updatedAt: new Date(now)
-  });
-}
-
 async function sendFriendRequest(uid, payload, env) {
   const targetUid = String(payload.targetUid || '');
   const result = await friendshipTransaction(uid, targetUid, env, true, async (transaction, state) => {
@@ -3410,9 +3364,7 @@ async function respondFriendRequest(uid, payload, env) {
     }
     assertFriendRequestVersion(row, payload);
     if (payload.accept === true && payload.expectedCreatedAt == null) {
-      const grants = await transaction.executeQuery(collection(env, 'FriendContentAccessGrant').query()
-        .equalTo('authorUid', uid).equalTo('viewerUid', requesterUid).limit(1));
-      if (grants.length > 0) throw accessError('请更新客户端后刷新申请再处理。', 'CLIENT_UPDATE_REQUIRED');
+      throw accessError('请更新客户端后刷新申请再处理。', 'CLIENT_UPDATE_REQUIRED');
     }
     if (pendingFriendRequestExpired(row, state.now)) {
       transaction.executeUpsert([Object.assign(new Friendship(), row, { status: 'EXPIRED', updatedAt: state.now })]);
@@ -3470,7 +3422,6 @@ async function blockUser(uid, payload, env) {
       requesterUid: uid, addresseeUid: targetUid, status: 'BLOCKED',
       createdAt: state.row ? Number(state.row.createdAt) : state.now, updatedAt: state.now
     })]);
-    transaction.executeUpsert(state.profiles.map((profile) => accessGrant(profile, profile.uid === uid ? targetUid : uid, state.now, true)));
     if (cleanup.conversation) transaction.executeDelete([cleanup.conversation]);
     transaction.executeUpsert([cleanup.job]);
     return { bumpSequences: true, jobId: cleanup.job.jobId };
@@ -3484,16 +3435,6 @@ async function unblockUser(uid, payload, env) {
   await friendshipTransaction(uid, targetUid, env, false, async (transaction, state) => {
     const row = state.row;
     if (!row || row.status !== 'BLOCKED' || row.requesterUid !== uid) throw accessError('屏蔽关系不存在或无权解除。');
-    const grantRows = [];
-    for (const author of state.profiles) {
-      const rows = await transaction.executeQuery(collection(env, 'FriendContentAccessGrant').query()
-        .equalTo('authorUid', String(author.uid)).equalTo('viewerUid', author.uid === uid ? targetUid : uid).limit(1));
-      grantRows.push(...rows);
-    }
-    // Also close grants left by old deployments before deleting a legacy block.
-    if (grantRows.length > 0) transaction.executeUpsert(grantRows.map((grant) => Object.assign(new FriendContentAccessGrant(), grant, {
-      revoked: true, revokedAt: new Date(state.now), updatedAt: new Date(state.now)
-    })));
     transaction.executeDelete([row]);
     return {};
   });
@@ -3546,34 +3487,16 @@ async function removeFriend(uid, payload, env) {
     result = await friendshipTransaction(uid, friendUid, env, false, async (transaction, state) => {
       const receiptRows = receiptId ? await transaction.executeQuery(receipts.query().equalTo('requestId', receiptId).limit(1)) : [];
       if (receiptRows.length > 0) return savedRemoval(receiptRows[0]);
-      const grants = await transaction.executeQuery(collection(env, 'FriendContentAccessGrant').query()
-        .equalTo('authorUid', uid).equalTo('viewerUid', friendUid).limit(1));
-      const grant = grants[0] || null;
-      const reverseRows = await transaction.executeQuery(collection(env, 'FriendContentAccessGrant').query()
-        .equalTo('authorUid', friendUid).equalTo('viewerUid', uid).limit(1));
-      const reverseGrant = reverseRows[0] || null;
-      for (const existingGrant of [grant, reverseGrant].filter(Boolean)) {
-        const sequence = Number(existingGrant.accessThroughSequence || 0);
-        const author = state.profiles.find((profile) => profile.uid === existingGrant.authorUid);
-        if (!Number.isSafeInteger(sequence) || sequence < 0 || sequence > contentSequence(author)) {
-          throw accessError('历史授权序列与作者序列不一致，请先修复数据。', 'INVALID_STATE');
-        }
-      }
       let jobId = '';
       let alreadyRemoved = false;
       if (!state.row || state.row.status !== 'ACCEPTED') {
         if (state.row && state.row.status === 'BLOCKED') throw accessError('屏蔽关系不能作为解除好友操作处理。');
         if (state.row && state.row.status === 'PENDING') throw accessError('好友关系已变化，请刷新。', 'CONFLICT');
-        if (!grant) throw accessError('好友关系不存在。');
-        const cutoffAt = dateMillis(grant.accessThroughAt);
-        if (cutoffAt !== null) jobId = conversationCleanupId(state.id, cutoffAt);
         alreadyRemoved = true;
       } else {
         if (expected !== null && expected !== Number(state.row.updatedAt)) throw accessError('好友关系已变化，请刷新。', 'CONFLICT');
-        if (!requestId && (grant || reverseGrant)) throw accessError('请更新客户端后刷新好友列表再解除。', 'CLIENT_UPDATE_REQUIRED');
         const cleanup = await prepareConversationCleanup(transaction, uid, friendUid, state, env);
         jobId = cleanup.job.jobId;
-        transaction.executeUpsert(state.profiles.map((profile) => accessGrant(profile, profile.uid === uid ? friendUid : uid, state.now)));
         transaction.executeDelete([state.row]);
         if (cleanup.conversation) transaction.executeDelete([cleanup.conversation]);
         transaction.executeUpsert([cleanup.job]);
@@ -3591,19 +3514,8 @@ async function removeFriend(uid, payload, env) {
 }
 
 async function revokeFriendContentAccess(uid, payload, env) {
-  const viewerUid = String(payload.viewerUid || '');
-  await friendshipTransaction(uid, viewerUid, env, false, async (transaction, state) => {
-    if (state.row && state.row.status === 'ACCEPTED') throw accessError('当前好友不能撤销历史授权，请先解除好友。', 'CURRENT_FRIEND');
-    const rows = await transaction.executeQuery(collection(env, 'FriendContentAccessGrant').query()
-      .equalTo('authorUid', uid).equalTo('viewerUid', viewerUid).limit(1));
-    const grant = rows[0];
-    if (!grant || grant.revoked === true) return { writeProfiles: false };
-    transaction.executeUpsert([Object.assign(new FriendContentAccessGrant(), grant, {
-      revoked: true, revokedAt: new Date(state.now), updatedAt: new Date(state.now)
-    })]);
-    return {};
-  });
-  return { success: true };
+  await contentPolicy(env).assertAccountActive(uid);
+  throw accessError('旧好友授权已退出，请使用拉黑限制访问。', 'CLIENT_UPDATE_REQUIRED');
 }
 
 async function setCardVisibility(uid, payload, env) {
@@ -3890,7 +3802,7 @@ async function listConversations(uid, payload, env) {
     output.push({
       id: String(row.id || ''),
       friend,
-      lastMessageKind: String(row.lastMessageKind || 'TEXT'),
+      lastMessageKind: row.lastMessageKind === 'MEAL_POLL' ? 'TEXT' : String(row.lastMessageKind || 'TEXT'),
       lastMessagePreview: String(row.lastMessageKind || '') === 'CARD' ? '分享了一张美食推荐' : decryptPrivateText(
         row.lastMessagePreview, `conversation:${String(row.id || '')}:preview`, env
       ),
@@ -4011,7 +3923,7 @@ async function publicGroupConversation(row, membership, env) {
     name: String(row.name || '群聊'),
     ownerUid: String(row.ownerUid || ''),
     memberCount: Number(row.memberCount || 0),
-    lastMessageKind: String(row.lastMessageKind || 'TEXT'),
+    lastMessageKind: row.lastMessageKind === 'MEAL_POLL' ? 'TEXT' : String(row.lastMessageKind || 'TEXT'),
     lastMessagePreview: !previewAllowed ? '消息已不可访问' : String(row.lastMessageKind || '') === 'CARD' ? '分享了一张美食推荐' : decryptPrivateText(
       row.lastMessagePreview, `group-conversation:${groupId}:preview`, env
     ),
@@ -4147,7 +4059,7 @@ async function getGroupChat(uid, payload, env) {
   return { group: await publicGroupConversation(group, { unreadCount: 0 }, env), members };
 }
 
-async function publicGroupMessage(row, viewerUid, env) {
+async function publicGroupMessage(row, viewerUid, env, clientVersion = 1) {
   const messageId = String(row.id || '');
   const sender = await socialUserByUid(String(row.senderUid || ''), viewerUid, env);
   const output = {
@@ -4155,8 +4067,9 @@ async function publicGroupMessage(row, viewerUid, env) {
     groupId: String(row.groupId || ''),
     sender,
     mine: String(row.senderUid || '') === viewerUid,
-    kind: groupMessageKind(row.kind),
-    text: sender ? decryptPrivateText(row.text, `group-message:${messageId}:text`, env) : '',
+    kind: row.kind === 'MEAL_POLL' ? clientVersion >= 2 ? 'MEAL_POLL' : 'TEXT' : groupMessageKind(row.kind),
+    text: row.kind === 'MEAL_POLL' ? '选餐投票，请升级查看' : sender ? decryptPrivateText(row.text, `group-message:${messageId}:text`, env) : '',
+    referenceId: row.kind === 'MEAL_POLL' && clientVersion >= 2 ? String(row.referenceId || '') : '',
     cardId: sender ? String(row.cardId || '') : '',
     createdAt: Number(row.createdAt || 0)
   };
@@ -4179,7 +4092,7 @@ async function listGroupMessages(uid, payload, env) {
   const rows = await query.orderByDesc('createdAt').limit(pageSize).get();
   const chronological = rows.slice().reverse();
   const messages = [];
-  for (const row of chronological) messages.push(await publicGroupMessage(row, uid, env));
+  for (const row of chronological) messages.push(await publicGroupMessage(row, uid, env, Number(payload.clientVersion || 1)));
   if (Number(membership.unreadCount || 0) > 0) {
     membership.unreadCount = 0;
     membership.updatedAt = Date.now();
@@ -4416,47 +4329,23 @@ async function toggleCommentReaction(uid, payload, env) {
 }
 
 async function reportCard(uid, payload, env) {
-  const cardId = String(payload.cardId || '');
-  const card = await one(collection(env, 'FoodCard').query().equalTo('id', cardId));
-  await contentPolicy(env).assertCardReadable(uid, card);
-  const id = crypto.createHash('sha256').update(`${uid}:${cardId}`).digest('hex');
-  const reports = collection(env, 'Report');
-  const existing = await one(reports.query().equalTo('id', id));
-  if (!existing) {
-    await reports.insert({
-      id, reporterUid: uid, cardId, reason: String(payload.reason || '其他').slice(0, 100),
-      status: 'PENDING', createdAt: Date.now()
-    });
-  }
-  const distinct = await reports.query().equalTo('cardId', cardId).limit(3).get();
-  if (distinct.length >= 3) {
-    const cards = collection(env, 'FoodCard');
-    const committed = await cards.runTransaction({
-      apply: async (transaction) => {
-        const rows = await transaction.executeQuery(cards.query().equalTo('id', cardId).limit(1));
-        const current = rows[0];
-        if (!current || (current.status === 'REMOVED' && current.reviewState === 'TAKEN_DOWN')) return true;
-        const now = Math.max(Date.now(), Number(current.updatedAt || 0) + 1, (dateMillis(current.modifiedAt) || 0) + 1);
-        const owner = await stage1.txOne(transaction, env, 'UserProfile', 'uid', current.ownerUid);
-        const removed = Object.assign(new FoodCard(), current, {
-          status: 'REMOVED', reviewState: 'TAKEN_DOWN', publishedAt: new Date(now), modifiedAt: new Date(now), updatedAt: now
-        });
-        const counters = await stage2.prepareCounterTransition(transaction, current, removed, owner, env, now);
-        stage1.upsertRows(transaction, [removed, ...counters]);
-        return true;
-      }
-    });
-    if (!committed) throw new Error('举报下架状态未保存，请重试。');
-  }
-  return { success: true };
+  return moderation.submitReport(uid, payload, env, 'CARD');
 }
 
 async function deleteOwnCard(uid, payload, env) {
   return stage1.softDelete(uid, payload, env);
 }
 
-async function cleanupAccount(uid, env) {
-  return stage1.beginAccountDeletion(uid, env);
+async function cleanupAccount(uid, env, accessToken = '') {
+  const providerUid=accessToken ? await verifiedAgcUid(accessToken) : '';
+  const credential=accessToken ? encryptPrivateText(accessToken,'delete-account:'+uid,env) : '';
+  const result=await stage1.beginAccountDeletion(uid,env);
+  if(credential) await collection(env,'MaintenanceJob').runTransaction({apply:async tx=>{
+    const job=await stage1.txOne(tx,env,'MaintenanceJob','jobId',result.jobId);
+    if(job && job.jobType==='DELETE_ACCOUNT' && job.entityId===uid && job.status!=='DONE') stage1.upsertRows(tx,[Object.assign(new MaintenanceJob(),job,{authCredentialCiphertext:credential,authProviderUid:providerUid,updatedAt:new Date()})]);
+    return true;
+  }});
+  return result;
 }
 
 async function verifiedDeletionUid(accessToken, env) {
@@ -4547,7 +4436,8 @@ async function moderateCard(uid, payload, env) {
 const stage1 = require('./stage1-services').createStage1Services({
   collection, one, transactionPolicy, contentPolicy, profileForWrite, logicalWriteTime, nextContentSequence,
   assertAdmin, validateCard, uniqueMediaIds, promotePendingMedia, refreshPublishCount, actionId, safeArray,
-  personalized: PERSONALIZED, models: OBJECT_TYPES, stage2: () => stage2, publicCard
+  recoveryPeriod: env => String(env.SHIKE_ENVIRONMENT || '') === 'test' && Number.isSafeInteger(Number(env.SHIKE_TEST_RECOVERY_SECONDS)) && Number(env.SHIKE_TEST_RECOVERY_SECONDS) >= 30 && Number(env.SHIKE_TEST_RECOVERY_SECONDS) <= 86400 ? Number(env.SHIKE_TEST_RECOVERY_SECONDS) * 1000 : 30 * 86400000,
+  personalized: PERSONALIZED, models: OBJECT_TYPES, stage2: () => stage2, collections: () => personalCollections, publicCard
 });
 
 const stage2 = require('./stage2-services').createStage2Services({
@@ -4558,14 +4448,102 @@ const stage3 = require('./stage3-services').createStage3Services({
   collection, one, models: OBJECT_TYPES, contentPolicy, readableCardRows, readCardIfAllowed, stage1: () => stage1
 });
 
+
+const stages47Context = { collection, one, models: OBJECT_TYPES, contentPolicy, transactionPolicy, readableCardRows,
+  readCardIfAllowed, finalizeCardReads, createCardReadContext, preparePrimaryPhotos, readCardRowsByIds, withReadPhase,
+  profileForWrite, logicalWriteTime, actionId, friendshipRowsFor, friendshipBetween,
+  encryptPrivateText, decryptPrivateText, profileResponse, previewCard, collections: () => personalCollections,
+  stage1: () => stage1, stage2: () => stage2,
+  stage3: () => stage3, stage4: () => stage4, stage5: () => stage5,
+  readPublicShareMedia: (card, media, env) => getPublicMedia('', { bucketName: required(env, 'SHIKE_STORAGE_BUCKET'), cloudPath: approvedObjectKeyForMedia(media) }, env)
+};
+const personalCollections = require('./personal-collections').createPersonalCollections(stages47Context);
+const stage4 = require('./stage4-services').createStage4Services(stages47Context);
+const stage5 = require('./stage5-services').createStage5Services(stages47Context);
+const stage6 = require('./stage6-services').createStage6Services(stages47Context);
+const stage7 = require('./stage7-services').createStage7Services(stages47Context);
+
+const authenticationCleanup = require('./authentication-cleanup').createAuthenticationCleanup({ decryptPrivateText, verifiedAgcUid });
+const stage8Context = { ...stages47Context, assertAdmin, isAdministrator, publicPhotos, uniqueMediaIds, refreshPublishCount,
+  legacyReportId: (uid,cardId) => crypto.createHash('sha256').update(uid+':'+cardId).digest('hex'),
+  photoReference: (media,env) => ({ id: media.id, url: '', path: approvedObjectKeyForMedia(media), bucket: required(env,'SHIKE_STORAGE_BUCKET'), width: Number(media.width||0), height: Number(media.height||0) }),
+  removeMediaFiles: async (media,env) => { const owner=media.storageUid||media.ownerUid; await callMedia('remove',{keys:[pendingObjectKey(owner,media.id),approvedObjectKey(owner,media.id)]},env); },
+  deleteAuthentication: (job,binding,env) => authenticationCleanup.remove(job,binding,env),
+  processLegacyJob: async (job,env) => job.jobType==='PURGE_CONVERSATION' ? processFriendCleanup(job.jobId,env) : stage1.processMigration(String(env.SHIKE_MIGRATION_ANCHOR_UID||String(env.SHIKE_ADMIN_UIDS||'').split(',')[0]||''),{jobId:job.jobId},env)
+};
+const moderation = require('./moderation-services').createModerationServices(stage8Context);
+const lifecycle = require('./lifecycle-services').createLifecycleServices(stage8Context);
+async function getReviewMedia(uid,payload,env) {
+  await contentPolicy(env).assertAccountActive(uid);
+  const media=await one(collection(env,'CardMedia').query().equalTo('id',String(payload.mediaId||'')));
+  const administrator=isAdministrator(uid,env);
+  if(!await contentPolicy(env).canReadModerationMedia(uid,media,administrator))throw accessError('审核图片不可访问。');
+  const response=await callMedia('read-moderation',{key:approvedObjectKeyForMedia(media),viewerUid:uid,administrator},env);
+  const fresh=await one(collection(env,'CardMedia').query().equalTo('id',String(payload.mediaId||'')));
+  if(!fresh||fresh.cardId!==media.cardId||!await contentPolicy(env).canReadModerationMedia(uid,fresh,administrator))throw accessError('审核图片已失效。');
+  return {mimeType:'image/jpeg',dataBase64:response.dataBase64,byteSize:response.byteSize};
+}
+
 const operations = {
+  'get-stage89-capabilities': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return moderation.capabilities(uid,env); },
+  'list-moderation-queue': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return moderation.queue(uid,payload,env); },
+  'get-moderation-detail': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return moderation.detail(uid,payload,env); },
+  'decide-moderation': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return moderation.decide(uid,payload,env); },
+  'list-my-reports': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return moderation.queue(uid,payload,env,true); },
+  'report-merchant': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return moderation.submitReport(uid,payload,env,'MERCHANT'); },
+  'list-own-review-requests': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return moderation.ownReviewQueue(uid,payload,env); },
+  'list-deleted-cards': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return lifecycle.deleted(uid,payload,env); },
+  'restore-deleted-card': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return lifecycle.restore(uid,payload,env); },
+  'list-lifecycle-jobs': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return lifecycle.jobs(uid,payload,env); },
+  'get-lifecycle-job': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return lifecycle.jobDetail(uid,payload,env); },
+  'retry-lifecycle-job': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return lifecycle.retry(uid,payload,env); },
+  'confirm-auth-cleanup': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return lifecycle.retry(uid,payload,env,true); },
+  'get-review-media': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return getReviewMedia(uid,payload,env); },
+  'run-lifecycle-job': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); await assertAdmin(uid,env); const result=await lifecycle.process(String(payload.jobId||''),env); return {success:true,...result}; },
+
+  'get-card-previews': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env, true); return personalCollections.previews(uid,payload,env); },
+  'list-personal-collection': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env, true); return personalCollections.list(uid,payload,env); },
+  'get-personal-collection-migration': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env, true); return personalCollections.status(uid,env); },
+  'start-personal-collection-migration': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return personalCollections.start(uid,env); },
+  'resume-personal-collection-migration': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return personalCollections.resume(uid,payload,env); },
+  'set-card-favorite': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return personalCollections.set(uid,payload,env,'FAVORITE'); },
+  'set-card-wanted': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return personalCollections.set(uid,payload,env,'WANT_TO_EAT'); },
+  'get-stage47-capabilities': async ({ accessToken, payload }, env) => { const uid = accessToken ? await verifiedUid(accessToken, env, true) : ''; return stage7.capabilities(uid,env); },
+  'get-taste-preference': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env, true); return stage4.get(uid,env); },
+  'update-taste-preference': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage4.update(uid,payload,env); },
+  'clear-taste-preference': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage4.update(uid,payload,env,true); },
+  'list-personalized-recommendations': async ({ accessToken, payload }, env) => { const uid = accessToken ? await verifiedUid(accessToken, env, true) : ''; return stage4.recommendations(uid,payload,env); },
+  'list-food-lists': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env, true); return stage5.lists(uid,payload,env); },
+  'create-food-list': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage5.create(uid,payload,env); },
+  'update-food-list': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage5.update(uid,payload,env); },
+  'delete-food-list': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage5.update(uid,payload,env,true); },
+  'list-food-list-items': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env, true); return stage5.items(uid,payload,env); },
+  'add-food-list-item': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage5.item(uid,payload,env); },
+  'remove-food-list-item': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage5.item(uid,payload,env,true); },
+  'reorder-food-list-items': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage5.reorder(uid,payload,env); },
+  'get-personal-food-state': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env, true); return stage5.personal(uid,payload,env); },
+  'update-personal-food-state': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage5.updatePersonal(uid,payload,env); },
+  'get-meal-candidates': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env, true); return stage6.candidates(uid,payload,env); },
+  'record-meal-choice': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage6.record(uid,payload,env); },
+  'list-meal-choice-history': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env, true); return stage6.history(uid,payload,env); },
+  'create-meal-poll': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage6.createPoll(uid,payload,env); },
+  'get-meal-poll': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage6.getPoll(uid,payload,env); },
+  'add-meal-poll-option': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage6.mutatePoll(uid,payload,env,'ADD'); },
+  'vote-meal-poll': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage6.mutatePoll(uid,payload,env,'VOTE'); },
+  'close-meal-poll': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage6.mutatePoll(uid,payload,env,'CLOSE'); },
+  'cancel-meal-poll': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage6.mutatePoll(uid,payload,env,'CANCEL'); },
+  'stop-meal-poll-options': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage6.mutatePoll(uid,payload,env,'STOP'); },
+  'get-user-page': async ({ accessToken, payload }, env) => { const uid = accessToken ? await verifiedUid(accessToken, env, true) : ''; return stage7.userPage(uid,payload,env); },
+  'list-merchant-rankings': async ({ accessToken, payload }, env) => { const uid = accessToken ? await verifiedUid(accessToken, env, true) : ''; return stage7.rankings(uid,payload,env); },
+  'list-former-friend-content-grants': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env, true); return stage7.formerGrants(uid,payload,env); },
+  'set-card-reaction-v2': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage7.reaction(uid,payload,env); },
   'get-discovery-capabilities': async ({ accessToken }, env) => {
-    if (accessToken) await verifiedUid(accessToken, env);
+    if (accessToken) await verifiedUid(accessToken, env, true);
     return stage3.capabilities(env);
   },
-  'list-map-merchants': async ({ accessToken, payload }, env) => stage3.listMapMerchants(accessToken ? await verifiedUid(accessToken, env) : '', payload, env),
-  'search-public-cards': async ({ accessToken, payload }, env) => stage3.searchPublicCards(accessToken ? await verifiedUid(accessToken, env) : '', payload, env),
-  'get-merchant-recommendations': async ({ accessToken, payload }, env) => stage3.getMerchantRecommendations(accessToken ? await verifiedUid(accessToken, env) : '', payload, env),
+  'list-map-merchants': async ({ accessToken, payload }, env) => stage3.listMapMerchants(accessToken ? await verifiedUid(accessToken, env, true) : '', payload, env),
+  'search-public-cards': async ({ accessToken, payload }, env) => stage3.searchPublicCards(accessToken ? await verifiedUid(accessToken, env, true) : '', payload, env),
+  'get-merchant-recommendations': async ({ accessToken, payload }, env) => stage3.getMerchantRecommendations(accessToken ? await verifiedUid(accessToken, env, true) : '', payload, env),
   'get-stage2-capabilities': async ({ accessToken }, env) => { await verifiedUid(accessToken, env); return stage2.capabilities(env); },
   'resolve-merchant': async ({ accessToken, payload }, env) => stage2.resolveMerchant(await verifiedUid(accessToken, env), payload, env),
   'create-user-merchant': async ({ accessToken, payload }, env) => stage2.createUserMerchant(await verifiedUid(accessToken, env), payload, env),
@@ -4616,15 +4594,15 @@ const operations = {
   'upload-card-photo': async ({ accessToken, payload }, env) =>
     uploadCardPhoto(await verifiedUid(accessToken, env), payload, env),
   'get-public-media': async ({ accessToken, payload }, env) =>
-    getPublicMedia(accessToken ? await verifiedUid(accessToken, env) : '', payload, env),
+    getPublicMedia(accessToken ? await verifiedUid(accessToken, env, true) : '', payload, env),
   'publish-card': async ({ accessToken, payload }, env) => publishCard(await verifiedUid(accessToken, env), payload, env),
   'list-nearby-cards': async ({ accessToken, payload }, env) => payload.scope === 'all'
-    ? listPublicRecommendations(payload, env, accessToken ? await verifiedUid(accessToken, env) : '') : listNearby(await verifiedUid(accessToken, env), payload, env),
-  'list-friend-rankings': async ({ accessToken }, env) => listFriendRankings(await verifiedUid(accessToken, env), env),
+    ? listPublicRecommendations(payload, env, accessToken ? await verifiedUid(accessToken, env, true) : '') : listNearby(await verifiedUid(accessToken, env, true), payload, env),
+  'list-friend-rankings': async ({ accessToken }, env) => listFriendRankings(await verifiedUid(accessToken, env, true), env),
   'get-friend-profile': async ({ accessToken, payload }, env) =>
-    friendProfile(await verifiedUid(accessToken, env), payload, env),
+    friendProfile(await verifiedUid(accessToken, env, true), payload, env),
   'get-card-detail': async ({ accessToken, payload }, env) =>
-    cardDetail(accessToken ? await verifiedUid(accessToken, env) : '', payload, env),
+    cardDetail(accessToken ? await verifiedUid(accessToken, env, true) : '', payload, env),
   'list-my-cards': async ({ accessToken }, env) => myCards(await verifiedUid(accessToken, env), env),
   'list-my-favorite-cards': async ({ accessToken }, env) => myFavoriteCards(await verifiedUid(accessToken, env), env),
   'list-received-comments': async ({ accessToken, payload }, env) =>
@@ -4646,15 +4624,15 @@ const operations = {
     reportUser(await verifiedUid(accessToken, env), payload, env),
   'remove-friend': async ({ accessToken, payload }, env) => removeFriend(await verifiedUid(accessToken, env), payload, env),
   'list-conversations': async ({ accessToken, payload }, env) =>
-    listConversations(await verifiedUid(accessToken, env), payload, env),
+    listConversations(await verifiedUid(accessToken, env, true), payload, env),
   'list-messages': async ({ accessToken, payload }, env) => listMessages(await verifiedUid(accessToken, env), payload, env),
   'send-message': async ({ accessToken, payload }, env) => sendMessage(await verifiedUid(accessToken, env), payload, env),
   'create-group-chat': async ({ accessToken, payload }, env) =>
     createGroupChat(await verifiedUid(accessToken, env), payload, env),
   'list-group-conversations': async ({ accessToken, payload }, env) =>
-    listGroupConversations(await verifiedUid(accessToken, env), payload, env),
+    listGroupConversations(await verifiedUid(accessToken, env, true), payload, env),
   'get-group-chat': async ({ accessToken, payload }, env) =>
-    getGroupChat(await verifiedUid(accessToken, env), payload, env),
+    getGroupChat(await verifiedUid(accessToken, env, true), payload, env),
   'list-group-messages': async ({ accessToken, payload }, env) =>
     listGroupMessages(await verifiedUid(accessToken, env), payload, env),
   'send-group-message': async ({ accessToken, payload }, env) =>
@@ -4664,7 +4642,7 @@ const operations = {
   'remove-group-member': async ({ accessToken, payload }, env) =>
     removeGroupMember(await verifiedUid(accessToken, env), payload, env),
   'list-notifications': async ({ accessToken, payload }, env) =>
-    listNotifications(await verifiedUid(accessToken, env), payload, env),
+    listNotifications(await verifiedUid(accessToken, env, true), payload, env),
   'mark-notification-read': async ({ accessToken, payload }, env) =>
     markNotificationRead(await verifiedUid(accessToken, env), payload, env),
   'mark-all-notifications-read': async ({ accessToken }, env) =>
@@ -4687,20 +4665,22 @@ const operations = {
   'delete-card-comment': async ({ accessToken, payload }, env) => deleteCardComment(await verifiedUid(accessToken, env), payload, env),
   'toggle-comment-reaction': async ({ accessToken, payload }, env) => toggleCommentReaction(await verifiedUid(accessToken, env), payload, env),
   'delete-own-card': async ({ accessToken, payload }, env) => deleteOwnCard(await verifiedUid(accessToken, env), payload, env),
-  'delete-account-data': async ({ accessToken }, env) => cleanupAccount(await verifiedDeletionUid(accessToken, env), env)
+  'delete-account-data': async ({ accessToken }, env) => cleanupAccount(await verifiedDeletionUid(accessToken, env), env, accessToken)
 };
 
 function createHandler(operation) {
   if (!operations[operation]) throw new Error(`未知操作 ${operation}`);
   return async function handler(event, context, callback, logger) {
+    let id = requestId(event);
     try {
       const input = parseBody(event);
       const env = context && context.env ? context.env : {};
-      const data = await withReadMetrics(operation, env, () => operations[operation](input, env));
-      return callback({ ok: true, data, message: '' });
+      id = requestId(input);
+      const data = await readRequestScope.run(id, () => withReadMetrics(operation, env, () => operations[operation](input, env), id));
+      return callback({ ok: true, data, message: '', requestId: id, operation, functionVersion: READ_OPT_VERSION });
     } catch (error) {
-      logger.error(`${operation} failed: ${safeLogError(error)}`);
-      return callback({ ok: false, data: {}, message: error && error.message ? error.message : '云端请求失败。' });
+      logger.error(`${operation} requestId=${id} code=${errorCode(error)} stage=cloud-operation failed: ${safeLogError(error)}`);
+      return callback(errorResponse(error, operation, id));
     }
   };
 }
@@ -4708,10 +4688,13 @@ function createHandler(operation) {
 async function executeOperation(operation, input, env = process.env) {
   if (!operations[operation]) throw new Error(`未知操作 ${operation}`);
   const safeInput = input && typeof input === 'object' ? input : {};
-  return withReadMetrics(operation, env || {}, () => operations[operation]({
+  const id = requestId(safeInput);
+  return readRequestScope.run(id, () => withReadMetrics(operation, env || {}, () => operations[operation]({
     accessToken: typeof safeInput.accessToken === 'string' ? safeInput.accessToken : '',
     payload: safeInput.payload && typeof safeInput.payload === 'object' ? safeInput.payload : {}
-  }, env || {}));
+  }, env || {}), id, safeInput.readAttempt === 2 ? 2 : 1));
 }
 
-module.exports = { createHandler, executeOperation, safeLogError, haversineKm, geohash };
+module.exports = { runMaintenance: env => lifecycle.tick(env || process.env), createHandler, executeOperation, safeLogError, haversineKm, geohash,
+  readShareCard: (payload, env) => stage7.publicShare(payload, env),
+  readShareMedia: (payload, env) => stage7.publicShareMedia(payload, env) };

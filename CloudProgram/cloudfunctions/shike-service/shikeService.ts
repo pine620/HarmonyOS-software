@@ -1,6 +1,8 @@
 type CloudEnvelope = {
   accessToken: string;
   payload: object;
+  readRequestId?: string;
+  readAttempt?: number;
 };
 
 type CloudResponse = {
@@ -8,11 +10,13 @@ type CloudResponse = {
   data: object;
   message: string;
   code?: string;
+  retryable?: boolean;
+  retryAfterMs?: number;
+  requestId?: string;
+  operation?: string;
+  stage?: string;
+  functionVersion?: string;
 };
-
-interface CodedRuntimeError extends Error {
-  code?: string;
-}
 
 type RuntimeModule = {
   executeOperation(operation: string, input: CloudEnvelope, env?: NodeJS.ProcessEnv): Promise<object>;
@@ -20,6 +24,11 @@ type RuntimeModule = {
 };
 
 const runtime = require('./runtime') as RuntimeModule;
+interface ReadErrorsModule {
+  requestId(input: object): string;
+  errorResponse(error: unknown, operation: string, requestId: string): CloudResponse;
+}
+const readErrors = require('./read-errors') as ReadErrorsModule;
 
 /**
  * Client-facing cloud object. Every authenticated method still verifies the
@@ -29,19 +38,172 @@ async function executeCloudOperation(
   operation: string,
   input: CloudEnvelope
 ): Promise<CloudResponse> {
+  const requestId: string = readErrors.requestId(input);
   try {
-    const data = await runtime.executeOperation(operation, input, process.env);
-    return { ok: true, data, message: '' };
+    const request = Object.assign({}, input, { readRequestId: requestId });
+    const data = await runtime.executeOperation(operation, request, process.env);
+    return { ok: true, data, message: '', requestId, operation, functionVersion: 'stages89-20261007-v1' };
   } catch (error) {
-    console.error(`${operation} failed: ${runtime.safeLogError(error)}`);
-    const message = error instanceof Error ? error.message : '云端请求失败。';
-    const failure = error instanceof Error ? error as CodedRuntimeError : undefined;
-    const code = failure && typeof failure.code === 'string' && failure.code.length > 0 ? failure.code : 'REQUEST_FAILED';
-    return { ok: false, data: {}, message, code };
+    const response: CloudResponse = readErrors.errorResponse(error, operation, requestId);
+    console.error(`${operation} requestId=${requestId} code=${response.code} stage=${response.stage} failed: ${runtime.safeLogError(error)}`);
+    return response;
   }
 }
 
 export class ShikeService {
+  getStage89Capabilities(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('get-stage89-capabilities', input);
+  }
+  listModerationQueue(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('list-moderation-queue', input);
+  }
+  getModerationDetail(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('get-moderation-detail', input);
+  }
+  decideModeration(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('decide-moderation', input);
+  }
+  listMyReports(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('list-my-reports', input);
+  }
+  reportMerchant(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('report-merchant', input);
+  }
+  listOwnReviewRequests(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('list-own-review-requests', input);
+  }
+  listDeletedCards(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('list-deleted-cards', input);
+  }
+  restoreDeletedCard(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('restore-deleted-card', input);
+  }
+  listLifecycleJobs(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('list-lifecycle-jobs', input);
+  }
+  getLifecycleJob(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('get-lifecycle-job', input);
+  }
+  retryLifecycleJob(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('retry-lifecycle-job', input);
+  }
+  confirmAuthCleanup(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('confirm-auth-cleanup', input);
+  }
+  getReviewMedia(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('get-review-media', input);
+  }
+  runLifecycleJob(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('run-lifecycle-job', input);
+  }
+  getCardPreviews(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('get-card-previews', input);
+  }
+  listPersonalCollection(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('list-personal-collection', input);
+  }
+  getPersonalCollectionMigration(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('get-personal-collection-migration', input);
+  }
+  startPersonalCollectionMigration(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('start-personal-collection-migration', input);
+  }
+  resumePersonalCollectionMigration(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('resume-personal-collection-migration', input);
+  }
+  setCardFavorite(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('set-card-favorite', input);
+  }
+  setCardWanted(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('set-card-wanted', input);
+  }
+  getStage47Capabilities(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('get-stage47-capabilities', input);
+  }
+  getTastePreference(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('get-taste-preference', input);
+  }
+  updateTastePreference(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('update-taste-preference', input);
+  }
+  clearTastePreference(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('clear-taste-preference', input);
+  }
+  listPersonalizedRecommendations(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('list-personalized-recommendations', input);
+  }
+  listFoodLists(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('list-food-lists', input);
+  }
+  createFoodList(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('create-food-list', input);
+  }
+  updateFoodList(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('update-food-list', input);
+  }
+  deleteFoodList(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('delete-food-list', input);
+  }
+  listFoodListItems(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('list-food-list-items', input);
+  }
+  addFoodListItem(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('add-food-list-item', input);
+  }
+  removeFoodListItem(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('remove-food-list-item', input);
+  }
+  reorderFoodListItems(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('reorder-food-list-items', input);
+  }
+  getPersonalFoodState(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('get-personal-food-state', input);
+  }
+  updatePersonalFoodState(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('update-personal-food-state', input);
+  }
+  getMealCandidates(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('get-meal-candidates', input);
+  }
+  recordMealChoice(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('record-meal-choice', input);
+  }
+  listMealChoiceHistory(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('list-meal-choice-history', input);
+  }
+  createMealPoll(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('create-meal-poll', input);
+  }
+  getMealPoll(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('get-meal-poll', input);
+  }
+  addMealPollOption(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('add-meal-poll-option', input);
+  }
+  voteMealPoll(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('vote-meal-poll', input);
+  }
+  closeMealPoll(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('close-meal-poll', input);
+  }
+  cancelMealPoll(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('cancel-meal-poll', input);
+  }
+  stopMealPollOptions(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('stop-meal-poll-options', input);
+  }
+  getUserPage(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('get-user-page', input);
+  }
+  listMerchantRankings(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('list-merchant-rankings', input);
+  }
+  listFormerFriendContentGrants(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('list-former-friend-content-grants', input);
+  }
+  setCardReactionV2(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('set-card-reaction-v2', input);
+  }
   getDiscoveryCapabilities(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('get-discovery-capabilities', input);
   }

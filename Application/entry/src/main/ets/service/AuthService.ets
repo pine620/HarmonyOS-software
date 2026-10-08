@@ -1,3 +1,4 @@
+import { DraftStore } from './DraftStore';
 import { common } from '@kit.AbilityKit';
 import { authentication } from '@kit.AccountKit';
 import util from '@ohos.util';
@@ -291,18 +292,19 @@ export class AuthService {
     await AuthService.ensureSession(context);
     const profile = await CloudGateway.callAuthenticated<UserProfile>('upsert-profile', request);
     const resolvedProfile = await AuthService.resolveAvatar(context, profile);
-    AuthService.currentProfile = resolvedProfile;
+    AuthService.currentProfile = resolvedProfile; DraftStore.activateOwner(resolvedProfile.uid);
     return resolvedProfile;
   }
 
   private static async loadProfile(context: common.Context): Promise<UserProfile> {
     const profileRequest: UpdateProfileRequest = { nickname: '', avatarMediaId: '', readOnly: true };
     const storedProfile: UserProfile = await CloudGateway.callAuthenticated<UserProfile>('upsert-profile', profileRequest);
-    AuthService.currentProfile = storedProfile;
+    AuthSessionStore.setBusinessOwner(storedProfile.uid);
     PhotoUploadService.setCacheOwner(storedProfile.uid);
+    AuthService.currentProfile = storedProfile; DraftStore.activateOwner(storedProfile.uid);
     void AuthService.resolveAvatar(context, storedProfile, 'low').then((resolved: UserProfile): void => {
       if (AuthService.currentProfile !== storedProfile) return;
-      AuthService.currentProfile = resolved;
+      AuthService.currentProfile = resolved; DraftStore.activateOwner(resolved.uid);
       AppStorage.setOrCreate('profileAvatarRevision', (AppStorage.get<number>('profileAvatarRevision') || 0) + 1);
     }).catch((): void => {});
     return storedProfile;
@@ -336,11 +338,15 @@ export class AuthService {
     DiscoveryCache.clear();
     AuthSessionStore.clearLegacyAccessToken();
     AuthSessionStore.invalidateCachedToken();
-    AuthService.currentProfile = undefined;
+    AuthSessionStore.setBusinessOwner('');
+    PhotoUploadService.setCacheOwner('');
+    AuthService.currentProfile = undefined; DraftStore.activateOwner('');
     AuthService.authMode = 'none';
   }
 
   static async logout(context: common.Context): Promise<void> {
+    await DraftStore.flushActive();
+    DraftStore.flushHandler = undefined;
     try {
       await ServiceCardRemoteSyncService.disable(context);
       await PushNotificationService.disable(context);
@@ -391,12 +397,17 @@ export class AuthService {
     } catch (_error) {
       pushCleanupPending = true;
     }
+    const draftOwnerUid: string = AuthService.currentProfile === undefined ? '' : AuthService.currentProfile.uid;
+    await DraftStore.flushActive();
     const deletionRequest: EmptyRequest = {};
     const result: DeleteAccountResponse =
       await CloudGateway.callAuthenticated<DeleteAccountResponse>('delete-account-data', deletionRequest);
     if (!result.success) {
       throw new Error('云端未确认注销申请，请稍后重试。');
     }
+    let draftCleanupPending: boolean = false;
+    try { if (draftOwnerUid.length > 0) await DraftStore.clearAccount(context, draftOwnerUid); } catch (_error) { draftCleanupPending = true; }
+    DraftStore.flushHandler = undefined;
     let localServiceCardCleanupPending: boolean = false;
     if (serviceCardCleanupPending) {
       try {
@@ -422,6 +433,6 @@ export class AuthService {
     if (localPushCleanupPending || localServiceCardCleanupPending) {
       return `${accountMessage} 本机通知状态未能完全清理，请在系统设置中检查通知权限。`;
     }
-    return accountMessage;
+    return draftCleanupPending ? accountMessage + ' 本机草稿文件清理未完成，请清除应用数据。' : accountMessage;
   }
 }

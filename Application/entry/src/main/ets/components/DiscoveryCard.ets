@@ -1,11 +1,14 @@
 import { FoodCard } from '../model/CloudContracts';
-import { cardPriceText } from '../model/CardPrice';
+import { mapFoodCardToReviewCardViewData } from '../mapper/CloudCardViewMapper';
+import { ReviewCard, ReviewCardViewData } from './review/ReviewDisplay';
 
 @Component
 export struct DiscoveryCard {
   @Require @Prop card: FoodCard;
   @Prop coverUrl: string = '';
   @Prop selected: boolean = false;
+  @Prop featured: boolean = false;
+  @Prop coverScale: number = 1;
   onOpen: () => void = (): void => {};
   private merchantLabel(): string {
     const snapshot: string | undefined = this.card.merchantNameSnapshot;
@@ -13,30 +16,30 @@ export struct DiscoveryCard {
     const mode: string = this.card.consumptionMode === 'DELIVERY' ? '外卖' : this.card.consumptionMode === 'DINE_IN' ? '到店' : '历史推荐';
     return (name.length > 0 ? name : '未关联店铺') + ' · ' + mode;
   }
+  private reviewData(): ReviewCardViewData {
+    const data: ReviewCardViewData = mapFoodCardToReviewCardViewData(this.card);
+    data.coverUrl = this.coverUrl;
+    data.coverLoading = this.coverUrl.length === 0 && this.card.primaryPhotoResolved !== true &&
+      this.card.primaryPhotoLoadFailed !== true && this.card.photoPath.length > 0;
+    data.coverFailed = this.coverUrl.length === 0 && this.card.primaryPhotoLoadFailed === true;
+    data.shop = this.merchantLabel();
+    if (this.card.visibility === 'FRIENDS') data.evidenceLabel = '好友可见';
+    return data;
+  }
   build() {
-    Button({ type: ButtonType.Normal }) {
-      Column({ space: 5 }) {
-        if (this.coverUrl.length > 0) {
-          Image(this.coverUrl).width('100%').height(56).objectFit(ImageFit.Cover).borderRadius(9)
-            .accessibilityText(this.card.productName + '实拍图');
-        } else {
-          Text(this.card.primaryPhotoLoadFailed === true ? '实拍图暂不可用' : '实拍图加载中')
-            .width('100%').height(56).textAlign(TextAlign.Center).fontSize(12)
-            .fontColor($r('app.color.muted')).backgroundColor($r('app.color.accent_soft')).borderRadius(9);
-        }
-        Text(this.card.productName).fontSize(16).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'))
-          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%');
-        Text(this.merchantLabel()).fontSize(12).fontColor($r('app.color.muted'))
-          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%');
-        Row({ space: 4 }) {
-          Text(cardPriceText(this.card, '价格未知')).fontSize(14).fontWeight(FontWeight.Medium).fontColor($r('app.color.accent_action'))
-          .maxLines(2).layoutWeight(1);
-          Text('评分 ' + this.card.tasteScore).fontSize(12).fontColor($r('app.color.muted'));
-        }.width('100%')
-      }.width('100%').padding(8).alignItems(HorizontalAlign.Start)
-    }.width('100%').padding(0).backgroundColor($r('app.color.surface')).borderRadius(13)
-      .border({ width: this.selected ? 2 : 1, color: this.selected ? $r('app.color.accent_action') : $r('app.color.line') })
-      .accessibilityText(this.card.productName + '，' + this.merchantLabel() + '，' + cardPriceText(this.card, '价格未知') + '，评分 ' + this.card.tasteScore)
-      .onClick((): void => this.onOpen())
+    Column({ space: 0 }) {
+      ReviewCard({ data: this.reviewData(), featured: this.featured, coverScale: this.coverScale,
+        onOpen: (_cardId: string): void => this.onOpen() })
+      if (this.card.visibility === 'FRIENDS') {
+        Text('仅好友可见').fontSize(12).fontColor($r('app.color.accent_action')).width('100%')
+          .padding({ left: 12, right: 12, bottom: 8 }).onClick((): void => this.onOpen())
+      }
+      if (this.card.recommendationReasons !== undefined && this.card.recommendationReasons.length > 0) {
+        Text(this.card.recommendationReasons.join(' · ')).fontSize(12).lineHeight(18)
+          .fontColor($r('app.color.muted')).maxLines(2).width('100%')
+          .padding({ left: 12, right: 12, top: 8, bottom: 12 }).onClick((): void => this.onOpen())
+      }
+    }.width('100%').backgroundColor($r('app.color.surface')).borderRadius(20)
+      .border({ width: this.selected ? 2 : 0, color: $r('app.color.accent_action') })
   }
 }

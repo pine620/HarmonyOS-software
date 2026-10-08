@@ -1,0 +1,87 @@
+{
+  "objectTypeName": "FoodListItem",
+  "fields": [
+    {
+      "fieldName": "listId",
+      "fieldType": "String",
+      "notNull": true,
+      "belongPrimaryKey": true
+    },
+    {
+      "fieldName": "cardId",
+      "fieldType": "String",
+      "notNull": true,
+      "belongPrimaryKey": true
+    },
+    {
+      "fieldName": "ownerUid",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "sortKey",
+      "fieldType": "Long"
+    },
+    {
+      "fieldName": "createdAt",
+      "fieldType": "Date"
+    }
+  ],
+  "indexes": [
+    {
+      "indexName": "index_1",
+      "indexList": [
+        {
+          "fieldName": "listId",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "sortKey",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "cardId",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "index_2",
+      "indexList": [
+        {
+          "fieldName": "ownerUid",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "cardId",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "listId",
+          "sortType": "ASC"
+        }
+      ]
+    }
+  ],
+  "permissions": [
+    {
+      "role": "World",
+      "rights": []
+    },
+    {
+      "role": "Authenticated",
+      "rights": []
+    },
+    {
+      "role": "Creator",
+      "rights": []
+    },
+    {
+      "role": "Administrator",
+      "rights": [
+        "Read",
+        "Upsert",
+        "Delete"
+      ]
+    }
+  ]
+}

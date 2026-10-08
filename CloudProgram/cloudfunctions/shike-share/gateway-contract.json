@@ -1,0 +1,9 @@
+{
+  "request": {"methodField": "httpMethod", "pathField": "path", "headerField": "headers", "sourceIpField": "requestContext.identity.sourceIp"},
+  "routes": ["GET /api/card/{cardId}", "GET /api/media/{cardId}", "OPTIONS /api/card/{cardId}", "OPTIONS /api/media/{cardId}"],
+  "response": {"statusField": "statusCode", "headersField": "headers", "bodyField": "body", "binaryFlag": "isBase64Encoded"},
+  "gatewayRateLimits": {"perSourceIpPerMinute": 60, "totalPerMinute": 600, "maximumRequestBytes": 4096},
+  "requiredEnvironment": ["SHIKE_SHARE_ALLOWED_ORIGINS", "SHIKE_SHARE_HTTP_VERIFIED", "SHIKE_SHARE_GATEWAY_RATE_LIMIT_VERIFIED"],
+  "corsCredentials": false,
+  "cacheEnabled": false
+}

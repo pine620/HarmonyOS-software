@@ -222,20 +222,20 @@ export struct FriendsPage {
       await this.repository.blockUser(context, user.uid);
       this.pendingRemoveUser = undefined;
       this.pendingFriendAction = 'REMOVE';
-      this.status = `已屏蔽 ${user.nickname}，一对一会话已清理。`;
+      this.status = `已拉黑 ${user.nickname}，一对一会话已清理。`;
       if (reportUser) {
         try {
           await this.repository.reportUser(context, user.uid, '用户主动举报');
-          this.status = `已举报并屏蔽 ${user.nickname}，一对一会话已清理。`;
+          this.status = `已举报并拉黑 ${user.nickname}，一对一会话已清理。`;
         } catch (reportError) {
-          this.status = `已屏蔽 ${user.nickname}，但举报未提交：${errorText(reportError as ErrorDetail)}`;
+          this.status = `已拉黑 ${user.nickname}，但举报未提交：${errorText(reportError as ErrorDetail)}`;
         }
       }
       this.notifyRelationshipChanged();
       void this.loadFriends(true);
       void this.loadConversations(true);
     } catch (error) {
-      this.status = `屏蔽失败：${errorText(error as ErrorDetail)}`;
+      this.status = `拉黑失败：${errorText(error as ErrorDetail)}`;
     } finally {
       this.actionUid = '';
     }
@@ -247,11 +247,11 @@ export struct FriendsPage {
     try {
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
       await this.repository.unblockUser(context, user.uid);
-      this.status = `已解除对 ${user.nickname} 的屏蔽。`;
+      this.status = `已解除对 ${user.nickname} 的拉黑。`;
       this.notifyRelationshipChanged();
       void this.loadFriends(true);
     } catch (error) {
-      this.status = `解除屏蔽失败：${errorText(error as ErrorDetail)}`;
+      this.status = `解除拉黑失败：${errorText(error as ErrorDetail)}`;
     } finally {
       this.actionUid = '';
     }
@@ -567,9 +567,9 @@ export struct FriendsPage {
         .onClick((): void => {
           this.openFriendAction(user, 'REMOVE');
         });
-      Button('屏蔽').width(58).height(52).fontSize(12).backgroundColor($r('app.color.danger_soft'))
+      Button('拉黑').width(58).height(52).fontSize(12).backgroundColor($r('app.color.danger_soft'))
         .fontColor($r('app.color.danger')).borderRadius(14).border({ width: 1, color: $r('app.color.line') })
-        .accessibilityText(`屏蔽好友 ${user.nickname}`).onClick((): void => {
+        .accessibilityText(`拉黑好友 ${user.nickname}`).onClick((): void => {
           this.openFriendAction(user, 'BLOCK');
         });
     }
@@ -669,7 +669,7 @@ export struct FriendsPage {
 
       if (this.blockedUsers.length > 0) {
         ListItem() {
-          Text(`已屏蔽 ${this.blockedUsers.length}`).fontSize(18).fontWeight(FontWeight.Bold)
+          Text(`已拉黑 ${this.blockedUsers.length}`).fontSize(18).fontWeight(FontWeight.Bold)
             .fontColor($r('app.color.ink')).width('100%');
         }
         ForEach(this.blockedUsers, (user: SocialUser): void => {
@@ -681,7 +681,7 @@ export struct FriendsPage {
                   .width('100%').maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
                 Text(user.friendCode).fontSize(11).fontColor($r('app.color.muted')).width('100%').maxLines(1);
               }.layoutWeight(1).alignItems(HorizontalAlign.Start);
-              Button(this.actionUid === user.uid ? '处理中' : '解除屏蔽').height(44).fontSize(12)
+              Button(this.actionUid === user.uid ? '处理中' : '解除拉黑').height(44).fontSize(12)
                 .enabled(this.actionUid.length === 0).backgroundColor($r('app.color.accent_soft'))
                 .fontColor($r('app.color.accent_action')).onClick((): void => {
                   this.unblockUser(user);
@@ -697,11 +697,11 @@ export struct FriendsPage {
   @Builder
   private removeSheet(): void {
     Column({ space: 12 }) {
-      Text(this.pendingFriendAction === 'BLOCK' ? '屏蔽这位好友？' : '删除这位好友？')
+      Text(this.pendingFriendAction === 'BLOCK' ? '拉黑这位好友？' : '删除这位好友？')
         .fontSize(19).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'));
       Text(this.pendingFriendAction === 'BLOCK'
-        ? `屏蔽 ${this.pendingRemoveUser?.nickname || '这位好友'} 后，好友关系和一对一会话会被清理，对方也无法再次向你发起好友申请。`
-        : `删除 ${this.pendingRemoveUser?.nickname || '这位好友'} 后，好友关系和双方的一对一会话会被清理。`)
+        ? `拉黑 ${this.pendingRemoveUser?.nickname || '这位好友'} 后，好友关系和一对一会话会被清理，对方无法访问你的主页、卡片和图片，也无法向你发起好友申请。`
+        : `删除 ${this.pendingRemoveUser?.nickname || '这位好友'} 后，好友关系和一对一会话会被清理，仍可作为访客查看公开内容。`)
         .fontSize(13).lineHeight(20).fontColor($r('app.color.muted')).width('100%');
       if (this.pendingFriendAction === 'REMOVE') {
         Button(this.actionUid.length > 0 ? '正在删除…' : '确认删除')
@@ -711,13 +711,13 @@ export struct FriendsPage {
             this.removePendingFriend();
           });
       } else {
-        Button(this.actionUid.length > 0 ? '正在屏蔽…' : '确认屏蔽')
+        Button(this.actionUid.length > 0 ? '正在拉黑…' : '确认拉黑')
           .width('100%').height(48).enabled(this.actionUid.length === 0)
           .backgroundColor($r('app.color.danger_action')).fontColor($r('app.color.on_danger_action'))
           .onClick((): void => {
             this.blockPendingFriend(false);
           });
-        Button(this.actionUid.length > 0 ? '正在举报…' : '举报并屏蔽')
+        Button(this.actionUid.length > 0 ? '正在举报…' : '举报并拉黑')
           .width('100%').height(48).enabled(this.actionUid.length === 0)
           .backgroundColor($r('app.color.surface')).fontColor($r('app.color.danger'))
           .border({ width: 1, color: $r('app.color.line') }).onClick((): void => {

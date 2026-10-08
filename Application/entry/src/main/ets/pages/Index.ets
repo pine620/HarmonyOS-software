@@ -1,9 +1,21 @@
+import { ModerationCenterPage } from './ModerationCenterPage';
+import { ModerationDetailPage } from './ModerationDetailPage';
+import { DeletedCardsPage } from './DeletedCardsPage';
+import { LifecycleJobsPage } from './LifecycleJobsPage';
+import { LifecycleJobPage } from './LifecycleJobPage';
+import { ReportContentPage } from './ReportContentPage';
+import { ModerationDetailRequest, LifecycleJobRequest, ReportRoute } from '../model/OperationsModels';
+import { CardIdRequest } from '../model/CloudContracts';
+import { PreferenceSetupPage } from './PreferenceSetupPage';
+import { TodayEatPage } from './TodayEatPage';
+import { MealHistoryPageView, DraftsPage } from './SocialDiscoveryPages';
+import { LocalDraft } from '../model/DraftModels';
+import { PreferenceRepository } from '../repository/PreferenceRepository';
 import { common } from '@kit.AbilityKit';
 import { FoodCard, UserProfile } from '../model/CloudContracts';
 import { AuthService } from '../service/AuthService';
 import { PrivacyStore } from '../service/PrivacyStore';
 import { NearbyPreloadService } from '../service/NearbyPreloadService';
-import { FriendRankingPreloadService } from '../service/FriendRankingPreloadService';
 import { PhotoUploadService } from '../service/PhotoUploadService';
 import { CardRepository } from '../repository/CardRepository';
 import { clearPendingSharedCard } from '../service/CardAppLink';
@@ -32,6 +44,8 @@ import { GroupChatPage } from './GroupChatPage';
 import { ShareCardPage } from './ShareCardPage';
 import { BreakpointSystem, LayoutBreakpoint } from '../common/BreakpointSystem';
 
+interface AuthorPageRoute { userUid: string; }
+
 interface LoginErrorInfo {
   code?: number | string;
   message?: string;
@@ -43,6 +57,8 @@ interface LoginErrorInfo {
 struct Index {
   @Provide('pathStack') pathStack: NavPathStack = new NavPathStack();
   @Provide('windowBreakpoint') windowBreakpoint: LayoutBreakpoint = 'sm';
+  @State draftTarget: string = '';
+  @State selectedDraftId: string = '';
   @State ready: boolean = false;
   @State privacyAccepted: boolean = false;
   @State privacyChecked: boolean = false;
@@ -71,6 +87,7 @@ struct Index {
   @State recommendationRevision: number = 0;
   @StorageLink('contentMutationRevision') @Watch('onContentMutation') contentMutationRevision: number = 0;
   @StorageLink('friendRelationshipRevision') @Watch('onFriendRelationshipChanged') friendRelationshipRevision: number = 0;
+  @State showPreferencePrompt: boolean = false;
   @State selectedTab: number = 0;
   @State sharedLinkMessage: string = '';
   @StorageLink('pendingSharedCardId') @Watch('onPendingSharedCardChanged') pendingSharedCardId: string = '';
@@ -143,7 +160,6 @@ struct Index {
         if (this.profile !== undefined) {
           PhotoUploadService.setCacheOwner(this.profile.uid);
           this.warmNearby(context);
-          FriendRankingPreloadService.warm(context, this.profile.uid, this.friendRelationshipRevision);
           void this.syncPushIfEnabled(context, this.profile.uid);
         }
       }
@@ -213,7 +229,6 @@ struct Index {
     PhotoUploadService.setCacheOwner(profile.uid);
     NearbyPreloadService.clear();
     this.recommendationRevision += 1;
-    FriendRankingPreloadService.warm(context, profile.uid, this.friendRelationshipRevision);
     // Push and service-card registration are opt-in enhancements. They must
     // never delay the post-authentication transition to the home page.
     void this.syncPushIfEnabled(context, profile.uid);
@@ -356,7 +371,6 @@ struct Index {
     this.sharedLinkMessage = '';
     this.pathStack.clear();
     NearbyPreloadService.clear();
-    FriendRankingPreloadService.invalidate();
     const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
     PhotoUploadService.clearCachedMedia(context);
     this.loggedIn = false;
@@ -375,7 +389,7 @@ struct Index {
     this.selectedCard = card;
     ContinuationState.showCard(card.id);
     this.updateServiceCard(card);
-    this.pathStack.pushPathByName('card-detail', null);
+    this.pathStack.pushPathByName('card-detail', card);
   }
 
   private async updateServiceCard(card: FoodCard): Promise<void> {
@@ -533,7 +547,7 @@ struct Index {
 
   private openFriendProfile(friend: SocialUser): void {
     this.selectedProfileFriend = friend;
-    this.pathStack.pushPathByName('friend-profile', null);
+    this.pathStack.pushPathByName('friend-profile', friend);
   }
 
   private openAddFriend(): void {
@@ -577,29 +591,23 @@ struct Index {
 
   private cardPublished(): void {
     NearbyPreloadService.invalidate();
-    FriendRankingPreloadService.invalidate();
     this.recommendationRevision += 1;
     this.profileRevision += 1;
   }
 
   private onContentMutation(): void {
-    NearbyPreloadService.invalidate(); FriendRankingPreloadService.invalidate();
+    NearbyPreloadService.invalidate();
     this.recommendationRevision += 1; this.profileRevision += 1;
   }
 
-  private onFriendRelationshipChanged(): void {
-    FriendRankingPreloadService.invalidate();
-    if (this.loggedIn && this.profile !== undefined) {
-      const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      FriendRankingPreloadService.warm(context, this.profile.uid, this.friendRelationshipRevision);
-    }
-  }
+  private onFriendRelationshipChanged(): void { NearbyPreloadService.invalidate(); }
 
   private tabPosition(index: number): number {
     return this.loggedIn ? index : index === 4 ? 1 : 0;
   }
 
   private onTabPositionChanged(position: number): void {
+    if (position === 0) this.preparePreferencePrompt();
     this.selectTab(this.loggedIn ? position : position === 1 ? 4 : 0);
   }
 
@@ -614,13 +622,23 @@ struct Index {
     }
   }
 
+  private preparePreferencePrompt(): void {
+    if (!this.privacyAccepted) return;
+    const context: common.Context = this.getUIContext().getHostContext() as common.Context;
+    const uid: string = this.profile === undefined ? 'guest' : this.profile.uid;
+    this.showPreferencePrompt = !new PreferenceRepository().seen(context, uid);
+  }
+
   @Builder
-  pathMap(routeName: string) {
-    if (routeName === 'card-detail' && this.selectedCard !== undefined) {
+  pathMap(routeName: string, routeParam: object) {
+    if (routeName === 'card-detail' && routeParam !== null && routeParam !== undefined) {
       CardDetailPage({
-        card: this.selectedCard,
+        card: routeParam as FoodCard,
         loggedIn: this.loggedIn,
         onRequireLogin: (message: string): void => this.requestLogin(message),
+        onOpenAuthor: (uid: string): void => {
+          const request: AuthorPageRoute = { userUid: uid }; this.pathStack.pushPathByName('user-page', request);
+        },
         onShareToFriend: (card: FoodCard): void => {
           this.shareCardToFriend(card);
         }
@@ -632,9 +650,13 @@ struct Index {
           this.openCard(card);
         }
       })
-    } else if (routeName === 'friend-profile' && this.selectedProfileFriend !== undefined) {
+    } else if (routeName === 'user-page' && routeParam !== null && routeParam !== undefined) {
+      FriendProfilePage({ friendUid: (routeParam as AuthorPageRoute).userUid,
+        onOpenChat: (friend: SocialUser): void => this.openChat(friend),
+        onOpenCard: (card: FoodCard): void => this.openCard(card) })
+    } else if (routeName === 'friend-profile' && routeParam !== null && routeParam !== undefined) {
       FriendProfilePage({
-        friendUid: this.selectedProfileFriend.uid,
+        friendUid: (routeParam as SocialUser).uid,
         onOpenChat: (friend: SocialUser): void => {
           this.openChat(friend);
         },
@@ -682,6 +704,35 @@ struct Index {
       })
     } else if (routeName === 'profile-favorites') {
       FavoriteCardsPage({ onOpenCard: (card: FoodCard): void => this.openCard(card) })
+    } else if (routeName === 'moderation-center') {
+      ModerationCenterPage({ scope: 'ADMIN' })
+    } else if (routeName === 'my-reports') {
+      ModerationCenterPage({ scope: 'REPORTS' })
+    } else if (routeName === 'review-requests') {
+      ModerationCenterPage({ scope: 'CORRECTIONS' })
+    } else if (routeName === 'moderation-detail' && routeParam !== null && routeParam !== undefined) {
+      ModerationDetailPage({ kind: (routeParam as ModerationDetailRequest).kind, itemId: (routeParam as ModerationDetailRequest).id })
+    } else if (routeName === 'deleted-cards') {
+      DeletedCardsPage()
+    } else if (routeName === 'lifecycle-jobs') {
+      LifecycleJobsPage()
+    } else if (routeName === 'lifecycle-job' && routeParam !== null && routeParam !== undefined) {
+      LifecycleJobPage({ jobId: (routeParam as LifecycleJobRequest).jobId })
+    } else if (routeName === 'report-content' && routeParam !== null && routeParam !== undefined) {
+      ReportContentPage({ targetType: (routeParam as ReportRoute).targetType, targetId: (routeParam as ReportRoute).targetId })
+    } else if (routeName === 'review-correction' && routeParam !== null && routeParam !== undefined) {
+      NavDestination() { CreateCardPage({ editCardId: (routeParam as CardIdRequest).cardId, accountUid: this.profile === undefined ? '' : this.profile.uid }) }.title('修改审核内容')
+    } else if (routeName === 'taste-preference') {
+      NavDestination() { PreferenceSetupPage({ onDone: (): void => { this.pathStack.pop(); } }) }.title('主动偏好')
+    } else if (routeName === 'today-eat') {
+      NavDestination() { TodayEatPage({ onOpenCard: (card: FoodCard): void => this.openCard(card) }) }.title('今天吃什么')
+
+    } else if (routeName === 'meal-history') {
+      NavDestination() { MealHistoryPageView({ onOpenCard: (card: FoodCard): void => this.openCard(card) }) }.title('选餐历史')
+    } else if (routeName === 'drafts') {
+      NavDestination() { DraftsPage({ onRestore: (draft: LocalDraft): void => { this.draftTarget = draft.targetCardId; this.selectedDraftId = draft.draftId; this.pathStack.pushPathByName('restore-draft', null); } }) }.title('草稿箱')
+    } else if (routeName === 'restore-draft') {
+      NavDestination() { CreateCardPage({ editCardId: this.draftTarget, restoreDraftId: this.selectedDraftId, accountUid: this.profile === undefined ? '' : this.profile.uid }) }.title('恢复草稿')
     } else if (routeName === 'profile-history') {
       CardHistoryPage({ onOpenCard: (card: FoodCard): void => this.openCard(card) })
     } else if (routeName === 'notification-inbox') {
@@ -995,6 +1046,19 @@ struct Index {
   }
 
   @Builder
+  private bottomTab(label: string, index: number) {
+    Column({ space: 5 }) {
+      Text(label).fontSize(14)
+        .fontWeight(this.selectedTab === index ? FontWeight.Medium : FontWeight.Regular)
+        .fontColor(this.selectedTab === index ? $r('app.color.action_text') : $r('app.color.muted'))
+      Column().width(20).height(2).borderRadius(1)
+        .backgroundColor(this.selectedTab === index ? $r('app.color.action_text') : Color.Transparent)
+    }
+    .width('100%').height(58).justifyContent(FlexAlign.Center)
+    .accessibilityText(label).accessibilitySelected(this.selectedTab === index)
+  }
+
+  @Builder
   private mainTabs() {
     Column({ space: 0 }) {
       if (this.sharedLinkMessage.length > 0) {
@@ -1018,19 +1082,36 @@ struct Index {
         // hidden on lg. Drafts, list state and tab lifecycle stay with each page.
         Tabs({ barPosition: BarPosition.End, index: this.tabPosition(this.selectedTab), controller: this.tabsController }) {
           TabContent() {
+            Column() {
             NearbyPage({
               onOpenCard: (card: FoodCard): void => this.openCard(card),
               loggedIn: this.loggedIn,
-              revision: this.recommendationRevision
-            })
-          }.tabBar('推荐')
+              revision: this.recommendationRevision,
+              showPreferencePrompt: this.showPreferencePrompt,
+              onSetupPreference: (): void => {
+                this.pathStack.pushPathByName('taste-preference', null);
+                this.showPreferencePrompt = false;
+              },
+              onSkipPreference: (): void => {
+                new PreferenceRepository().markSeen(this.getUIContext().getHostContext() as common.Context,
+                  this.profile === undefined ? 'guest' : this.profile.uid);
+                this.showPreferencePrompt = false;
+              },
+              onOpenMeal: (): void => {
+                if (this.loggedIn) this.pathStack.pushPathByName('today-eat', null);
+                else this.requestLogin('登录后开启今天吃什么。');
+              }
+            }).layoutWeight(1)
+            }.width('100%').height('100%').onAppear((): void => this.preparePreferencePrompt())
+          }.tabBar(this.bottomTab('推荐', 0))
           if (this.loggedIn) {
             TabContent() {
               RankingPage({
                 onOpenCard: (card: FoodCard): void => this.openCard(card),
-                revision: this.recommendationRevision + this.friendRelationshipRevision
+                revision: this.recommendationRevision + this.friendRelationshipRevision,
+                onOpenRecommendations: (): void => this.tabsController.changeIndex(this.tabPosition(0))
               })
-            }.tabBar('榜单')
+            }.tabBar(this.bottomTab('榜单', 1))
             TabContent() {
               FriendsPage({
                 onOpenChat: (friend: SocialUser): void => this.openChat(friend),
@@ -1041,10 +1122,10 @@ struct Index {
                   this.pathStack.pushPathByName('notification-inbox', null);
                 }
               })
-            }.tabBar('好友')
+            }.tabBar(this.bottomTab('好友', 2))
             TabContent() {
               CreateCardPage({ accountUid: this.profile === undefined ? '' : this.profile.uid, onPublished: (): void => this.cardPublished() })
-            }.tabBar('制作')
+            }.tabBar(this.bottomTab('制作', 3))
           }
           TabContent() {
             if (this.loggedIn) {
@@ -1052,10 +1133,11 @@ struct Index {
             } else {
               this.guestAccountPage('我的', '登录后管理资料、收藏和浏览记录。')
             }
-          }.tabBar('我的')
+          }.tabBar(this.bottomTab('我的', 4))
             .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
         }
         .onChange((position: number): void => this.onTabPositionChanged(position))
+        .barMode(BarMode.Fixed)
         .layoutWeight(1).height('100%').barHeight(this.windowBreakpoint === 'lg' ? 0 : 58)
         .scrollable(this.windowBreakpoint !== 'lg').backgroundColor($r('app.color.canvas'))
         .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM]);

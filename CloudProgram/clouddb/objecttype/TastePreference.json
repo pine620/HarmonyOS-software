@@ -1,0 +1,72 @@
+{
+  "objectTypeName": "TastePreference",
+  "fields": [
+    {
+      "fieldName": "uid",
+      "fieldType": "String",
+      "notNull": true,
+      "belongPrimaryKey": true
+    },
+    {
+      "fieldName": "likedCategoriesJson",
+      "fieldType": "Text"
+    },
+    {
+      "fieldName": "lessCategoriesJson",
+      "fieldType": "Text"
+    },
+    {
+      "fieldName": "preferredMode",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "budgetMinFen",
+      "fieldType": "Long"
+    },
+    {
+      "fieldName": "budgetMaxFen",
+      "fieldType": "Long"
+    },
+    {
+      "fieldName": "updatedAt",
+      "fieldType": "Date"
+    },
+    {
+      "fieldName": "version",
+      "fieldType": "Long"
+    }
+  ],
+  "indexes": [
+    {
+      "indexName": "index_1",
+      "indexList": [
+        {
+          "fieldName": "uid",
+          "sortType": "ASC"
+        }
+      ]
+    }
+  ],
+  "permissions": [
+    {
+      "role": "World",
+      "rights": []
+    },
+    {
+      "role": "Authenticated",
+      "rights": []
+    },
+    {
+      "role": "Creator",
+      "rights": []
+    },
+    {
+      "role": "Administrator",
+      "rights": [
+        "Read",
+        "Upsert",
+        "Delete"
+      ]
+    }
+  ]
+}

@@ -1,14 +1,27 @@
+import { ChoiceActionStyle, QuietActionStyle, SecondaryActionStyle } from '../common/Stage47Ui';
+import { pasteboard } from '@kit.BasicServicesKit';
+import { MerchantRepository } from '../repository/MerchantRepository';
+import { MerchantResponse } from '../model/MerchantModels';
+import { MerchantNavigationService } from '../service/MerchantNavigationService';
+import { PreferenceRepository } from '../repository/PreferenceRepository';
+import { SocialDiscoveryRepository } from '../repository/SocialDiscoveryRepository';
+import { Stage47Capabilities } from '../model/PreferenceModels';
+import { util } from '@kit.ArkTS';
+import { PersonalCollectionAction, PersonalCollectionKind, SetPersonalCollectionRequest } from '../model/PersonalCollectionModels';
+import { PersonalCollectionRepository } from '../repository/PersonalCollectionRepository';
+import { ReadRequestOptions } from '../service/ReadScheduler';
 import { common } from '@kit.AbilityKit';
 import { uniformTypeDescriptor as utd } from '@kit.ArkData';
 import { harmonyShare, systemShare } from '@kit.ShareKit';
 import {
-  CardActionType, CardComment, CardPhoto, CommentReactionType, FoodCard
+  CardReactionType, CardActionResponse, SetCardReactionRequest, CardComment, CardPhoto, CommentReactionType, FoodCard
 } from '../model/CloudContracts';
 import { CardRepository } from '../repository/CardRepository';
 import { categoryLabel } from '../components/FoodCover';
 import { AuthService } from '../service/AuthService';
 import { CardVisitStore } from '../service/CardVisitStore';
 import { cardPriceText } from '../model/CardPrice';
+import { CloudBusinessError } from '../service/CloudReadErrors';
 import { CloudGateway, MediaServiceUnavailableError } from '../service/CloudGateway';
 import { MediaPriority, PhotoUploadService } from '../service/PhotoUploadService';
 import { NearbyPerformanceTrace, PreloadMetricState } from '../service/NearbyPerformanceTrace';
@@ -20,7 +33,7 @@ import { CreateCardPage } from './CreateCardPage';
 import { categoryV2Label, formatFenInput } from '../model/PublishingModels';
 import { isSafeHttpsSourceLink } from '../service/SafeSourceLink';
 
-const DETAIL_MEDIA_FRAME_HEIGHT = 360;
+const DETAIL_MEDIA_MAX_HEIGHT: number = 420;
 
 function emptyCard(): FoodCard {
   return {
@@ -44,11 +57,31 @@ function fallbackPhoto(card: FoodCard): CardPhoto {
 
 @Component
 export struct CardDetailPage {
+  @StorageLink('stage47AppActive') @Watch('onAppActiveChanged') appActive: boolean = true;
+  private detailVisible: boolean = true;
+  private onAppActiveChanged(): void { if (!this.appActive) { this.detailGeneration++; this.clearProtectedContent(); } else if (this.detailVisible) void this.loadDetail(); }
+
   @State detailWidthVp: number = 0;
+  @State detailHeightVp: number = 0;
+  @State viewerWanted: boolean = false;
+  @State collectionReady: boolean = false;
+  @State collectionKnown: boolean = false;
+  @State pendingCollection: SetPersonalCollectionRequest | undefined = undefined;
+  private pendingCollectionKind: PersonalCollectionKind = 'FAVORITE';
+  private detailScroller: Scroller = new Scroller();
+  private savedScrollY: number = 0;
+  private restoreTimer: number = -1;
+  @StorageLink('accountContentRevision') @Watch('onSessionChanged') accountContentRevision: number = 0;
+  @State navigationAddress: string = '';
+  @State contentAllowed: boolean = false;
+  @State reactionsEnabled: boolean = false;
+  @State dislikeCount: number = 0;
+  @State myReaction: CardReactionType | '' = '';
   @State editingVisible: boolean = false;
   @Prop card: FoodCard = emptyCard();
   @Prop @Watch('onSessionChanged') loggedIn: boolean = false;
   onRequireLogin: (message: string) => void = (_message: string): void => {};
+  onOpenAuthor: (uid: string) => void = (_uid: string): void => {};
   onShareToFriend: (card: FoodCard) => void = (_card: FoodCard): void => {};
   @State detailPhotos: Array<CardPhoto> = [];
   @State photoFailures: Array<number> = [];
@@ -97,27 +130,28 @@ export struct CardDetailPage {
     PhotoUploadService.retryMediaService();
     this.mediaServiceUnavailable = false;
     this.visibleCommentCount = 3;
-    const initialPhotos: Array<CardPhoto> = this.card.photos === undefined ? [] : this.card.photos;
-    this.detailPhotos = initialPhotos.length > 0 ? initialPhotos :
-      (this.card.photoPath.length > 0 ? [fallbackPhoto(this.card)] : []);
+    this.clearProtectedContent();
     void this.loadDetail();
   }
 
   aboutToDisappear(): void {
+    if (this.restoreTimer !== -1) { clearTimeout(this.restoreTimer); this.restoreTimer = -1; }
+    this.clearProtectedContent();
     this.detailGeneration += 1;
     this.finishPrimaryImage('cancelled');
     this.stopKnockShare('');
   }
 
   private onSessionChanged(): void {
-    this.editingVisible = false;
-    void this.loadDetail();
+    this.editingVisible = false; this.pendingCollection = undefined; this.savedScrollY = 0;
+    this.clearProtectedContent();
+    if (this.detailVisible && this.appActive) void this.loadDetail();
   }
 
   private requireAccount(): boolean {
     if (this.loggedIn && AuthService.profile() !== undefined && CloudGateway.hasSession()) return true;
     this.closeActionMenu();
-    this.onRequireLogin('登录后可点赞、收藏、评论和与好友分享。');
+    this.onRequireLogin('登录后可赞踩、收藏、标记想吃和与好友分享。');
     return false;
   }
 
@@ -127,12 +161,16 @@ export struct CardDetailPage {
     this.primaryImageStarted = 0;
   }
 
+  private clearProtectedContent(): void { this.contentAllowed = false; this.interactionBusy = false; this.navigationAddress = ''; this.detailPhotos = []; this.detailAuthorAvatarUrl = ''; this.detailAuthorNickname = ''; this.photoPreviewVisible = false; this.closeActionMenu(); this.reactionsEnabled = false; this.collectionKnown = false; this.collectionReady = false; this.viewerWanted = false; this.comments = []; this.stopKnockShare(''); }
+
   private async loadDetail(): Promise<void> {
     const generation: number = this.detailGeneration + 1;
     this.detailGeneration = generation;
+    this.clearProtectedContent();
     try {
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      const detail: FoodCard = await this.repository.detail(context, this.card.id);
+      const options: ReadRequestOptions = { mayContinue: async (): Promise<boolean> => generation === this.detailGeneration && this.detailVisible && this.appActive };
+      const detail: FoodCard = await this.repository.detail(context, this.card.id, options);
       if (generation !== this.detailGeneration) return;
       const previousPhoto: CardPhoto | undefined = this.detailPhotos.length > 0 ? this.detailPhotos[0] : undefined;
       const photos: Array<CardPhoto> = detail.photos === undefined ? [] : detail.photos;
@@ -141,7 +179,18 @@ export struct CardDetailPage {
         photos[0].url = previousPhoto.url;
         detail.photoUrl = previousPhoto.url;
       }
-      this.card = detail;
+      this.card = detail; this.contentAllowed = true;
+      this.collectionKnown = typeof detail.viewerWanted === 'boolean' && typeof detail.collectionReady === 'boolean';
+      this.collectionReady = this.collectionKnown && detail.collectionReady === true;
+      this.viewerWanted = this.collectionKnown && detail.viewerWanted === true;
+      if (this.restoreTimer !== -1) clearTimeout(this.restoreTimer);
+      this.restoreTimer = setTimeout((): void => {
+        this.restoreTimer = -1;
+        if (generation === this.detailGeneration && this.detailVisible && this.contentAllowed)
+          this.detailScroller.scrollTo({ xOffset: 0, yOffset: this.savedScrollY, animation: false });
+      }, 50);
+      this.myReaction = detail.myReaction === undefined ? '' : detail.myReaction; this.dislikeCount = detail.dislikeCount === undefined ? 0 : detail.dislikeCount;
+      void this.loadReactionGate(generation);
       try {
         const viewer = AuthService.profile();
         if (viewer !== undefined) CardVisitStore.record(context, viewer.uid, detail);
@@ -173,11 +222,12 @@ export struct CardDetailPage {
       this.viewerFavorited = detail.viewerFavorited === true;
       this.commentCount = 0;
       this.comments = [];
-      this.status = '';
+      this.status = this.pendingCollection === undefined ? '' : '上次操作结果待确认，请点原按钮重试。';
       void this.hydratePhotoAt(0, 'high', generation);
       void this.hydrateAuthorAvatar(generation);
     } catch (error) {
       if (generation !== this.detailGeneration) return;
+      this.clearProtectedContent();
       this.finishPrimaryImage('error');
       this.status = `详情刷新失败：${errorText(error as ErrorDetail)}`;
     }
@@ -207,6 +257,7 @@ export struct CardDetailPage {
     } catch (error) {
       if (generation === this.detailGeneration) {
         if (index === 0) this.finishPrimaryImage('error');
+        if (error instanceof CloudBusinessError && ['CONTENT_ACCESS_DENIED', 'CONTENT_UNAVAILABLE', 'ACCOUNT_INACTIVE'].includes(error.code)) { this.clearProtectedContent(); this.status = '内容已不可访问，请重新读取。'; return; }
         if (error instanceof MediaServiceUnavailableError) this.mediaServiceUnavailable = true;
         if (!this.photoFailures.includes(index)) this.photoFailures = this.photoFailures.concat([index]);
       }
@@ -227,9 +278,9 @@ export struct CardDetailPage {
     try {
       const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
       const url: string = await PhotoUploadService.getDownloadUrl(context, this.card.authorAvatarBucket,
-        this.card.authorAvatarPath, 'low');
+        this.card.authorAvatarPath, 'low', async (): Promise<boolean> => generation === this.detailGeneration && this.detailVisible && this.appActive);
       if (generation === this.detailGeneration) this.detailAuthorAvatarUrl = url;
-    } catch (_error) { }
+    } catch (error) { if (generation === this.detailGeneration && error instanceof CloudBusinessError && ['CONTENT_ACCESS_DENIED', 'ACCOUNT_INACTIVE'].includes(error.code)) { this.clearProtectedContent(); this.status = '该作者当前不可访问。'; } }
   }
 
   private withCommentAvatar(comment: CardComment, commentId: string, url: string): CardComment {
@@ -271,10 +322,11 @@ export struct CardDetailPage {
   }
 
   private imageHeight(): number {
-    if (this.isWideDetail()) {
-      return Math.round(Math.max(300, Math.min(480, this.detailPaneWidth() * 0.9)));
-    }
-    return DETAIL_MEDIA_FRAME_HEIGHT;
+    const width: number = this.isWideDetail() ? this.detailPaneWidth() : Math.max(240, this.detailWidthVp - this.detailPadding() * 2);
+    const photo: CardPhoto | undefined = this.detailPhotos[this.photoIndex];
+    const natural: number = photo !== undefined && photo.width > 0 && photo.height > 0 ? width * photo.height / photo.width : width;
+    const available: number = this.detailHeightVp > 0 ? this.detailHeightVp * 0.58 : DETAIL_MEDIA_MAX_HEIGHT;
+    return Math.round(Math.max(180, Math.min(DETAIL_MEDIA_MAX_HEIGHT, available, natural)));
   }
 
   private isWideDetail(): boolean {
@@ -379,8 +431,12 @@ export struct CardDetailPage {
   }
 
   private cardLink(): string {
-    return this.card.status === 'APPROVED' ? cardAppLink(this.card.id) : '';
+    return this.contentAllowed && this.card.status === 'APPROVED' && (this.card.visibility === undefined || this.card.visibility === 'PUBLIC') ? cardAppLink(this.card.id) : '';
   }
+
+  private async loadReactionGate(generation: number): Promise<void> { try { const caps: Stage47Capabilities = await new PreferenceRepository().capabilities(); if (generation === this.detailGeneration) this.reactionsEnabled = caps.reactionsEnabled; } catch (_error) { if (generation === this.detailGeneration) this.reactionsEnabled = false; } }
+  private async refreshForPublicShare(): Promise<boolean> { const generation: number = this.detailGeneration; const detail: FoodCard = await this.repository.detail(this.getUIContext().getHostContext() as common.UIAbilityContext, this.card.id); if (generation !== this.detailGeneration || !this.contentAllowed) return false; this.card = detail; if (detail.status !== 'APPROVED' || (detail.visibility !== undefined && detail.visibility !== 'PUBLIC')) { this.stopKnockShare('仅好友可见内容不能生成公开分享链接。'); return false; } return true; }
+  private async react(reaction: CardReactionType): Promise<void> { if (!this.requireAccount() || !this.reactionsEnabled || this.interactionBusy) return; const generation: number = this.detailGeneration; this.interactionBusy = true; try { const request: SetCardReactionRequest = { cardId: this.card.id, reaction: this.myReaction === reaction ? 'NONE' : reaction }; const response: CardActionResponse = await new SocialDiscoveryRepository().react(request); if (generation !== this.detailGeneration) return; this.likeCount = response.likeCount; this.dislikeCount = response.dislikeCount === undefined ? 0 : response.dislikeCount; this.myReaction = response.myReaction === undefined ? '' : response.myReaction; } catch (error) { if (generation === this.detailGeneration) this.status = errorText(error as ErrorDetail); } finally { if (generation === this.detailGeneration) this.interactionBusy = false; } }
 
   private cardLinkShareData(): systemShare.SharedData {
     return new systemShare.SharedData({
@@ -444,11 +500,13 @@ export struct CardDetailPage {
     const generation: number = this.knockShareGeneration;
     this.knockShareBusy = true;
     try {
+      if (!await this.refreshForPublicShare() || generation !== this.knockShareGeneration) return;
       await target.share(this.cardLinkShareData());
       if (generation !== this.knockShareGeneration || !this.knockSharePageVisible) return;
       this.status = '已向系统提交卡片链接，请在接收端确认打开结果。';
     } catch (error) {
       if (generation !== this.knockShareGeneration || !this.knockSharePageVisible) return;
+      this.clearProtectedContent();
       this.status = '碰一碰未完成：' + errorText(error as ErrorDetail) + '；可改用系统分享。';
     } finally {
       if (generation === this.knockShareGeneration) this.knockShareBusy = false;
@@ -462,6 +520,7 @@ export struct CardDetailPage {
       return;
     }
     try {
+      if (!await this.refreshForPublicShare()) return;
       const title = '食刻推荐：' + (this.card.productName || '美食卡片');
       const shareData: systemShare.SharedData = new systemShare.SharedData({
         utd: utd.UniformDataType.HYPERLINK,
@@ -479,6 +538,7 @@ export struct CardDetailPage {
       });
       this.status = '已打开系统分享面板。';
     } catch (error) {
+      this.clearProtectedContent();
       this.status = '无法打开系统分享：' + errorText(error as ErrorDetail);
     } finally {
       this.closeActionMenu();
@@ -490,15 +550,17 @@ export struct CardDetailPage {
   }
 
   private async openSource(): Promise<void> {
-    if (!isSafeHttpsSourceLink(this.card.sourceLink)) {
-      this.status = '当前卡片没有可打开的来源页面。';
-      this.closeActionMenu();
-      return;
-    }
-    this.closeActionMenu();
-    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    await context.startAbility({ action: 'ohos.want.action.viewData', uri: this.card.sourceLink });
+    const generation: number = this.detailGeneration; this.closeActionMenu();
+    try { const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      const fresh: FoodCard = await this.repository.detail(context, this.card.id); if (generation !== this.detailGeneration || !this.contentAllowed) return;
+      if (!isSafeHttpsSourceLink(fresh.sourceLink)) throw new Error('当前卡片没有可打开的来源页面。');
+      await context.startAbility({ action: 'ohos.want.action.viewData', uri: fresh.sourceLink });
+    } catch (error) { if (generation === this.detailGeneration) { this.clearProtectedContent(); this.status = errorText(error as ErrorDetail); } }
   }
+
+  private async navigateMerchant(): Promise<void> { const generation: number = this.detailGeneration; try { const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext; const fresh: FoodCard = await this.repository.detail(context, this.card.id); if (generation !== this.detailGeneration || !this.contentAllowed) return; if (fresh.consumptionMode !== 'DINE_IN' || !fresh.merchantId) throw new Error('当前卡片没有可导航的到店商家。'); const result: MerchantResponse = await new MerchantRepository().get(context, fresh.merchantId); if (generation !== this.detailGeneration || !this.contentAllowed) return; this.navigationAddress = result.merchant.address || result.merchant.name; await MerchantNavigationService.open(context, result.merchant); } catch (error) { if (generation === this.detailGeneration) this.status = errorText(error as ErrorDetail); } }
+
+  private async copyNavigationAddress(): Promise<void> { if (!this.contentAllowed || this.navigationAddress.length === 0) return; try { const data: pasteboard.PasteData = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, this.navigationAddress); await pasteboard.getSystemPasteboard().setData(data); this.status = '已复制商家地址。'; } catch (error) { this.status = errorText(error as ErrorDetail); } }
 
   private closeActionMenu(): void {
     this.actionMenuVisible = false;
@@ -529,22 +591,34 @@ export struct CardDetailPage {
     }
   }
 
-  private async toggleCardAction(action: CardActionType): Promise<void> {
-    if (!this.requireAccount()) return;
-    if (this.interactionBusy) return;
-    this.interactionBusy = true;
-    try {
-      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      const result = await this.repository.toggleCardAction(context, { cardId: this.card.id, action });
-      this.likeCount = result.likeCount;
-      this.favoriteCount = result.favoriteCount;
-      this.viewerLiked = result.viewerLiked;
-      this.viewerFavorited = result.viewerFavorited;
-    } catch (error) {
-      this.status = `互动未完成：${errorText(error as ErrorDetail)}`;
-    } finally {
-      this.interactionBusy = false;
+  private async setCollection(kind: PersonalCollectionKind): Promise<void> {
+    if (!this.requireAccount() || this.interactionBusy || !this.collectionReady || !this.collectionKnown) return;
+    if (this.pendingCollection !== undefined && this.pendingCollectionKind !== kind) {
+      this.status = '上一项操作结果尚未确认，请先点同一按钮重试。'; return;
     }
+    const request: SetPersonalCollectionRequest = this.pendingCollection === undefined ? {
+      cardId: this.card.id, active: kind === 'FAVORITE' ? !this.viewerFavorited : !this.viewerWanted,
+      requestId: util.generateRandomUUID(true)
+    } : this.pendingCollection;
+    this.pendingCollection = request; this.pendingCollectionKind = kind;
+    const generation: number = this.detailGeneration; this.interactionBusy = true;
+    try {
+      const result: PersonalCollectionAction = await new PersonalCollectionRepository().set(kind, request);
+      if (generation !== this.detailGeneration || !this.detailVisible || !this.appActive) return;
+      this.pendingCollection = undefined;
+      if (result.contentAvailable !== true) { this.clearProtectedContent(); this.status = '内容已不可访问，请重新读取。'; return; }
+      if (typeof result.viewerFavorited !== 'boolean' || typeof result.viewerWanted !== 'boolean' ||
+          result.favoriteCount === undefined) { this.collectionKnown = false; this.collectionReady = false; this.status = '状态响应尚未更新，请刷新详情。'; return; }
+      this.viewerFavorited = result.viewerFavorited; this.viewerWanted = result.viewerWanted;
+      this.favoriteCount = result.favoriteCount; this.collectionReady = result.collectionReady === true;
+      if (result.likeCount !== undefined) this.likeCount = result.likeCount;
+      if (result.dislikeCount !== undefined) this.dislikeCount = result.dislikeCount;
+      if (result.myReaction !== undefined) { this.myReaction = result.myReaction; this.viewerLiked = result.myReaction === 'LIKE'; }
+      this.card.viewerFavorited = this.viewerFavorited; this.card.viewerWanted = this.viewerWanted;
+      this.card.favoriteCount = this.favoriteCount; this.status = '';
+    } catch (error) {
+      if (generation === this.detailGeneration) this.status = `操作结果未确认，点同一按钮重试：${errorText(error as ErrorDetail)}`;
+    } finally { if (generation === this.detailGeneration) this.interactionBusy = false; }
   }
 
   private replyTo(comment: CardComment): void {
@@ -662,13 +736,14 @@ export struct CardDetailPage {
   @Builder
   private authorHeader() {
     Row({ space: 12 }) {
-      if (this.authorAvatarUrl().length > 0) {
-        Image(this.authorAvatarUrl()).width(48).height(48).borderRadius(24).objectFit(ImageFit.Cover)
-          .accessibilityText(`${this.authorName()}的头像`);
-      } else {
-        Image($r('app.media.app_icon')).width(48).height(48).borderRadius(18)
-          .accessibilityText('食刻默认头像');
-      }
+      Button() {
+        if (this.authorAvatarUrl().length > 0) {
+          Image(this.authorAvatarUrl()).width(42).height(42).borderRadius(21).objectFit(ImageFit.Cover).accessibilityLevel('no');
+        } else { Image($r('app.media.app_icon')).width(42).height(42).borderRadius(21).accessibilityLevel('no'); }
+      }.type(ButtonType.Normal).width(48).height(48).padding(3).backgroundColor(Color.Transparent).borderRadius(24)
+        .enabled(this.card.authorUid !== undefined && this.card.authorUid.length > 0)
+        .accessibilityText(`查看${this.authorName()}的主页`)
+        .onClick((): void => { if (this.card.authorUid !== undefined) this.onOpenAuthor(this.card.authorUid); });
       Column({ space: 4 }) {
         Text(this.authorName()).fontSize(16).fontWeight(FontWeight.Medium)
           .fontColor($r('app.color.ink')).width('100%').maxLines(1)
@@ -717,6 +792,7 @@ export struct CardDetailPage {
         });
       Button('系统分享').width('100%').height(48).backgroundColor($r('app.color.canvas'))
         .fontColor($r('app.color.ink')).onClick(() => this.shareCard());
+      if (this.card.consumptionMode === 'DINE_IN' && this.card.merchantId !== undefined && this.card.merchantId.length > 0) { Button('去这里 · 商家导航').height(48).width('100%').onClick((): void => { void this.navigateMerchant(); this.closeActionMenu(); }).attributeModifier(new SecondaryActionStyle()); }
       if (isSafeHttpsSourceLink(this.card.sourceLink)) {
         Button('打开来源页面').width('100%').height(48).backgroundColor($r('app.color.canvas'))
           .fontColor($r('app.color.ink')).onClick(() => this.openSource());
@@ -793,7 +869,7 @@ export struct CardDetailPage {
       Swiper() {
         ForEach(this.detailPhotos, (photo: CardPhoto, index: number) => {
           if (photo.url.length > 0) {
-            Image(photo.url).width('100%').height(this.imageHeight()).objectFit(ImageFit.Cover)
+            Image(photo.url).width('100%').height(this.imageHeight()).objectFit(ImageFit.Contain)
               .onComplete((event): void => {
                 if (index === 0 && event !== undefined && event.loadingStatus === 1) {
                   this.finishPrimaryImage('decoded');
@@ -899,20 +975,44 @@ export struct CardDetailPage {
   }
 
   @Builder
+  private actionButton(icon: Resource, label: string, selected: boolean, ready: boolean, action: () => void) {
+    Button() {
+      Column({ space: 4 }) {
+        Image(icon).width(24).height(24).objectFit(ImageFit.Contain).accessibilityLevel('no');
+        Text(label).fontSize(13).fontColor(selected ? $r('app.color.action_text') : $r('app.color.ink'))
+          .textAlign(TextAlign.Center).width('100%');
+      }.width('100%').padding({ top: 8, bottom: 8, left: 2, right: 2 });
+    }.type(ButtonType.Normal).layoutWeight(1).constraintSize({ minHeight: 64 }).padding(0).borderRadius(12)
+      .backgroundColor(selected ? $r('app.color.accent_soft') : $r('app.color.surface'))
+      .border({ width: 1, color: $r('app.color.line') }).enabled(!this.interactionBusy && ready)
+      .opacity(ready ? 1 : 0.45).accessibilityText(label + (selected ? '，已选中' : '') + (ready ? '' : '，暂未就绪'))
+      .onClick(action);
+  }
+
+  @Builder
   private cardActions() {
-    Row({ space: 10 }) {
-      Button(this.viewerLiked ? `已点赞 ${this.likeCount}` : `点赞 ${this.likeCount}`)
-        .layoutWeight(1).height(48).enabled(!this.interactionBusy)
-        .backgroundColor(this.viewerLiked ? $r('app.color.accent_soft') : $r('app.color.surface'))
-        .fontColor(this.viewerLiked ? $r('app.color.accent_action') : $r('app.color.ink'))
-        .border({ width: 1, color: $r('app.color.line') })
-        .onClick(() => this.toggleCardAction('LIKE'));
-      Button(this.viewerFavorited ? `已收藏 ${this.favoriteCount}` : `收藏 ${this.favoriteCount}`)
-        .layoutWeight(1).height(48).enabled(!this.interactionBusy)
-        .backgroundColor(this.viewerFavorited ? $r('app.color.accent_soft') : $r('app.color.surface'))
-        .fontColor(this.viewerFavorited ? $r('app.color.accent_action') : $r('app.color.ink'))
-        .border({ width: 1, color: $r('app.color.line') })
-        .onClick(() => this.toggleCardAction('FAVORITE'));
+    Column({ space: 6 }) {
+      Row({ space: 8 }) {
+        this.actionButton(this.myReaction === 'LIKE' ? $r('app.media.ic_action_like_on') : $r('app.media.ic_action_like'),
+          `赞 ${this.likeCount}`, this.myReaction === 'LIKE', !this.loggedIn || this.reactionsEnabled,
+          (): void => { void this.react('LIKE'); });
+        this.actionButton(this.myReaction === 'DISLIKE' ? $r('app.media.ic_action_dislike_on') : $r('app.media.ic_action_dislike'),
+          `踩 ${this.dislikeCount}`, this.myReaction === 'DISLIKE', !this.loggedIn || this.reactionsEnabled,
+          (): void => { void this.react('DISLIKE'); });
+        this.actionButton(this.viewerFavorited ? $r('app.media.ic_action_favorite_on') : $r('app.media.ic_action_favorite'),
+          this.pendingCollection !== undefined && this.pendingCollectionKind === 'FAVORITE' ? '重试收藏' : `收藏 ${this.favoriteCount}`,
+          this.viewerFavorited, !this.loggedIn || this.collectionReady,
+          (): void => { void this.setCollection('FAVORITE'); });
+        this.actionButton(this.viewerWanted ? $r('app.media.ic_action_wanted_on') : $r('app.media.ic_action_wanted'),
+          this.pendingCollection !== undefined && this.pendingCollectionKind === 'WANT_TO_EAT' ? '重试想吃' : this.viewerWanted ? '已想吃' : '想吃',
+          this.viewerWanted, !this.loggedIn || this.collectionReady,
+          (): void => { void this.setCollection('WANT_TO_EAT'); });
+      }.width('100%');
+      if (this.loggedIn && !this.collectionReady) {
+        Text(this.collectionKnown && this.card.collectionStatus !== 'FEATURE_NOT_READY' ? '请先到「我的收藏」整理旧收藏。' : '收藏服务尚未更新或未就绪，请稍后刷新。')
+          .fontSize(12).fontColor($r('app.color.muted')).width('100%');
+      }
+      if (this.loggedIn && !this.reactionsEnabled) { Text('赞踩暂未就绪').fontSize(12).fontColor($r('app.color.muted')); }
     }.width('100%');
   }
 
@@ -957,6 +1057,7 @@ export struct CardDetailPage {
       this.infoRow('消费方式', this.card.consumptionMode === 'DELIVERY' ? '外卖' : this.card.consumptionMode === 'DINE_IN' ? '到店' : '历史未区分');
       this.infoRow('可见范围', this.card.visibility === 'FRIENDS' ? '仅好友可见' : '公开');
       this.infoRow('价格', this.priceText());
+      if (this.card.consumptionMode === 'DINE_IN' && this.card.merchantId !== undefined && this.card.merchantId.length > 0) { Button('去这里 · 商家导航').height(48).width('100%').onClick((): void => { void this.navigateMerchant(); this.closeActionMenu(); }).attributeModifier(new SecondaryActionStyle()); }
       if (isSafeHttpsSourceLink(this.card.sourceLink)) {
         this.infoRow('来源链接', '已提供，可从更多操作打开');
       }
@@ -1168,20 +1269,22 @@ export struct CardDetailPage {
 
   build() {
     NavDestination() {
-      if (this.editingVisible && this.loggedIn) {
+      if (this.editingVisible && this.loggedIn && this.contentAllowed) {
         CreateCardPage({ editCardId: this.card.id, accountUid: this.editorUid(), onEditingFinished: (): void => {
           this.editingVisible = false; void this.loadDetail();
         } })
+      } else if (!this.contentAllowed) { Column({ space: 12 }) { Text(this.status.length > 0 ? this.status : '正在重新验证内容…'); Button('重新读取').height(48).onClick((): void => { void this.loadDetail(); }).attributeModifier(new SecondaryActionStyle()); }.padding(20)
       } else {
       Stack({ alignContent: Alignment.Bottom }) {
-        Scroll() {
-          Column({ space: 18 }) {
+        Scroll(this.detailScroller) {
+          Column({ space: 12 }) {
             this.authorHeader();
+            if (this.navigationAddress.length > 0) { Button('复制商家地址').height(48).onClick((): void => { void this.copyNavigationAddress(); }).attributeModifier(new SecondaryActionStyle()); }
             // Keep one media/composer subtree while resizing, preserving photo
             // index, pending comments and the existing async loading generation.
             Flex({ direction: this.isWideDetail() ? FlexDirection.Row : FlexDirection.Column,
               alignItems: ItemAlign.Start }) {
-              Column({ space: 18 }) {
+              Column({ space: 8 }) {
                 this.photoCarousel();
                 this.cardActions();
                 if (this.knockShareEnabled) {
@@ -1189,8 +1292,8 @@ export struct CardDetailPage {
                 }
               }
               .width(this.detailColumnWidth()).flexShrink(0).alignItems(HorizontalAlign.Start)
-              .margin({ right: this.isWideDetail() ? 24 : 0, bottom: this.isWideDetail() ? 0 : 18 });
-              Column({ space: 18 }) {
+              .margin({ right: this.isWideDetail() ? 24 : 0, bottom: this.isWideDetail() ? 0 : 12 });
+              Column({ space: 12 }) {
                 this.reviewSection();
                 this.productInfo();
                 if (this.status.length > 0) {
@@ -1201,7 +1304,7 @@ export struct CardDetailPage {
             }
             .width('100%');
           }
-          .width('100%').padding({ left: this.detailPadding(), right: this.detailPadding(), top: 14, bottom: 28 })
+          .width('100%').padding({ left: this.detailPadding(), right: this.detailPadding(), top: 8, bottom: 12 })
           .alignItems(HorizontalAlign.Start);
         }
         .width('100%').height('100%').backgroundColor($r('app.color.canvas'));
@@ -1220,6 +1323,8 @@ export struct CardDetailPage {
       }
       .width('100%').height('100%').backgroundColor($r('app.color.canvas'))
       .onAreaChange((_oldArea: Area, newArea: Area): void => {
+        const height: number = Number(newArea.height);
+        if (Number.isFinite(height) && height > 0) this.detailHeightVp = height;
         const width: number = Number(newArea.width);
         if (Number.isFinite(width) && width > 0 && this.detailWidthVp !== width) {
           this.detailWidthVp = width;
@@ -1228,10 +1333,14 @@ export struct CardDetailPage {
       }
     }.title(this.editingVisible ? '编辑推荐' : '卡片详情')
       .onShown((): void => {
-        this.knockSharePageVisible = true;
+        this.detailVisible = true;
+        this.knockSharePageVisible = true; void this.loadDetail();
       })
       .onHidden((): void => {
-        this.knockSharePageVisible = false;
+        this.savedScrollY = this.detailScroller.currentOffset().yOffset;
+        if (this.restoreTimer !== -1) { clearTimeout(this.restoreTimer); this.restoreTimer = -1; }
+        this.detailVisible = false;
+        this.knockSharePageVisible = false; this.detailGeneration++; this.clearProtectedContent();
         this.stopKnockShare(this.knockShareEnabled ? '已离开详情前台，碰一碰分享已结束。' : '');
       });
   }

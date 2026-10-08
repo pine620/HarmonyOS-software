@@ -32,6 +32,7 @@ function createStage1Services(ctx) {
     if (!Number.isSafeInteger(value) || value < 0 || !Number.isSafeInteger(value + 1)) throw accessError('生命周期版本无效。', 'INVALID_STATE');
     return value;
   };
+  const editableState = card => readableCardState(card) || !!card && card.reviewState === 'REQUEST_CHANGE' && card.deletedAt == null && card.purgeAt == null;
   const normalize = (value) => String(value || '').normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
   const derived = (card) => {
     const fields = { categoryV2: CATEGORY_MAP[card.category] || 'OTHER', categoryVersion: 2,
@@ -98,10 +99,13 @@ function createStage1Services(ctx) {
   }
 
   async function reactionSummary(cardId, uid, env) {
-    const [reactions, actions] = await Promise.all([
+    const [reactions, likes, favoritesRows, privateFlags] = await Promise.all([
       all(() => collection(env, 'CardReaction').query().equalTo('cardId', cardId)),
-      all(() => collection(env, 'CardAction').query().equalTo('cardId', cardId))
+      all(() => collection(env, 'CardAction').query().equalTo('cardId', cardId).equalTo('kind', 'LIKE').orderByAsc('id')),
+      all(() => collection(env, 'CardAction').query().equalTo('cardId', cardId).equalTo('kind', 'FAVORITE').orderByAsc('id')),
+      ctx.collections().flags(cardId, uid, env)
     ]);
+    const actions = likes.concat(favoritesRows);
     const states = new Map();
     const favorites = new Set();
     for (const row of actions) {
@@ -112,7 +116,7 @@ function createStage1Services(ctx) {
     const myReaction = states.get(uid) || '';
     return { likeCount: [...states.values()].filter((value) => value === 'LIKE').length,
       dislikeCount: [...states.values()].filter((value) => value === 'DISLIKE').length,
-      favoriteCount: favorites.size, myReaction, viewerLiked: myReaction === 'LIKE', viewerFavorited: favorites.has(uid) };
+      favoriteCount: favorites.size, myReaction, viewerLiked: myReaction === 'LIKE', viewerFavorited: favorites.has(uid), ...privateFlags };
   }
   async function mutateReaction(uid, payload, env, legacyToggle = false) {
     const cardId = String(payload.cardId || '');
@@ -148,6 +152,7 @@ function createStage1Services(ctx) {
     let active = false;
     const committed = await collection(env, 'CardAction').runTransaction({ apply: async (tx) => {
       const profile = await activeProfile(tx, uid, env);
+      await ctx.collections().assertLegacyListWritable(tx, uid, env);
       const card = await txOne(tx, env, 'FoodCard', 'id', cardId);
       await transactionPolicy(tx, env, [profile]).assertCardReadable(uid, card);
       const old = await txOne(tx, env, 'CardAction', 'id', id);
@@ -184,13 +189,13 @@ function createStage1Services(ctx) {
       }
       const now = logicalWriteTime(owner.updatedAt, card.updatedAt, cardTime(card));
       const version = generation(card) + 1;
-      const job = jobRow('PURGE_CARD', cardId, uid, version, now, now + 30 * DAY, { physicalDeletionStarted: false });
-      const deleted = model('FoodCard', { ...card, deletedAt: new Date(now), purgeAt: new Date(now + 30 * DAY),
+      const job = jobRow('PURGE_CARD', cardId, uid, version, now, now + ctx.recoveryPeriod(env), { physicalDeletionStarted: false });
+      const deleted = model('FoodCard', { ...card, deletedAt: new Date(now), purgeAt: new Date(now + ctx.recoveryPeriod(env)),
         modifiedAt: new Date(now), updatedAt: now, lifecycleGeneration: version });
       const counters = await ctx.stage2().prepareCounterTransition(tx, card, deleted, owner, env, now);
       upsertRows(tx, [deleted, ...counters]);
       upsertRows(tx, [job, profileForWrite(owner, now)]);
-      output = { success: true, alreadyDeleted: false, deletedAt: now, purgeAt: now + 30 * DAY, jobId: job.jobId };
+      output = { success: true, alreadyDeleted: false, deletedAt: now, purgeAt: now + ctx.recoveryPeriod(env), jobId: job.jobId };
       return true;
     } });
     if (!committed || !output) throw new Error('删除状态未保存，请重试。');
@@ -216,10 +221,10 @@ function createStage1Services(ctx) {
       const now = logicalWriteTime(profile.updatedAt);
       const job = jobRow('DELETE_ACCOUNT', uid, uid, now, now, now,
         { phase: 'BUSINESS_CLEANUP', providerBindingsRetained: true, physicalDeletionStarted: false,
-          registrationCleanupPending: pushRows.length === 50 || widgetRows.length === 50,
+          counterRemovalDeferred: true, registrationCleanupPending: pushRows.length === 50 || widgetRows.length === 50,
           bindingStatusCleanupPending: bindings.length === 50 });
-      const counters = await ctx.stage2().prepareAccountCounterRemoval(tx, uid, profile, env, now);
-      upsertRows(tx, [model('UserProfile', { ...profileForWrite(profile, now), accountStatus: 'DELETION_IN_PROGRESS' }), job, ...counters]);
+      const counters = []; // Stage 8 removes each card contribution in its durable cleanup batch.
+      upsertRows(tx, [model('UserProfile', { ...profileForWrite(profile, now), accountStatus: 'DELETION_IN_PROGRESS', deletionJobId: job.jobId }), job, ...counters]);
       if (bindings.length > 0) upsertRows(tx, bindings.map((row) => model('IdentityBinding', {
         ...row, status: 'INACTIVE', updatedAt: now
       })));
@@ -297,7 +302,7 @@ function createStage1Services(ctx) {
       return { success: true, revision: revisionView(saved), alreadyProcessed: true };
     }
     const initial = await one(collection(env, 'FoodCard').query().equalTo('id', cardId));
-    if (!initial || initial.ownerUid !== uid || !readableCardState(initial)) throw accessError('内容不存在、已失效或无权编辑。');
+    if (!initial || initial.ownerUid !== uid || !editableState(initial)) throw accessError('内容不存在、已失效或无权编辑。');
     const fields = await editFields(initial, payload.changes, uid, env);
     const matches = (row) => row.authorUid === uid && row.cardId === cardId && dateMillis(row.baseModifiedAt) === baseTime &&
       Number(row.baseLifecycleGeneration) === baseGeneration && (row.requestPayloadHash
@@ -324,7 +329,7 @@ function createStage1Services(ctx) {
         if (!matches(existing)) throw accessError('请求标识已使用。', 'CONFLICT');
         result = existing; return true;
       }
-      if (!card || card.ownerUid !== uid || !readableCardState(card) || cardTime(card) !== baseTime || generation(card) !== baseGeneration) {
+      if (!card || card.ownerUid !== uid || !editableState(card) || cardTime(card) !== baseTime || generation(card) !== baseGeneration) {
         throw accessError('公开版本已变化，请刷新后重建编辑。', 'CONFLICT');
       }
       const currentFields = await editFields(card, payload.changes, uid, env, (name, field, value) => txOne(tx, env, name, field, value));
@@ -365,11 +370,16 @@ function createStage1Services(ctx) {
   async function getEditContext(uid, payload, env) {
     const card = await one(collection(env, 'FoodCard').query().equalTo('id', String(payload.cardId || '')));
     if (!card || card.ownerUid !== uid) throw accessError('无权编辑此卡片。', 'FORBIDDEN');
-    await ctx.contentPolicy(env).assertCardReadable(uid, card);
+    if (!card || card.ownerUid !== uid || !editableState(card)) throw accessError('无权编辑此内容。');
+    await ctx.contentPolicy(env).assertAccountActive(uid);
     const rows = await collection(env, 'FoodCardRevision').query().equalTo('cardId', card.id)
       .orderByDesc('submittedAt').orderByAsc('revisionId').limit(1).get();
     const latest = rows[0] && ['PENDING', 'REJECTED', 'WITHDRAWN'].includes(rows[0].status) ? rows[0] : null;
-    return { card: await ctx.publicCard(card, env, 0, true, uid, false), revision: latest ? revisionView(latest) : null };
+    const result = { card: await ctx.publicCard(card, env, 0, true, uid, false, 6, null, null, true), revision: latest ? revisionView(latest) : null };
+    const fresh = await one(collection(env, 'FoodCard').query().equalTo('id', card.id));
+    await ctx.contentPolicy(env).assertAccountActive(uid);
+    if (!fresh || fresh.ownerUid !== uid || !editableState(fresh) || cardTime(fresh) !== cardTime(card)) throw accessError('编辑内容已变化，请刷新。', 'CONFLICT');
+    return result;
   }
   async function listRevisions(uid, payload, env) {
     await assertAdmin(uid, env);
@@ -396,7 +406,7 @@ function createStage1Services(ctx) {
       }
       const card = await txOne(tx, env, 'FoodCard', 'id', revision.cardId);
       const owner = await txOne(tx, env, 'UserProfile', 'uid', revision.authorUid);
-      const fresh = card && card.ownerUid === revision.authorUid && readableCardState(card) && isAccountActive(owner) &&
+      const fresh = card && card.ownerUid === revision.authorUid && editableState(card) && isAccountActive(owner) &&
         cardTime(card) === dateMillis(revision.baseModifiedAt) && generation(card) === Number(revision.baseLifecycleGeneration);
       if (action === 'APPROVE' && !fresh) {
         upsertRows(tx, [model('FoodCardRevision', { ...revision, status: 'REJECTED', reviewedAt: new Date(), reviewReason: 'BASE_CHANGED' })]);
@@ -431,7 +441,7 @@ function createStage1Services(ctx) {
         const fields = JSON.parse(revision.payloadJson);
         // A base check precedes every application, including visibility expansion.
         const updated = model('FoodCard', { ...card, ...fields, ...ctx.stage2().storageFields(appliedFields), schemaVersion: 2,
-          migrationSource: 'SERVER', reviewState: 'APPROVED',
+          migrationSource: 'SERVER', status: 'APPROVED', reviewState: 'APPROVED', reviewReason: '',
           edited: true, publishedAt: new Date(now), modifiedAt: new Date(now), updatedAt: now,
           lifecycleGeneration: generation(card) + 1, mediaId: ids[0] || '' });
         const counters = await ctx.stage2().prepareCounterTransition(tx, card, updated, owner, env, now);
@@ -713,10 +723,10 @@ function createStage1Services(ctx) {
     } });
     if (!committed || !result) throw new Error('任务资格检查未完成。');
     return { job: jobView(result, true), eligibleAt: dateMillis(result.runAfterAt),
-      physicalWorkerImplemented: false, nextStage: 8 };
+      physicalWorkerImplemented: true, executionEnabled: String(env.SHIKE_LIFECYCLE_VERIFIED || '') === 'true' && String(env.SHIKE_MAINTENANCE_ENABLED || '') === 'true' };
   }
 
-  return { reactionSummary, mutateReaction, toggleFavorite, softDelete, beginAccountDeletion, derived,
+  return { editableState, reactionSummary, mutateReaction, toggleFavorite, softDelete, beginAccountDeletion, derived,
     submitRevision, getRevision, getEditContext, listRevisions, decideRevision, startMigration, listJobs, getJob, retryJob,
     migrationStatus, migrationReadiness, processMigration, validateLifecycleJob, jobRow, jobView, txOne, activeProfile, model, hash, cardTime,
     publishReceiptSpec, checkPublishReceipt, readPublishReceipt, upsertRows };

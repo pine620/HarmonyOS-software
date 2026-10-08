@@ -1,6 +1,6 @@
 # 云端搭建与部署
 
-本目录包含 4 个 AGC 云对象、25 个 Cloud DB 对象定义及环境变量配置说明。客户端第一次运行见 [项目 README](../README.md)，各文件职责见 [索引](../PROJECT_FILE_INDEX.md)。源码状态更新日期为 2026-10-06，官方操作资料核对日期仍为 2026-10-02。
+本目录包含 4 个 AGC 云对象、2 个独立云函数（公开分享 HTTP / 定时维护）、33 个 Cloud DB 对象定义及环境变量配置说明。客户端第一次运行见 [项目 README](../README.md)，各文件职责见 [索引](../PROJECT_FILE_INDEX.md)。源码状态更新日期为 2026-10-08，官方操作资料核对日期仍为 2026-10-02。
 
 ## 0. 先确定团队、项目与分工
 
@@ -43,7 +43,7 @@
 ## 2. Cloud DB 和 Storage
 
 1. 建立中国区 Cloud DB 存储区 **`shike`**，与 `clouddb/db-config.json` 及服务端默认值一致。
-2. DevEco 右击 **clouddb > Deploy Cloud DB**，等待 `Deploy successfully`；从 `Tools > CloudDev > Serverless > Cloud DB > Go to console`检查“对象类型”“存储区”“数据”页签，确认 `objecttype/`下 25 个对象与目标 shike 存储区。部署前核对项目，不覆盖结构不同的已有对象。
+2. DevEco 右击 **clouddb > Deploy Cloud DB**，等待 `Deploy successfully`；从 `Tools > CloudDev > Serverless > Cloud DB > Go to console`检查“对象类型”“存储区”“数据”页签，确认 `objecttype/`下 33 个对象与目标 shike 存储区。部署前核对项目，不覆盖结构不同的已有对象。
 3. 所有对象仅给 **Administrator：Read/Upsert/Delete**，World/Authenticated/Creator 不开放权限。
 4. 创建一个中国区 AGC Cloud Storage 实例，把完整实例名用于 `SHIKE_STORAGE_BUCKET`。不使用 OBS，不开放客户端或匿名直接读写/列举 `public/approved/` 图片目录。
 5. 图片由 shike-media 使用平台项目凭证处理；设备只通过鉴权媒体接口访问。`PROJECT_CREDENTIAL` 由 AGC 注入，不自行创建或复制。
@@ -57,9 +57,11 @@
 | 版本/权限/任务 | FoodCardRevision：待审编辑版本；FriendContentAccessGrant：方向授权；PublishRequestRecord：请求回执；MaintenanceJob：迁移、会话及生命周期任务 |
 | 好友/私信 | Friendship：关系/申请；FriendReport：用户举报；Conversation：会话/未读；ChatMessage：TEXT/CARD/LINK |
 | 群聊 | GroupConversation：群资料/摘要；GroupMember：角色/未读；GroupMessage：文字/卡片 |
+| 个人内容 | TastePreference：口味偏好；FoodList / FoodListItem：私人清单；PersonalFoodState：个人食物状态；MealChoiceHistory：选择记录 |
+| 群投票 | MealPoll / MealPollOption / MealPollVote：投票、选项与投票记录 |
 | 通知/卡片 | NotificationEvent：站内事件；PushRegistration：系统通知设备登记；WidgetRegistration：桌面卡片实例登记 |
 
-**已有数据的项目：**保留历史 CardRating 及其数据。AppScope/schema.json 是平台生成的快照，客户端与云端快照可能处于不同代次；当前部署以 `clouddb/objecttype/` 的 25 个定义为准。已部署字段的类型、主键和敏感属性不能直接更改；新增结构先制定迁移方案，由管理员操作并导出核对。当前 FoodCard 定义含 14 个索引，Merchant 含 4 个索引，核对时包含字段顺序与 ASC/DESC。
+**已有数据的项目：**保留历史 CardRating 及其数据。AppScope/schema.json 是平台生成的快照，客户端与云端快照可能处于不同代次；当前部署以 `clouddb/objecttype/` 的 33 个定义为准。已部署字段的类型、主键和敏感属性不能直接更改；新增结构先制定迁移方案，由管理员操作并导出核对。当前 FoodCard 定义含 16 个索引，Merchant 含 4 个索引，核对时包含字段顺序与 ASC/DESC。
 
 String 字段有 200 字符上限，正文/长链接采用 Text。UserProfile.nickname/avatarUrl、CardMedia.objectKey/sha256、Report.reason、FriendReport.reason 保持已有敏感属性；查询用镜像字段依既有模型处理。消息正文、链接、摘要和 Token 的 Text 字段采用服务端 AES-256-GCM 密文，不改成明文或用 isSensitive 代替。对象定义与各 runtime 的 fieldTypes、主键、索引和销户清理必须同步。
 
@@ -110,7 +112,7 @@ String 字段有 200 字符上限，正文/长链接采用 Text。UserProfile.ni
 每个对象选择 **Node.js 20.x**，保留 `function-config.json` 的 **functionType=1**、`HDA-SYSTEM / apigw-client` 平台鉴权。不要额外开放免认证公网 HTTP API。
 
 1. 在外层端云工程确认 CloudDev 指向约定测试项目，各对象依赖同步完成。实际业务逻辑在同目录 runtime.js；TS 负责导出方法和包装响应。手工打包另用符合各 package.engines 的 Node.js 20.x/npm，不把客户端 IDE 内置工具版本当成云运行时版本。
-2. 检查最终包根目录包含编译后的 `shike*.js`、相邻 runtime.js、service/media/location 各自的 content-policy.js、service 的 stage1-services.js / stage2-services.js / stage3-services.js、function-config.json、package.json、package-lock.json 与生产 node_modules。IDE/平台负责编译安装时也核对生效包，不能仅以本地源文件存在为依据。
+2. 检查最终包根目录包含编译后的 `shike*.js`、相邻 runtime.js、service/media/location 各自的 content-policy.js、service 的全部同级功能模块（清单见下文升级说明）、function-config.json、package.json、package-lock.json 与生产 node_modules。IDE/平台负责编译安装时也核对生效包，不能仅以本地源文件存在为依据。
 3. 数据库/环境就绪后按 **auth → media → service → location**：右击对应目录，选 `Deploy 'shike-xxx'`，查看底部部署进度，等待 `Deploy successfully`。普通改动只部署涉及的对象。
 4. `Tools > CloudDev > Serverless > Cloud Functions > Go to console`，核对函数名称、handler、Node 运行时、变量和实际生效版本/`$latest`。记录部署人、Git 提交与云版本，通知使用同一后端的成员。
 5. 改过导出类、方法或参数模型时，右击相应云对象选 **Generate Invoke Interface**，弹窗目标选择 `Application/cloud_objects`，确认后核对生成代理、Index.ets 公共导出、Gateway/DTO/Repository。无签名变化的 runtime 修复不需每次重生成。
@@ -118,11 +120,11 @@ String 字段有 200 字符上限，正文/长链接采用 Text。UserProfile.ni
 
 批量 `cloudfunctions > Deploy Cloud Functions`会部署目录内全部对象；`CloudProgram > Deploy Cloud Program`还涉及整套云资源。团队已有数据时优先有范围的单对象部署。**Sync '对象' / Sync Cloud Functions / Sync Cloud Program 是从云端下载，Overwrite 会覆盖本地源码并生成备份，不是上传发布。**确需同步时先保存 Git 改动、对比云端版本，再选择 Skip/Overwrite；同步 DB 当前支持对象类型，不是业务数据备份。
 
-**从 Stage 1 升级到本版：**先部署 `clouddb/objecttype/` 当前 25 个对象的新增定义、字段和索引，再由成员准备并部署当前四个云对象；auth 本次也有兼容登录处理变更。保留原数据、主键和已有字段类型。三个独立包必须各带当前 `content-policy.js`；service 还必须带同级 `stage1-services.js`、`stage2-services.js`、`stage3-services.js`。仅运行 tsc 不会自动复制这些 JS 功能模块。service 源码与工程代理当前均为 82 个方法，成员应从当前 TS 生成云入口，并执行 service 的 **Generate Invoke Interface** 后再构建客户端；旧编译入口 JS／map 不随 Git 发布。
+**从旧版升级到本版：**先核对 `clouddb/objecttype/` 当前 33 个对象的新增定义、字段和索引，保留原数据、主键和已有字段类型。修复下文已知模型问题后，再由成员准备并部署涉及的云对象。service 包需要 `runtime.js`、`content-policy.js`、`read-errors.js`、`stage1-services.js` 至 `stage7-services.js`、`stages47-common.js`、`personal-collections.js`、`moderation-services.js`、`lifecycle-services.js`、`authentication-cleanup.js`；media/location 各需要 `runtime.js`、`content-policy.js`、`read-errors.js`。仅运行 tsc 不会复制这些 JS 模块，优先使用仓库打包脚本。service TS 导出目前有 133 个方法，随仓库代理有 111 个；当前 Gateway 对新增方法使用 `cloudFunction.call` 分发。部署后仍应从当前 TS 生成云入口，并按 **Generate Invoke Interface** 更新代理；旧编译入口 JS／map 不随 Git 发布。
 
 管理接口从 `SHIKE_ADMIN_UIDS` 读取受控管理员 canonical UID；迁移还需 `SHIKE_MIGRATION_ANCHOR_UID` 指定存在且活跃的共享管理员锚点。`SHIKE_INDEXED_QUERY_VERIFIED` 仅在历史迁移覆盖完成、实际索引查询验收后启用。秘密和项目身份仍通过团队安全渠道配置。
 
-本版 Stage 2、Stage 3 阶段验收已由项目负责人确认；本次 Git 发布未执行构建、运行验证或 AGC 部署。软删除和注销立即限制访问并建立持久任务；完整物理清理 Worker、作者恢复入口及定时调度属于后续阶段。服务卡片继续同步公开摘要与图片身份，应用前台准备封面缓存。
+本版标签为 **stage完全开发版**。Stage 2、Stage 3 阶段验收此前已由负责人确认，Stage 4–9 运行验收待负责人完成；本次 Git 发布未执行构建、运行验证或 AGC 部署。源码已包含 30 天软删除恢复、持久生命周期任务和独立维护 Worker，实际开启仍受服务端开关与平台定时配置控制。服务卡片继续同步公开摘要与图片身份，应用前台准备封面缓存。
 
 地图／搜索门槛继续保留：`SHIKE_STAGE3_SEARCH_VERIFIED`、`SHIKE_STAGE3_MAP_VERIFIED` 分别控制开放，且仍须历史覆盖与索引条件就绪。地图首发要求 `SHIKE_STAGE3_MAP_COORDINATE_SYSTEM=GCJ02`；可靠可见商家混入 WGS84 时不开放地图。好友发布、选点坐标与官方 POI 仍按 `SHIKE_FRIENDS_PUBLISH_VERIFIED`、`SHIKE_MAP_PICKER_COORDINATE_SYSTEM`、`SHIKE_HUAWEI_POI_VERIFIED`、`SHIKE_HUAWEI_POI_COORDINATE_SYSTEM` 核对；官方查询密钥 `SHIKE_HUAWEI_SITE_API_KEY` 使用秘密变量。部署成员逐项确认环境资格，不能仅凭这次发布替生产环境开放门槛。
 
@@ -151,6 +153,32 @@ node check-deployment.mjs --artifact ../../build/cloud/shike-media
 </details>
 
 部署后 `Cannot find module './runtime'` 优先检查文件同级、大小写、包层级及生效版本；`Cannot find package` 检查生产依赖。记录云版本、函数名和首条脱敏错误，不回传凭证或 Base64 图片。
+
+### 本版已知问题
+
+本次按现有源码提交，以下两项静态问题尚未修改：
+
+- `shike-service/runtime.js` 的 `FriendReport.fieldTypes/indexes` 与 `clouddb/objecttype/FriendReport.json` 不一致：模型缺少业务写入的 `targetUid`，却包含卡片举报字段及索引。用户举报与相关账号清理需先对齐模型，再由负责人验证。
+- media/service runtime 的 `IdentityBinding.indexes` 是对象，而公共 `getIndexList()` 使用列表展开，会存在不可迭代的风险；三个 `content-policy.js` 的对应索引列表还缺少 `canonicalUid,id`。应统一索引表示并对齐正式定义，验证登录、身份绑定、媒体读取与销户任务。
+
+这些问题不改变 Git 源码归档的范围，但本标签不能作为生产就绪结论。
+
+### 独立分享服务与维护 Worker
+
+四个业务云对象保持平台鉴权。新增 `shike-share` 是独立、受限的公开只读 HTTP 入口，`shike-maintenance` 是独立定时入口，不能将 service 云对象改为免认证 HTTP 来替代它们。
+
+| 源码 / 命令（由部署成员执行） | 作用与部署条件 |
+| --- | --- |
+| `cloudfunctions/shike-share/shikeShare.js`；`npm run package:share` | 准备分享 HTTP 包；在实际网关映射 `gateway-contract.json`，核对入口、路径、允许来源、限流和大小限制 |
+| `hosting/share/`；`npm run package:share:web -- --api-base https://YOUR_GATEWAY_BASE --web-origin https://YOUR_SHARE_ORIGIN` | 将真实 HTTPS API 与站点 origin 写入 `build/hosting/share/` 的配置；源配置 `apiBase` 为空，不直接作为已可运行站点发布 |
+| `cloudfunctions/shike-maintenance/shikeMaintenance.js`；`npm run package:maintenance` | 准备定时 Worker 包；handler 为 `shikeMaintenance.handler`，不开放 HTTP 触发 |
+| `npm run check:release-source` | 供负责人手动执行的发布源码检查，不等于构建、模拟器或端云验收 |
+
+`hosting-contract.json`、`gateway-contract.json`、`timer-contract.json` 是部署约定，不能当作厂商 CLI 已部署配置。分享托管需在选用平台配置 `/card` 与 `/card/**` 回退、CSP / no-store 等响应头；为分享函数配置与站点一致的 `SHIKE_SHARE_ALLOWED_ORIGINS`，再核对 App Linking 的 Web fallback。
+
+维护函数的 `function-config.json` 默认 `triggers=[]`。由部署负责人在平台设置定时器，按 `timer-contract.json` 配置事件，并将高熵 `SHIKE_MAINTENANCE_TRIGGER_KEY` 以秘密变量保存；事件中的 `workerToken` 必须匹配实际秘密，仓库占位值不可直接使用。建议间隔 5 分钟；单轮最多 3 个任务、每阶段最多 10 行、45 秒工作预算。`SHIKE_LIFECYCLE_VERIFIED` 与 `SHIKE_MAINTENANCE_ENABLED` 默认不启用，通过人工验收后才开启。认证用户清理还需 service 的 AGC 项目/客户端配置和受控授权，失效时进入 `AUTH_ACTION_REQUIRED`，不能仅删业务数据就宣布销户完成。
+
+部署及验收顺序：先修复已知模型问题并核对 DB → 更新云对象与必要变量 → 单独部署分享/维护函数和网页 → 由负责人验证游客公开可见性、私有内容拒绝、审核权限、30 天恢复和任务续跑 → 达到门槛后再开相应功能。Git 推送和打包脚本均不代替平台部署。
 
 ### 云对象断点与远程调用调试
 

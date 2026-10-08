@@ -35,20 +35,91 @@
       "fieldType": "Long",
       "notNull": true,
       "defaultValue": 0
+    },
+    {
+      "fieldName": "targetType",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "targetId",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "updatedAt",
+      "fieldType": "Long"
+    },
+    {
+      "fieldName": "resolutionAction",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "resolutionReason",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "resolvedByUid",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "resolvedAt",
+      "fieldType": "Long"
     }
   ],
   "indexes": [
     {
       "indexName": "cardId",
       "indexList": [
-        {"fieldName": "cardId", "sortType": "ASC"}
+        {
+          "fieldName": "cardId",
+          "sortType": "ASC"
+        }
       ]
     },
     {
       "indexName": "reporterUid_createdAt",
       "indexList": [
-        {"fieldName": "reporterUid", "sortType": "ASC"},
-        {"fieldName": "createdAt", "sortType": "DESC"}
+        {
+          "fieldName": "reporterUid",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "createdAt",
+          "sortType": "DESC"
+        }
+      ]
+    },
+    {
+      "indexName": "status_created_id",
+      "indexList": [
+        {
+          "fieldName": "status",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "createdAt",
+          "sortType": "DESC"
+        },
+        {
+          "fieldName": "id",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "reporter_created_id",
+      "indexList": [
+        {
+          "fieldName": "reporterUid",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "createdAt",
+          "sortType": "DESC"
+        },
+        {
+          "fieldName": "id",
+          "sortType": "ASC"
+        }
       ]
     }
   ],
@@ -67,7 +138,11 @@
     },
     {
       "role": "Administrator",
-      "rights": ["Read", "Upsert", "Delete"]
+      "rights": [
+        "Read",
+        "Upsert",
+        "Delete"
+      ]
     }
   ]
 }

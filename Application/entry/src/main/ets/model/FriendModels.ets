@@ -2,7 +2,7 @@ import { FoodCard } from './CloudContracts';
 
 export type FriendshipState = 'NONE' | 'OUTGOING' | 'INCOMING' | 'FRIEND';
 export type ChatMessageKind = 'TEXT' | 'CARD' | 'LINK';
-export type GroupMessageKind = 'TEXT' | 'CARD';
+export type GroupMessageKind = 'TEXT' | 'CARD' | 'MEAL_POLL';
 export type GroupMemberRole = 'OWNER' | 'MEMBER';
 
 export interface SocialUser {
@@ -203,6 +203,7 @@ export interface GroupIdRequest {
 }
 
 export interface GroupMessage {
+  referenceId?: string;
   id: string;
   groupId: string;
   sender: SocialUser;
@@ -215,6 +216,7 @@ export interface GroupMessage {
 }
 
 export interface ListGroupMessagesRequest {
+  clientVersion?: number;
   groupId: string;
   beforeToken: string;
   pageSize: number;

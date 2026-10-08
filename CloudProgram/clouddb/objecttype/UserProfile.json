@@ -67,11 +67,35 @@
       "notNull": true,
       "defaultValue": 0
     },
-    {"fieldName": "contentSequence", "fieldType": "Long", "defaultValue": 0}
+    {
+      "fieldName": "contentSequence",
+      "fieldType": "Long",
+      "defaultValue": 0
+    },
+    {
+      "fieldName": "deletionJobId",
+      "fieldType": "String"
+    }
   ],
   "indexes": [
-    { "indexName": "nicknameValue", "indexList": [{ "fieldName": "nicknameValue", "sortType": "ASC" }] },
-    { "indexName": "friendCode", "indexList": [{ "fieldName": "friendCode", "sortType": "ASC" }] }
+    {
+      "indexName": "nicknameValue",
+      "indexList": [
+        {
+          "fieldName": "nicknameValue",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "friendCode",
+      "indexList": [
+        {
+          "fieldName": "friendCode",
+          "sortType": "ASC"
+        }
+      ]
+    }
   ],
   "permissions": [
     {
@@ -88,7 +112,11 @@
     },
     {
       "role": "Administrator",
-      "rights": ["Read", "Upsert", "Delete"]
+      "rights": [
+        "Read",
+        "Upsert",
+        "Delete"
+      ]
     }
   ]
 }

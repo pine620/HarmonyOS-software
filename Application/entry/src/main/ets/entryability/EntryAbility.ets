@@ -1,3 +1,5 @@
+import { ReadScheduler } from '../service/ReadScheduler';
+import { DraftStore } from '../service/DraftStore';
 import { AbilityConstant, common, UIAbility, Want } from '@kit.AbilityKit';
 import { window } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
@@ -19,6 +21,7 @@ export default class EntryAbility extends UIAbility {
 
   onCreate(want: Want, _launchParam: AbilityConstant.LaunchParam): void {
     if (!AppStorage.has('pendingSharedCardId')) AppStorage.setOrCreate('pendingSharedCardId', '');
+    AppStorage.setOrCreate('stage47AppActive', true);
     if (!AppStorage.has('socialForegroundRevision')) AppStorage.setOrCreate('socialForegroundRevision', 0);
     if (!AppStorage.has('friendRelationshipRevision')) AppStorage.setOrCreate('friendRelationshipRevision', 0);
     if (!AppStorage.has('requestedFriendSection')) AppStorage.setOrCreate('requestedFriendSection', 0);
@@ -34,7 +37,10 @@ export default class EntryAbility extends UIAbility {
     this.captureSystemEntry(want);
   }
 
+  onBackground(): void { AppStorage.setOrCreate('stage47AppActive', false); ReadScheduler.invalidateQueued(); void DraftStore.flushActive().catch((_error: Object): void => {}); }
+
   onForeground(): void {
+    AppStorage.setOrCreate('stage47AppActive', true);
     const context = this.context as common.UIAbilityContext;
     const revision: number = AppStorage.get<number>('socialForegroundRevision') || 0;
     AppStorage.setOrCreate('socialForegroundRevision', revision + 1);

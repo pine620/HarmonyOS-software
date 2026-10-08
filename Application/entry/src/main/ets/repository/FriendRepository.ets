@@ -188,6 +188,7 @@ export class FriendRepository {
 
   async listGroupMessages(context: common.Context, request: ListGroupMessagesRequest): Promise<GroupMessagesResponse> {
     await AuthService.ensureSession(context);
+    request.clientVersion = 2;
     const response = await CloudGateway.callAuthenticated<GroupMessagesResponse>('list-group-messages', request);
     await Promise.all(response.messages.map(async (message: GroupMessage): Promise<void> => {
       await this.resolveUserAvatar(context, message.sender);

@@ -1,43 +1,163 @@
 {
   "objectTypeName": "CardComment",
   "fields": [
-    { "fieldName": "id", "fieldType": "String", "notNull": true, "belongPrimaryKey": true },
-    { "fieldName": "cardId", "fieldType": "String", "notNull": true, "defaultValue": "" },
-    { "fieldName": "authorUid", "fieldType": "String", "notNull": true, "defaultValue": "" },
-    { "fieldName": "parentId", "fieldType": "String", "notNull": true, "defaultValue": "" },
-    { "fieldName": "replyToNickname", "fieldType": "String", "notNull": true, "defaultValue": "" },
-    { "fieldName": "replyToUid", "fieldType": "String", "notNull": true, "defaultValue": "" },
-    { "fieldName": "content", "fieldType": "Text", "notNull": true, "defaultValue": "" },
-    { "fieldName": "status", "fieldType": "String", "notNull": true, "defaultValue": "ACTIVE" },
-    { "fieldName": "createdAt", "fieldType": "Long", "notNull": true, "defaultValue": 0 },
-    { "fieldName": "updatedAt", "fieldType": "Long", "notNull": true, "defaultValue": 0 }
+    {
+      "fieldName": "id",
+      "fieldType": "String",
+      "notNull": true,
+      "belongPrimaryKey": true
+    },
+    {
+      "fieldName": "cardId",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "authorUid",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "parentId",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "replyToNickname",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "replyToUid",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "content",
+      "fieldType": "Text",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "status",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": "ACTIVE"
+    },
+    {
+      "fieldName": "createdAt",
+      "fieldType": "Long",
+      "notNull": true,
+      "defaultValue": 0
+    },
+    {
+      "fieldName": "updatedAt",
+      "fieldType": "Long",
+      "notNull": true,
+      "defaultValue": 0
+    }
   ],
   "indexes": [
-    { "indexName": "cardId_createdAt", "indexList": [
-      { "fieldName": "cardId", "sortType": "ASC" },
-      { "fieldName": "createdAt", "sortType": "ASC" }
-    ] },
-    { "indexName": "cardId_createdAt_desc", "indexList": [
-      { "fieldName": "cardId", "sortType": "ASC" },
-      { "fieldName": "createdAt", "sortType": "DESC" }
-    ] },
-    { "indexName": "authorUid_createdAt", "indexList": [
-      { "fieldName": "authorUid", "sortType": "ASC" },
-      { "fieldName": "createdAt", "sortType": "DESC" }
-    ] },
-    { "indexName": "parentId_createdAt", "indexList": [
-      { "fieldName": "parentId", "sortType": "ASC" },
-      { "fieldName": "createdAt", "sortType": "ASC" }
-    ] },
-    { "indexName": "replyToUid_createdAt", "indexList": [
-      { "fieldName": "replyToUid", "sortType": "ASC" },
-      { "fieldName": "createdAt", "sortType": "DESC" }
-    ] }
+    {
+      "indexName": "cardId_createdAt",
+      "indexList": [
+        {
+          "fieldName": "cardId",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "createdAt",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "cardId_createdAt_desc",
+      "indexList": [
+        {
+          "fieldName": "cardId",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "createdAt",
+          "sortType": "DESC"
+        }
+      ]
+    },
+    {
+      "indexName": "authorUid_createdAt",
+      "indexList": [
+        {
+          "fieldName": "authorUid",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "createdAt",
+          "sortType": "DESC"
+        }
+      ]
+    },
+    {
+      "indexName": "parentId_createdAt",
+      "indexList": [
+        {
+          "fieldName": "parentId",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "createdAt",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "replyToUid_createdAt",
+      "indexList": [
+        {
+          "fieldName": "replyToUid",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "createdAt",
+          "sortType": "DESC"
+        }
+      ]
+    },
+    {
+      "indexName": "author_uid",
+      "indexList": [
+        {
+          "fieldName": "authorUid",
+          "sortType": "ASC"
+        }
+      ]
+    }
   ],
   "permissions": [
-    { "role": "World", "rights": [] },
-    { "role": "Authenticated", "rights": [] },
-    { "role": "Creator", "rights": [] },
-    { "role": "Administrator", "rights": ["Read", "Upsert", "Delete"] }
+    {
+      "role": "World",
+      "rights": []
+    },
+    {
+      "role": "Authenticated",
+      "rights": []
+    },
+    {
+      "role": "Creator",
+      "rights": []
+    },
+    {
+      "role": "Administrator",
+      "rights": [
+        "Read",
+        "Upsert",
+        "Delete"
+      ]
+    }
   ]
 }

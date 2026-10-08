@@ -1,3 +1,7 @@
+import { ReviewMediaRequest } from '../model/OperationsModels';
+import { ReadRequestOptions } from './ReadScheduler';
+import { AuthSessionStore } from './AuthSessionStore';
+import { ReadCancelledError } from './CloudReadErrors';
 import { common } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
@@ -12,10 +16,6 @@ const MEDIA_CACHE_MAX_FILES: number = 64;
 const MEDIA_CACHE_MAX_FILE_BYTES: number = 8 * 1024 * 1024;
 const MEDIA_URL_CACHE_MAX_ENTRIES: number = 128;
 const MAX_CONCURRENT_MEDIA_DOWNLOADS: number = 2;
-const MEDIA_DOWNLOAD_MAX_ATTEMPTS: number = 3;
-const MEDIA_DOWNLOAD_RETRY_DELAY_MS: number = 1200;
-const MEDIA_DOWNLOAD_MAX_COOLDOWN_MS: number = 8000;
-const MEDIA_DOWNLOAD_RECOVERY_SUCCESSES: number = 3;
 
 interface DownloadUrlCacheEntry {
   url: string;
@@ -44,15 +44,28 @@ class MediaDownloadQueueEntry {
 }
 
 export class PhotoUploadService {
-  static async getRevisionDownloadUrl(context: common.Context, revisionId: string, mediaId: string): Promise<string> {
+  static async getRevisionDownloadUrl(context: common.Context, revisionId: string, mediaId: string, mayContinue?: MediaRequestGuard): Promise<string> {
     const generation: number = PhotoUploadService.cacheGeneration;
+    const session: number = AuthSessionStore.generation();
     const request: RevisionMediaRequest = { revisionId, mediaId };
+    const options: ReadRequestOptions = { priority: 'cover', mayContinue };
     // Every display revalidates the revision; a cached private file never grants access.
-    const media: PublicMediaResponse = await CloudGateway.callAuthenticated<PublicMediaResponse>('get-revision-media', request);
-    if (generation !== PhotoUploadService.cacheGeneration) return '';
+    const media: PublicMediaResponse = await CloudGateway.callAuthenticated<PublicMediaResponse>('get-revision-media', request, options);
+    if (generation !== PhotoUploadService.cacheGeneration || session !== AuthSessionStore.generation() || mayContinue !== undefined && !await mayContinue()) return '';
     const filePath: string = await PhotoUploadService.cacheFilePath(context,
       'revision:' + PhotoUploadService.cacheOwner + ':' + revisionId + ':' + mediaId);
-    if (generation !== PhotoUploadService.cacheGeneration) return '';
+    if (generation !== PhotoUploadService.cacheGeneration || session !== AuthSessionStore.generation() || mayContinue !== undefined && !await mayContinue()) return '';
+    return PhotoUploadService.writeCachedMedia(context, filePath, media);
+  }
+  static async getReviewDownloadUrl(context: common.Context, mediaId: string, mayContinue: MediaRequestGuard): Promise<string> {
+    const generation: number = PhotoUploadService.cacheGeneration;
+    const session: number = AuthSessionStore.generation();
+    const request: ReviewMediaRequest = { mediaId };
+    const options: ReadRequestOptions = { priority: 'cover', mayContinue };
+    const media: PublicMediaResponse = await CloudGateway.callAuthenticated<PublicMediaResponse>('get-review-media', request, options);
+    if (generation !== PhotoUploadService.cacheGeneration || session !== AuthSessionStore.generation() || !await mayContinue()) return '';
+    const filePath: string = await PhotoUploadService.cacheFilePath(context, 'review:' + PhotoUploadService.cacheOwner + ':' + mediaId);
+    if (generation !== PhotoUploadService.cacheGeneration || session !== AuthSessionStore.generation() || !await mayContinue()) return '';
     return PhotoUploadService.writeCachedMedia(context, filePath, media);
   }
   private static cacheOwner: string = 'public';
@@ -61,12 +74,6 @@ export class PhotoUploadService {
   private static downloadUrlRequests: Map<string, Promise<string>> = new Map<string, Promise<string>>();
   private static mediaDownloadQueue: Array<MediaDownloadQueueEntry> = [];
   private static activeMediaDownloadCount: number = 0;
-  private static activeMediaRequestCount: number = 0;
-  private static mediaBusyUntilMs: number = 0;
-  private static mediaRecovering: boolean = false;
-  private static mediaRecoverySuccesses: number = 0;
-  private static mediaBusyRevision: number = 0;
-  private static mediaQueueResumeTimer: number | undefined = undefined;
 
   static isMediaServiceUnavailable(): boolean {
     return CloudGateway.isMediaServiceUnavailable();
@@ -143,22 +150,37 @@ export class PhotoUploadService {
     if (storageBucketName.length === 0 || !normalizedCloudPath.startsWith('public/approved/')) return '';
     const owner: string = PhotoUploadService.cacheOwner;
     const cacheKey: string = `${owner.length}:${owner}:${storageBucketName.length}:${storageBucketName}:${normalizedCloudPath}`;
+    const generation: number = PhotoUploadService.cacheGeneration;
+    const session: number = AuthSessionStore.generation();
+    const requestKey: string = cacheKey + ':' + generation + ':' + session;
     const cached: DownloadUrlCacheEntry | undefined = PhotoUploadService.downloadUrlCache.get(cacheKey);
     if (cached !== undefined && PhotoUploadService.usableCachedFile(cached.filePath)) {
       NearbyPerformanceTrace.record('media_cache', 'hit');
       return cached.url;
     }
     PhotoUploadService.downloadUrlCache.delete(cacheKey);
-    const inFlight: Promise<string> | undefined = PhotoUploadService.downloadUrlRequests.get(cacheKey);
+    const inFlight: Promise<string> | undefined = PhotoUploadService.downloadUrlRequests.get(requestKey);
     if (inFlight !== undefined) {
       NearbyPerformanceTrace.record('media_cache', 'joined');
-      PhotoUploadService.promoteQueued(cacheKey, priority);
-      return inFlight;
+      PhotoUploadService.promoteQueued(requestKey, priority);
+      let url: string = '';
+      try { url = await inFlight; }
+      catch (error) {
+        if (!(error instanceof ReadCancelledError)) {
+          if (error instanceof Error) throw error;
+          throw new Error(PhotoUploadService.mediaErrorMessage(error as Object));
+        }
+        if (priority === 'low') return '';
+      }
+      if (generation !== PhotoUploadService.cacheGeneration || session !== AuthSessionStore.generation() ||
+        mayContinue !== undefined && !await mayContinue()) return '';
+      // A departed page may cancel its own queued download. A current subscriber
+      // starts a fresh job only after that real job has settled; busy is never replayed here.
+      return url.length > 0 ? url : PhotoUploadService.getDownloadUrl(context, bucketName, cloudPath, priority, mayContinue);
     }
-    const generation: number = PhotoUploadService.cacheGeneration;
     const urlRequest: Promise<string> = PhotoUploadService.resolveCachedOrDownload(context, cacheKey,
-      storageBucketName, normalizedCloudPath, priority, generation, mayContinue);
-    PhotoUploadService.downloadUrlRequests.set(cacheKey, urlRequest);
+      storageBucketName, normalizedCloudPath, priority, generation, mayContinue, requestKey);
+    PhotoUploadService.downloadUrlRequests.set(requestKey, urlRequest);
     try {
       const url: string = await urlRequest;
       if (url.length > 0 && generation === PhotoUploadService.cacheGeneration) {
@@ -170,14 +192,15 @@ export class PhotoUploadService {
       }
       return url;
     } finally {
-      if (PhotoUploadService.downloadUrlRequests.get(cacheKey) === urlRequest) {
-        PhotoUploadService.downloadUrlRequests.delete(cacheKey);
+      if (PhotoUploadService.downloadUrlRequests.get(requestKey) === urlRequest) {
+        PhotoUploadService.downloadUrlRequests.delete(requestKey);
       }
     }
   }
 
   private static async resolveCachedOrDownload(context: common.Context, cacheKey: string, bucketName: string,
-    cloudPath: string, priority: MediaPriority, generation: number, mayContinue?: MediaRequestGuard): Promise<string> {
+    cloudPath: string, priority: MediaPriority, generation: number, mayContinue?: MediaRequestGuard,
+    requestKey: string = cacheKey): Promise<string> {
     const filePath: string = await PhotoUploadService.cacheFilePath(context, cacheKey);
     if (mayContinue !== undefined && !await mayContinue()) return '';
     if (generation !== PhotoUploadService.cacheGeneration) return '';
@@ -187,9 +210,9 @@ export class PhotoUploadService {
     }
     NearbyPerformanceTrace.record('media_cache', 'miss');
     if (CloudGateway.isMediaServiceUnavailable()) throw new MediaServiceUnavailableError();
-    return PhotoUploadService.enqueueMediaDownload(cacheKey, priority,
+    return PhotoUploadService.enqueueMediaDownload(requestKey, priority,
       (): Promise<string> => PhotoUploadService.downloadApprovedMedia(context, filePath, bucketName,
-        cloudPath, generation, mayContinue));
+        cloudPath, generation, priority, mayContinue));
   }
 
   private static enqueueMediaDownload(cacheKey: string, priority: MediaPriority,
@@ -202,10 +225,6 @@ export class PhotoUploadService {
   }
 
   private static cancelQueuedMediaDownloads(): void {
-    if (PhotoUploadService.mediaQueueResumeTimer !== undefined) {
-      clearTimeout(PhotoUploadService.mediaQueueResumeTimer);
-      PhotoUploadService.mediaQueueResumeTimer = undefined;
-    }
     const queued: Array<MediaDownloadQueueEntry> = PhotoUploadService.mediaDownloadQueue;
     PhotoUploadService.mediaDownloadQueue = [];
     queued.forEach((entry: MediaDownloadQueueEntry): void => {
@@ -235,12 +254,7 @@ export class PhotoUploadService {
       });
       return;
     }
-    const cooldownMs: number = PhotoUploadService.mediaBusyUntilMs - Date.now();
-    if (cooldownMs > 0) {
-      if (PhotoUploadService.mediaDownloadQueue.length > 0) PhotoUploadService.scheduleQueueResume(cooldownMs);
-      return;
-    }
-    const concurrency: number = PhotoUploadService.mediaRecovering ? 1 : MAX_CONCURRENT_MEDIA_DOWNLOADS;
+    const concurrency: number = MAX_CONCURRENT_MEDIA_DOWNLOADS;
     while (PhotoUploadService.activeMediaDownloadCount < concurrency
       && PhotoUploadService.mediaDownloadQueue.length > 0) {
       let bestIndex: number = 0;
@@ -266,6 +280,8 @@ export class PhotoUploadService {
     } catch (error) {
       if (error instanceof MediaServiceUnavailableError) {
         entry.reject(error);
+      } else if (error instanceof Error) {
+        entry.reject(error);
       } else {
         const message: string = PhotoUploadService.mediaErrorMessage(error as Object);
         entry.reject(new Error(message));
@@ -278,94 +294,24 @@ export class PhotoUploadService {
   }
 
   private static async downloadApprovedMedia(context: common.Context, filePath: string, bucketName: string,
-    cloudPath: string, generation: number, mayContinue?: MediaRequestGuard): Promise<string> {
+    cloudPath: string, generation: number, priority: MediaPriority, mayContinue?: MediaRequestGuard): Promise<string> {
+    if (generation !== PhotoUploadService.cacheGeneration || mayContinue !== undefined && !await mayContinue()) return '';
     const request: PublicMediaRequest = { bucketName, cloudPath };
-    let lastMessage: string = '获取实拍图失败。';
-    for (let attempt = 1; attempt <= MEDIA_DOWNLOAD_MAX_ATTEMPTS; attempt += 1) {
-      if (!await PhotoUploadService.acquireMediaRequest(generation, mayContinue)) return '';
-      const busyRevision: number = PhotoUploadService.mediaBusyRevision;
-      try {
-        const media: PublicMediaResponse = CloudGateway.hasSession()
-          ? await CloudGateway.callAuthenticated<PublicMediaResponse>('get-public-media', request)
-          : await CloudGateway.callPublic<PublicMediaResponse>('get-public-media', request);
-        if (mayContinue !== undefined && !await mayContinue()) return '';
-        if (generation !== PhotoUploadService.cacheGeneration) return '';
-        const url: string = PhotoUploadService.writeCachedMedia(context, filePath, media);
-        if (generation !== PhotoUploadService.cacheGeneration) return '';
-        if (PhotoUploadService.mediaRecovering && busyRevision === PhotoUploadService.mediaBusyRevision) {
-          PhotoUploadService.mediaRecoverySuccesses += 1;
-          if (PhotoUploadService.mediaRecoverySuccesses >= MEDIA_DOWNLOAD_RECOVERY_SUCCESSES) {
-            PhotoUploadService.mediaRecovering = false;
-            PhotoUploadService.mediaRecoverySuccesses = 0;
-            console.info('[PhotoDownload] media recovered; concurrency=2.');
-          }
-        }
-        return url;
-      } catch (error) {
-        if (error instanceof MediaServiceUnavailableError) throw error;
-        lastMessage = PhotoUploadService.mediaErrorMessage(error as Object);
-        if (!PhotoUploadService.isBusyMediaError(lastMessage)) throw new Error(lastMessage);
-        const delayMs: number = PhotoUploadService.enterMediaCooldown(attempt);
-        if (attempt >= MEDIA_DOWNLOAD_MAX_ATTEMPTS) throw new Error(lastMessage);
-        console.warn(`[PhotoDownload] get-public-media busy; retry ${attempt + 1}/${MEDIA_DOWNLOAD_MAX_ATTEMPTS} after ${delayMs}ms.`);
-      } finally {
-        PhotoUploadService.activeMediaRequestCount -= 1;
-      }
-    }
-    throw new Error(lastMessage);
+    const options: ReadRequestOptions = {
+      priority: priority === 'low' ? 'prefetch' : 'cover',
+      mayContinue: async (): Promise<boolean> => generation === PhotoUploadService.cacheGeneration &&
+        (mayContinue === undefined || await mayContinue())
+    };
+    // Shared scheduler owns the single automatic retry; this layer only caches bytes.
+    const media: PublicMediaResponse = CloudGateway.hasSession()
+      ? await CloudGateway.callAuthenticated<PublicMediaResponse>('get-public-media', request, options)
+      : await CloudGateway.callPublic<PublicMediaResponse>('get-public-media', request, options);
+    if (generation !== PhotoUploadService.cacheGeneration || mayContinue !== undefined && !await mayContinue()) return '';
+    return PhotoUploadService.writeCachedMedia(context, filePath, media);
   }
 
   private static mediaErrorMessage(error: Object): string {
     return error instanceof Error && error.message.length > 0 ? error.message : '获取实拍图失败。';
-  }
-
-  private static isBusyMediaError(message: string): boolean {
-    return message.includes('3007009') || message.includes('too many requests');
-  }
-
-  private static enterMediaCooldown(attempt: number): number {
-    const delayMs: number = Math.min(MEDIA_DOWNLOAD_MAX_COOLDOWN_MS,
-      MEDIA_DOWNLOAD_RETRY_DELAY_MS * Math.pow(2, attempt - 1) + Math.floor(Math.random() * 400));
-    PhotoUploadService.mediaBusyUntilMs = Math.max(PhotoUploadService.mediaBusyUntilMs, Date.now() + delayMs);
-    PhotoUploadService.mediaRecovering = true;
-    PhotoUploadService.mediaRecoverySuccesses = 0;
-    PhotoUploadService.mediaBusyRevision += 1;
-    console.warn(`[PhotoDownload] media cooldown=${delayMs}ms; concurrency=1.`);
-    return delayMs;
-  }
-
-  private static scheduleQueueResume(delayMs: number): void {
-    if (PhotoUploadService.mediaQueueResumeTimer !== undefined) return;
-    PhotoUploadService.mediaQueueResumeTimer = setTimeout((): void => {
-      PhotoUploadService.mediaQueueResumeTimer = undefined;
-      PhotoUploadService.drainMediaDownloadQueue();
-    }, Math.max(1, delayMs));
-  }
-
-  private static async acquireMediaRequest(generation: number, mayContinue?: MediaRequestGuard): Promise<boolean> {
-    while (generation === PhotoUploadService.cacheGeneration) {
-      if (mayContinue !== undefined && !await mayContinue()) return false;
-      if (generation !== PhotoUploadService.cacheGeneration) return false;
-      if (CloudGateway.isMediaServiceUnavailable()) throw new MediaServiceUnavailableError();
-      const cooldownMs: number = PhotoUploadService.mediaBusyUntilMs - Date.now();
-      if (cooldownMs > 0) {
-        await PhotoUploadService.waitForRetry(Math.min(cooldownMs, 500));
-        continue;
-      }
-      const concurrency: number = PhotoUploadService.mediaRecovering ? 1 : MAX_CONCURRENT_MEDIA_DOWNLOADS;
-      if (PhotoUploadService.activeMediaRequestCount < concurrency) {
-        PhotoUploadService.activeMediaRequestCount += 1;
-        return true;
-      }
-      await PhotoUploadService.waitForRetry(100);
-    }
-    return false;
-  }
-
-  private static waitForRetry(delayMs: number): Promise<void> {
-    return new Promise<void>((resolve) => {
-      setTimeout((): void => resolve(), delayMs);
-    });
   }
 
   private static writeCachedMedia(context: common.Context, filePath: string, media: PublicMediaResponse): string {

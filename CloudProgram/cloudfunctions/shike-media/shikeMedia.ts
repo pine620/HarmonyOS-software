@@ -2,6 +2,13 @@ type CloudResponse = {
   ok: boolean;
   data: object;
   message: string;
+  code?: string;
+  retryable?: boolean;
+  retryAfterMs?: number;
+  requestId?: string;
+  operation?: string;
+  stage?: string;
+  functionVersion?: string;
 };
 
 type RuntimeModule = {
@@ -15,6 +22,11 @@ type RuntimeModule = {
 type MediaOperation = 'execute' | 'prepareCardPhoto' | 'uploadCardPhoto' | 'getPublicMedia';
 
 const runtime = require('./runtime') as RuntimeModule;
+interface ReadErrorsModule {
+  requestId(input: object): string;
+  errorResponse(error: unknown, operation: string, requestId: string): CloudResponse;
+}
+const readErrors = require('./read-errors') as ReadErrorsModule;
 
 /**
  * Cloud Object invokes exported methods without preserving their class
@@ -22,16 +34,16 @@ const runtime = require('./runtime') as RuntimeModule;
  * the runtime supplies an instance or calls the handler as a bare function.
  */
 async function executeMediaOperation(operation: MediaOperation, input: object): Promise<CloudResponse> {
+  const requestId: string = readErrors.requestId(input);
+  const operationName: string = operation === 'getPublicMedia' ? 'get-public-media' : operation;
   try {
-    const data = await runtime[operation](input, process.env);
-    return { ok: true, data, message: '' };
+    const request = Object.assign({}, input, { readRequestId: requestId });
+    const data = await runtime[operation](request, process.env);
+    return { ok: true, data, message: '', requestId, operation: operationName, functionVersion: 'stages89-20261007-v1' };
   } catch (error) {
-    console.error(`${String(operation)} failed: ${runtime.safeLogError(error)}`);
-    return {
-      ok: false,
-      data: {},
-      message: error instanceof Error ? error.message : '媒体服务请求失败。'
-    };
+    const response: CloudResponse = readErrors.errorResponse(error, operationName, requestId);
+    console.error(`${operationName} requestId=${requestId} code=${response.code} stage=${response.stage} failed: ${runtime.safeLogError(error)}`);
+    return response;
   }
 }
 

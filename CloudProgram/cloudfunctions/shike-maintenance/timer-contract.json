@@ -1,0 +1,14 @@
+{
+  "contractVersion": 1,
+  "purpose": "AGC console timer mapping contract; not a provider trigger schema",
+  "recommendedIntervalMinutes": 5,
+  "handlerPayload": { "workerToken": "COPY_SECRET_FROM_DEPLOYED_TIMER_CONFIGURATION" },
+  "alternateUserData": "JSON string containing workerToken",
+  "environmentKey": "SHIKE_MAINTENANCE_TRIGGER_KEY",
+  "minimumSecretLength": 32,
+  "maximumJobsPerInvocation": 3,
+  "rowsPerCleanupStep": 10,
+  "lifecycleVerifiedDefault": false,
+  "maintenanceEnabledDefault": false,
+  "httpTrigger": false
+}

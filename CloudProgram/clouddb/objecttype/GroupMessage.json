@@ -1,25 +1,97 @@
 {
   "objectTypeName": "GroupMessage",
   "fields": [
-    { "fieldName": "id", "fieldType": "String", "notNull": true, "belongPrimaryKey": true },
-    { "fieldName": "groupId", "fieldType": "String", "notNull": true, "defaultValue": "" },
-    { "fieldName": "senderUid", "fieldType": "String", "notNull": true, "defaultValue": "" },
-    { "fieldName": "kind", "fieldType": "String", "notNull": true, "defaultValue": "TEXT" },
-    { "fieldName": "text", "fieldType": "Text", "notNull": true, "defaultValue": "" },
-    { "fieldName": "cardId", "fieldType": "String", "notNull": true, "defaultValue": "" },
-    { "fieldName": "createdAt", "fieldType": "Long", "notNull": true, "defaultValue": 0 }
+    {
+      "fieldName": "id",
+      "fieldType": "String",
+      "notNull": true,
+      "belongPrimaryKey": true
+    },
+    {
+      "fieldName": "groupId",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "senderUid",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "kind",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": "TEXT"
+    },
+    {
+      "fieldName": "text",
+      "fieldType": "Text",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "cardId",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "createdAt",
+      "fieldType": "Long",
+      "notNull": true,
+      "defaultValue": 0
+    },
+    {
+      "fieldName": "referenceId",
+      "fieldType": "String"
+    }
   ],
   "indexes": [
-    { "indexName": "groupId_createdAt", "indexList": [
-      { "fieldName": "groupId", "sortType": "ASC" },
-      { "fieldName": "createdAt", "sortType": "DESC" }
-    ] },
-    { "indexName": "senderUid", "indexList": [{ "fieldName": "senderUid", "sortType": "ASC" }] }
+    {
+      "indexName": "groupId_createdAt",
+      "indexList": [
+        {
+          "fieldName": "groupId",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "createdAt",
+          "sortType": "DESC"
+        }
+      ]
+    },
+    {
+      "indexName": "senderUid",
+      "indexList": [
+        {
+          "fieldName": "senderUid",
+          "sortType": "ASC"
+        }
+      ]
+    }
   ],
   "permissions": [
-    { "role": "World", "rights": [] },
-    { "role": "Authenticated", "rights": [] },
-    { "role": "Creator", "rights": [] },
-    { "role": "Administrator", "rights": ["Read", "Upsert", "Delete"] }
+    {
+      "role": "World",
+      "rights": []
+    },
+    {
+      "role": "Authenticated",
+      "rights": []
+    },
+    {
+      "role": "Creator",
+      "rights": []
+    },
+    {
+      "role": "Administrator",
+      "rights": [
+        "Read",
+        "Upsert",
+        "Delete"
+      ]
+    }
   ]
 }

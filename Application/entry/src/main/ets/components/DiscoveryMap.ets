@@ -1,3 +1,4 @@
+import { FeaturePerformanceTrace } from '../service/FeaturePerformanceTrace';
 import { common } from '@kit.AbilityKit';
 import { AsyncCallback, BusinessError } from '@kit.BasicServicesKit';
 import { MapComponent, map, mapCommon } from '@kit.MapKit';
@@ -35,6 +36,9 @@ export struct DiscoveryMap {
     position: { target: { latitude: 39.9, longitude: 116.4 }, zoom: 15 },
     rotateGesturesEnabled: false, tiltGesturesEnabled: false, scaleControlsEnabled: true
   };
+  private renderTrace: number | undefined = undefined;
+  private loaded: () => void = (): void => { this.finishRenderTrace(); this.readViewport(); };
+  private finishRenderTrace(): void { if (this.renderTrace !== undefined) { FeaturePerformanceTrace.finish('map_first_render', this.renderTrace); this.renderTrace = undefined; } }
   private idle: () => void = (): void => this.readViewport();
   private clicked: (marker: map.Marker) => void = (marker: map.Marker): void => {
     if (!this.active) return;
@@ -45,27 +49,27 @@ export struct DiscoveryMap {
   };
   private callback: AsyncCallback<map.MapComponentController> = (error: BusinessError, controller: map.MapComponentController): void => {
     if (!this.active) return;
-    if (error !== undefined && error !== null) { this.status = '地图暂不可用，可继续浏览推荐。错误码：' + error.code; return; }
+    if (error !== undefined && error !== null) { this.finishRenderTrace(); this.status = '地图暂不可用，可继续浏览推荐。错误码：' + error.code; return; }
     try {
       this.controller = controller; controller.setMyLocationEnabled(false);
       this.events = controller.getEventManager();
-      this.events.on('cameraIdle', this.idle); this.events.on('mapLoad', this.idle); this.events.on('markerClick', this.clicked);
+      this.events.on('cameraIdle', this.idle); this.events.on('mapLoad', this.loaded); this.events.on('markerClick', this.clicked);
       this.ready = true; this.status = '默认／上次浏览区域，未主动定位。';
       this.onCameraChanged(); void this.replaceMarkers();
-    } catch (failure) { this.status = errorText(failure as ErrorDetail); }
+    } catch (failure) { this.finishRenderTrace(); this.status = errorText(failure as ErrorDetail); }
   };
   aboutToAppear(): void {
-    this.active = true; this.lifetime++;
+    this.active = true; this.lifetime++; this.finishRenderTrace(); this.renderTrace = FeaturePerformanceTrace.start('map_first_render');
     const target: mapCommon.LatLng = { latitude: this.camera.latitude, longitude: this.camera.longitude };
     const position: mapCommon.CameraPosition = { target, zoom: this.camera.zoom };
     this.options = { position, rotateGesturesEnabled: false, tiltGesturesEnabled: false, scaleControlsEnabled: true };
   }
   aboutToDisappear(): void {
-    this.active = false; this.lifetime++; this.markerGeneration++;
+    this.finishRenderTrace(); this.active = false; this.lifetime++; this.markerGeneration++;
     if (this.sizeTimer !== undefined) clearTimeout(this.sizeTimer);
     const events: map.MapEventManager | undefined = this.events;
     if (events !== undefined) {
-      try { events.off('cameraIdle', this.idle); events.off('mapLoad', this.idle); events.off('markerClick', this.clicked); } catch (_error) { }
+      try { events.off('cameraIdle', this.idle); events.off('mapLoad', this.loaded); events.off('markerClick', this.clicked); } catch (_error) { }
     }
     for (const value of this.markers) { try { value.marker.remove(); } catch (_error) { } }
     this.markers = []; this.events = undefined; this.controller = undefined; this.ready = false; this.locating = false;

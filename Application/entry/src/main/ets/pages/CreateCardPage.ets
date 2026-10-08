@@ -1,4 +1,7 @@
+import { DraftForm, DraftMedia, DraftRestore, LocalDraft, DraftRetainedPhoto as RetainedPhoto } from '../model/DraftModels';
+import { DraftStore } from '../service/DraftStore';
 import { common } from '@kit.AbilityKit';
+import { ChoiceActionStyle, DangerActionStyle, PrimaryActionStyle, QuietActionStyle, SecondaryActionStyle } from '../common/Stage47Ui';
 import util from '@ohos.util';
 import { CardEditContextResponse, CardPhoto, CardRevisionChanges, CardRevisionView, FoodCard, FoodCategory,
   FoodCategoryV2, FoodConsumptionMode, FoodVisibility, PrepareCardPhotoRequest, PublishCardRequest,
@@ -24,7 +27,6 @@ import { tasteScoreLabel, tasteScoreReason } from '../model/TasteScore';
 import { ErrorDetail, errorText } from '../common/ErrorKit';
 
 interface LabelOption { value: string; }
-interface RetainedPhoto { id: string; url: string; }
 const FIRST_SCORE_ROW: Array<number> = [1, 2, 3, 4, 5];
 const SECOND_SCORE_ROW: Array<number> = [6, 7, 8, 9, 10];
 const MAX_CARD_PHOTOS: number = 6;
@@ -51,35 +53,35 @@ export struct CreateCardPage {
   onEditingFinished: () => void = (): void => {};
   @Prop editCardId: string = '';
   @Prop @Watch('onAccountChanged') accountUid: string = '';
-  @State productName: string = '';
-  @State price: string = '';
-  @State dineInAvg: string = '';
-  @State orderTotal: string = '';
-  @State deliveryFee: string = '';
-  @State consumedDate: string = '';
-  @State sourceLink: string = '';
-  @State reviewText: string = '';
-  @State tasteScore: number = 9;
-  @State category: FoodCategory = 'staple';
-  @State categoryV2: FoodCategoryV2 = 'RICE_SET';
-  @State mode: FoodConsumptionMode = 'DELIVERY';
-  @State cardVisibility: FoodVisibility = 'PUBLIC';
+  @State @Watch('onDraftChanged') productName: string = '';
+  @State @Watch('onDraftChanged') price: string = '';
+  @State @Watch('onDraftChanged') dineInAvg: string = '';
+  @State @Watch('onDraftChanged') orderTotal: string = '';
+  @State @Watch('onDraftChanged') deliveryFee: string = '';
+  @State @Watch('onDraftChanged') consumedDate: string = '';
+  @State @Watch('onDraftChanged') sourceLink: string = '';
+  @State @Watch('onDraftChanged') reviewText: string = '';
+  @State @Watch('onDraftChanged') tasteScore: number = 9;
+  @State @Watch('onDraftChanged') category: FoodCategory = 'staple';
+  @State @Watch('onDraftChanged') categoryV2: FoodCategoryV2 = 'RICE_SET';
+  @State @Watch('onDraftChanged') mode: FoodConsumptionMode = 'DELIVERY';
+  @State @Watch('onDraftChanged') cardVisibility: FoodVisibility = 'PUBLIC';
   @State friendsEnabled: boolean = false;
   @State merchant: Merchant | undefined = undefined;
   @State merchantChoice: MerchantChoice | undefined = undefined;
-  @State merchantName: string = '';
-  @State merchantAddress: string = '';
+  @State @Watch('onDraftChanged') merchantName: string = '';
+  @State @Watch('onDraftChanged') merchantAddress: string = '';
   @State merchantBusy: boolean = false;
   @State merchantRequestUnconfirmed: boolean = false;
-  @State correctingMerchant: boolean = false;
+  @State @Watch('onDraftChanged') correctingMerchant: boolean = false;
   @State platforms: Array<DeliveryPlatform> = DeliveryPlatformConfigService.defaults();
-  @State platformKey: string = '';
-  @State platformLabel: string = '';
-  @State moreDeliveryInfo: boolean = false;
+  @State @Watch('onDraftChanged') platformKey: string = '';
+  @State @Watch('onDraftChanged') platformLabel: string = '';
+  @State @Watch('onDraftChanged') moreDeliveryInfo: boolean = false;
   @State photoLabel: string = '';
-  @State photoPreviewUris: Array<string> = [];
-  @State retainedPhotos: Array<RetainedPhoto> = [];
-  @State ownsPhoto: boolean = false;
+  @State @Watch('onDraftMediaChanged') photoPreviewUris: Array<string> = [];
+  @State @Watch('onDraftMediaChanged') retainedPhotos: Array<RetainedPhoto> = [];
+  @State @Watch('onDraftChanged') ownsPhoto: boolean = false;
   @State publishing: boolean = false;
   @State initializing: boolean = true;
   @State editContextReady: boolean = false;
@@ -107,9 +109,89 @@ export struct CreateCardPage {
   private successMode: FoodConsumptionMode = 'DELIVERY';
   private successVisibility: FoodVisibility = 'PUBLIC';
 
-  aboutToAppear(): void { void this.initialize(); }
-  aboutToDisappear(): void { this.formGeneration++; this.saveModeFields(); this.publishing = false; this.merchantBusy = false; }
-  private onAccountChanged(): void { this.formGeneration++; MerchantLocationPicker.clearSelectionCenter(); this.successMerchant = undefined; this.resetForm(); void this.initialize(); }
+  @Prop restoreDraftId: string = '';
+  @State draftChoices: Array<LocalDraft> = [];
+  @State draftNotice: string = '';
+  @State showDraftChoices: boolean = false;
+  private draftId: string = util.generateRandomUUID();
+  private draftReady: boolean = false;
+  private draftTimer: number | undefined = undefined;
+  private draftFlush: () => Promise<void> = (): Promise<void> => this.flushDraft();
+  private draftDirty: boolean = false;
+  private onDraftMediaChanged(): void { if (!this.draftReady || this.initializing) return; this.draftDirty = true; void this.flushDraft(); }
+  private onDraftChanged(): void {
+    if (!this.draftReady || this.initializing || this.hasPublishedNotice) return;
+    this.draftDirty = true;
+    if (this.draftTimer !== undefined) clearTimeout(this.draftTimer);
+    this.draftTimer = setTimeout((): void => { this.draftTimer = undefined; void this.flushDraft(); }, 700);
+  }
+  private draftForm(): DraftForm {
+    const form: DraftForm = { ownsPhoto: this.ownsPhoto, productName: this.productName, price: this.price, dineInAvg: this.dineInAvg,
+      orderTotal: this.orderTotal, deliveryFee: this.deliveryFee, consumedDate: this.consumedDate, sourceLink: this.sourceLink,
+      reviewText: this.reviewText, tasteScore: this.tasteScore, category: this.category, categoryV2: this.categoryV2,
+      mode: this.mode, cardVisibility: this.cardVisibility, merchant: this.merchant, merchantChoice: this.merchantChoice,
+      merchantName: this.merchantName, merchantAddress: this.merchantAddress, platformKey: this.platformKey, platformLabel: this.platformLabel,
+      moreDeliveryInfo: this.moreDeliveryInfo, historicalShop: this.historicalShop, retainedPhotos: this.retainedPhotos.map((photo: RetainedPhoto): RetainedPhoto => { return { id: photo.id, url: '' }; }),
+      uploadedMediaIds: this.uploadedMediaIds.slice(), publicationRequestId: this.publicationRequestId, requestUnconfirmed: this.requestUnconfirmed,
+      pendingPublication: this.pendingPublication, pendingRevision: this.pendingRevision, baseCard: this.baseCard,
+      currentRevision: this.currentRevision, merchantRequestId: this.merchantRequestId, pendingMerchantRequest: this.pendingMerchantRequest,
+      merchantRequestUnconfirmed: this.merchantRequestUnconfirmed, correctingMerchant: this.correctingMerchant };
+    return form;
+  }
+  private async flushDraft(required: boolean = false): Promise<void> {
+    if (!this.draftReady || this.activeUid.length === 0 || this.hasPublishedNotice) { if (required) throw new Error('草稿尚未就绪，请重新进入发布页。'); return; }
+    if (this.draftTimer !== undefined) { clearTimeout(this.draftTimer); this.draftTimer = undefined; }
+    if (!this.draftDirty && !this.isEditing() && !required) return;
+    const generation: number = this.formGeneration;
+    try { await DraftStore.save(this.context(), this.activeUid, this.draftId, this.editCardId, this.draftForm(), this.preparedPhotos.slice()); if (this.stillCurrent(generation)) this.draftNotice = '草稿已保存到本机'; }
+    catch (error) { if (this.stillCurrent(generation)) this.draftNotice = error instanceof Error ? error.message : '草稿保存失败，输入仍保留。'; if (required) throw error instanceof Error ? error : new Error('草稿落盘失败，尚未发送发布请求。'); }
+  }
+  private async loadDraftChoices(): Promise<void> {
+    if (this.activeUid.length === 0) return;
+    const generation: number = this.formGeneration; const uid: string = this.activeUid;
+    const choices: Array<LocalDraft> = await DraftStore.list(this.context(), uid);
+    if (!this.stillCurrent(generation)) return;
+    this.draftChoices = choices;
+    this.showDraftChoices = this.draftChoices.some((draft: LocalDraft): boolean => draft.targetCardId === this.editCardId);
+    const reminders: number = await DraftStore.reminders(this.context(), uid);
+    if (!this.stillCurrent(generation)) return;
+    if (reminders > 0) this.draftNotice = reminders.toString() + ' 个草稿将在 3 天内过期，请及时处理。';
+  }
+  private async restoreDraft(draft: LocalDraft): Promise<void> {
+    const generation: number = this.formGeneration; this.initializing = true; this.draftReady = false;
+    try {
+      const restored: DraftRestore = await DraftStore.restore(this.context(), this.activeUid, draft.draftId);
+      if (!this.stillCurrent(generation)) return;
+      const form: DraftForm = restored.draft.form;
+      this.productName = form.productName; this.price = form.price; this.dineInAvg = form.dineInAvg; this.orderTotal = form.orderTotal;
+      this.deliveryFee = form.deliveryFee; this.consumedDate = form.consumedDate; this.sourceLink = form.sourceLink; this.reviewText = form.reviewText;
+      this.tasteScore = form.tasteScore; this.category = form.category; this.categoryV2 = form.categoryV2; this.mode = form.mode; this.cardVisibility = form.cardVisibility;
+      this.merchant = form.merchant; this.merchantChoice = form.merchantChoice; this.merchantName = form.merchantName; this.merchantAddress = form.merchantAddress;
+      this.platformKey = form.platformKey; this.platformLabel = form.platformLabel; this.moreDeliveryInfo = form.moreDeliveryInfo; this.historicalShop = form.historicalShop;
+      this.retainedPhotos = form.retainedPhotos.map((photo: RetainedPhoto): RetainedPhoto => { return { id: photo.id, url: '' }; }); this.uploadedMediaIds = form.uploadedMediaIds.slice(); this.publicationRequestId = form.publicationRequestId;
+      this.requestUnconfirmed = form.requestUnconfirmed; this.pendingPublication = form.pendingPublication; this.pendingRevision = form.pendingRevision;
+      this.baseCard = form.baseCard; this.currentRevision = form.currentRevision; this.merchantRequestId = form.merchantRequestId;
+      this.pendingMerchantRequest = form.pendingMerchantRequest; this.merchantRequestUnconfirmed = form.merchantRequestUnconfirmed; this.correctingMerchant = form.correctingMerchant;
+      this.preparedPhotos = []; this.photoPreviewUris = []; let missing: number = restored.missingMediaCount;
+      for (const media of restored.media) { try { this.preparedPhotos.push(DraftStore.photo(media)); this.photoPreviewUris.push('file://' + media.path); } catch (_error) { missing++; } }
+      this.ownsPhoto = form.ownsPhoto === true;
+      this.draftId = draft.draftId; this.draftDirty = true; this.showDraftChoices = false; this.editContextReady = !this.isEditing() || this.baseCard !== undefined;
+      if (this.isEditing()) {
+        this.editContextReady = false;
+        const latest: CardEditContextResponse = await this.editRepository.context(this.context(), this.editCardId);
+        if (!this.stillCurrent(generation)) return;
+        if (form.baseCard !== undefined && latest.card.modifiedAt === form.baseCard.modifiedAt && latest.card.lifecycleGeneration === form.baseCard.lifecycleGeneration) this.editContextReady = true;
+        for (let index: number = 0; index < this.retainedPhotos.length; index++) { const photo: RetainedPhoto = this.retainedPhotos[index]; const current = (latest.card.photos || []).find((value: CardPhoto): boolean => value.id === photo.id); if (current !== undefined) { try { photo.url = await PhotoUploadService.getDownloadUrl(this.context(), current.bucket, current.path); } catch (_error) {} } }
+        if (!this.stillCurrent(generation)) return;
+      }
+      this.draftNotice = missing > 0 ? '已恢复文字；' + missing.toString() + ' 张本地图片缺失，请重选。' : '已恢复草稿和原请求标识；编辑基准变化时请刷新确认。';
+    } catch (error) { this.draftNotice = error instanceof Error ? error.message : '草稿恢复失败。'; }
+    finally { if (this.stillCurrent(generation)) { this.initializing = false; this.draftReady = true; } }
+  }
+  private async deleteDraft(draft: LocalDraft): Promise<void> { try { await DraftStore.remove(this.context(), this.activeUid, draft.draftId); await this.loadDraftChoices(); } catch (error) { this.draftNotice = error instanceof Error ? error.message : '删除失败。'; } }
+  aboutToAppear(): void { DraftStore.flushHandler = this.draftFlush; void this.initialize(); }
+  aboutToDisappear(): void { void this.flushDraft(); if (DraftStore.flushHandler === this.draftFlush) DraftStore.flushHandler = undefined; this.formGeneration++; this.saveModeFields(); this.publishing = false; this.merchantBusy = false; }
+  private onAccountChanged(): void { this.draftReady = false; if (this.draftTimer !== undefined) clearTimeout(this.draftTimer); this.draftTimer = undefined; this.draftChoices = []; this.showDraftChoices = false; this.draftId = util.generateRandomUUID(); this.draftDirty = false; this.formGeneration++; MerchantLocationPicker.clearSelectionCenter(); this.successMerchant = undefined; this.resetForm(); void this.initialize(); }
   private context(): common.UIAbilityContext { return this.getUIContext().getHostContext() as common.UIAbilityContext; }
   private stillCurrent(generation: number): boolean {
     const profile = AuthService.profile();
@@ -150,6 +232,10 @@ export struct CreateCardPage {
       const platforms: Array<DeliveryPlatform> = await DeliveryPlatformConfigService.load();
       if (!this.stillCurrent(generation)) return;
       this.platforms = platforms;
+      await this.loadDraftChoices();
+      if (!this.stillCurrent(generation)) return;
+      this.draftReady = true;
+      if (this.restoreDraftId.length > 0) { const selected: LocalDraft | undefined = this.draftChoices.find((draft: LocalDraft): boolean => draft.draftId === this.restoreDraftId); if (selected !== undefined) await this.restoreDraft(selected); }
     } catch (error) {
       if (this.stillCurrent(generation)) this.status = '加载失败：' + errorText(error as ErrorDetail);
     } finally { if (this.stillCurrent(generation)) this.initializing = false; }
@@ -206,11 +292,11 @@ export struct CreateCardPage {
       const photos: Array<CardPhoto> = card.photos === undefined ? [] : card.photos;
       for (const photo of photos) {
         let uri: string = '';
-        try { uri = await this.repository.hydrateDetailPhoto(this.context(), photo); } catch (_error) { }
+        try { uri = card.reviewState === 'REQUEST_CHANGE' ? await PhotoUploadService.getRevisionDownloadUrl(this.context(), '', photo.id) : await this.repository.hydrateDetailPhoto(this.context(), photo); } catch (_error) { }
         if (!this.stillCurrent(generation)) return;
         const retained: RetainedPhoto = { id: photo.id, url: uri }; if (photo.id.length > 0) kept.push(retained);
       }
-      this.status = revision !== null ? '旧编辑已结束或基准变化，已载入当前版本；请重新检查后提交。' : '编辑提交后待审，当前展示保持旧版本。';
+      this.status = card.reviewState === 'REQUEST_CHANGE' ? '审核要求修改：' + (card.reviewReason || '请检查内容') + '。修改后重新提交审核。' : revision !== null ? '旧编辑已结束或基准变化，已载入当前版本；请重新检查后提交。' : '编辑提交后待审，当前展示保持旧版本。';
     }
     this.category = legacyCategoryFor(this.categoryV2); this.retainedPhotos = kept; this.ownsPhoto = kept.length > 0;
     if (merchantId.length > 0) {
@@ -277,6 +363,7 @@ export struct CreateCardPage {
         const request: CreateUserMerchantRequest = pending === undefined ? { requestId: this.merchantRequestId,
           name: this.merchantName.trim(), address: this.merchantAddress.trim(), latitudeE6: choice.latitudeE6, longitudeE6: choice.longitudeE6 } : pending;
         this.pendingMerchantRequest = request; this.merchantRequestUnconfirmed = true;
+        await this.flushDraft(true);
         const merchant: Merchant | undefined = this.merchant;
         if (this.correctingMerchant && merchant !== undefined) {
           const update: UpdateUserMerchantRequest = { requestId: request.requestId, name: request.name, address: request.address,
@@ -358,6 +445,7 @@ export struct CreateCardPage {
       await PhotoUploadService.upload(this.context(), prepared.bucketName, prepared.cloudPath, photo.data, photo.sha256);
       if (!this.stillCurrent(generation)) throw new Error('账号已变化。');
       this.uploadedMediaIds.push(prepared.mediaId); ids.push(prepared.mediaId);
+      await this.flushDraft(true);
     }
     return ids;
   }
@@ -368,6 +456,7 @@ export struct CreateCardPage {
     const generation: number = this.formGeneration; this.publishing = true;
     try {
       if (this.publicationRequestId.length === 0) this.publicationRequestId = util.generateRandomUUID();
+      await this.flushDraft(true);
       if (this.isEditing()) {
         let request: SubmitCardRevisionRequest | undefined = this.pendingRevision;
         const card: FoodCard | undefined = this.baseCard;
@@ -381,10 +470,11 @@ export struct CreateCardPage {
           this.pendingRevision = request;
         }
         this.requestUnconfirmed = true;
+        await this.flushDraft(true);
         const result = await this.editRepository.submit(this.context(), request);
         if (!this.stillCurrent(generation)) return;
         this.pendingRevision = undefined; this.publicationRequestId = ''; this.requestUnconfirmed = false;
-        this.currentRevision = result.revision; this.preparedPhotos = []; this.uploadedMediaIds = []; this.photoPreviewUris = [];
+        try { await DraftStore.remove(this.context(), this.activeUid, this.draftId); } catch (_error) { this.draftNotice = '提交已确认，本机草稿清理待重试。'; } this.draftId = util.generateRandomUUID(); this.currentRevision = result.revision; this.preparedPhotos = []; this.uploadedMediaIds = []; this.photoPreviewUris = [];
         this.initializing = true; await this.loadEditContext(generation); this.initializing = false;
         this.status = result.revision.status === 'PENDING' ? '编辑已提交待审；公开展示仍保持旧版。可继续编辑或撤回。' :
           result.revision.status === 'APPROVED' ? '原编辑已审核通过；已载入当前版本。' :
@@ -409,13 +499,14 @@ export struct CreateCardPage {
           this.pendingPublication = request;
         }
         this.requestUnconfirmed = true;
+        await this.flushDraft(true);
         const result = await this.repository.publish(this.context(), request);
         if (!this.stillCurrent(generation)) return;
         if (result.status !== 'APPROVED') throw new Error('发布结果需进一步确认。');
         this.successMerchant = this.merchant; this.successMode = this.mode; this.successVisibility = this.cardVisibility;
         try { PublishVisibilityStore.save(this.context(), this.activeUid, this.cardVisibility); } catch (_error) { }
         try { ModeFieldCache.clear(this.context(), this.activeUid, this.editCardId); } catch (_error) { }
-        this.resetForm(); this.hasPublishedNotice = true;
+        try { await DraftStore.remove(this.context(), this.activeUid, this.draftId); } catch (_error) { this.draftNotice = '发布已确认，本机草稿清理待重试。'; } this.draftReady = false; this.draftDirty = false; this.resetForm(); this.draftId = util.generateRandomUUID(); this.hasPublishedNotice = true;
         this.status = '发布成功，已提交后审。可以继续发布同店菜品。'; this.onPublished();
       }
     } catch (error) {
@@ -482,7 +573,7 @@ export struct CreateCardPage {
     const merchant: Merchant | undefined = this.successMerchant; const mode: FoodConsumptionMode = this.successMode;
     const visibility: FoodVisibility = this.successVisibility;
     this.resetForm(); this.merchant = merchant; this.mode = mode; this.cardVisibility = visibility;
-    this.status = '已继承店铺、消费方式和可见范围；请填写新菜品、价格、照片和评分。';
+    this.draftReady = true; this.status = '已继承店铺、消费方式和可见范围；请填写新菜品、价格、照片和评分。';
   }
   @Builder
   private fieldLabel(title: string, required: boolean = false): void {
@@ -506,7 +597,7 @@ export struct CreateCardPage {
           .fontColor(this.isScoreSelected(score) ? $r('app.color.accent_action') : $r('app.color.muted'));
       }.alignItems(HorizontalAlign.Center);
     }
-      .height(56).layoutWeight(1)
+      .type(ButtonType.Normal).height(56).layoutWeight(1)
       .backgroundColor(this.isScoreSelected(score) ? $r('app.color.accent_soft') : $r('app.color.canvas'))
       .border({ width: this.isScoreSelected(score) ? 1.5 : 1,
         color: this.isScoreSelected(score) ? $r('app.color.accent_action') : $r('app.color.line') })
@@ -561,12 +652,8 @@ export struct CreateCardPage {
       Text('商品信息').fontSize(18).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'));
       this.fieldLabel('消费方式', true);
       Row({ space: 10 }) {
-        Button(this.mode === 'DELIVERY' ? '外卖 · 已选' : '外卖').layoutWeight(1).height(48)
-          .backgroundColor(this.mode === 'DELIVERY' ? $r('app.color.accent_soft') : $r('app.color.canvas'))
-          .fontColor($r('app.color.ink')).onClick((): void => this.selectMode('DELIVERY'));
-        Button(this.mode === 'DINE_IN' ? '到店 · 已选' : '到店').layoutWeight(1).height(48)
-          .backgroundColor(this.mode === 'DINE_IN' ? $r('app.color.accent_soft') : $r('app.color.canvas'))
-          .fontColor($r('app.color.ink')).onClick((): void => this.selectMode('DINE_IN'));
+        Button(this.mode === 'DELIVERY' ? '外卖 · 已选' : '外卖').layoutWeight(1).height(48).onClick((): void => this.selectMode('DELIVERY')).attributeModifier(new ChoiceActionStyle(this.mode === 'DELIVERY'));
+        Button(this.mode === 'DINE_IN' ? '到店 · 已选' : '到店').layoutWeight(1).height(48).onClick((): void => this.selectMode('DINE_IN')).attributeModifier(new ChoiceActionStyle(this.mode === 'DINE_IN'));
       }.width('100%');
       if (this.mode === 'UNSPECIFIED') { Text('历史内容尚未区分外卖 / 到店，可在编辑中补充。').fontSize(13).fontColor($r('app.color.muted')); }
       this.fieldLabel('美食名称', true);
@@ -604,17 +691,16 @@ export struct CreateCardPage {
           .fontSize(13).fontColor($r('app.color.muted')).width('100%');
         if (this.merchant.reviewReason.length > 0) { Text('审核意见：' + this.merchant.reviewReason).fontSize(13).fontColor($r('app.color.warning')); }
         if (this.merchant.sourceType === 'USER_CONFIRMED' && this.merchant.verificationStatus !== 'USER_CONFIRMED_APPROVED') {
-          Button('修正用户地点并重新送审').height(48).width('100%').enabled(!this.merchantRequestUnconfirmed).onClick((): void => this.correctMerchant());
+          Button('修正用户地点并重新送审').height(48).width('100%').enabled(!this.merchantRequestUnconfirmed).onClick((): void => this.correctMerchant()).attributeModifier(new SecondaryActionStyle());
         }
-        Button('取消店铺关联').height(48).width('100%').enabled(!this.merchantRequestUnconfirmed).backgroundColor($r('app.color.canvas')).fontColor($r('app.color.ink'))
-          .onClick((): void => { this.merchant = undefined; this.historicalShop = ''; });
+        Button('取消店铺关联').height(48).width('100%').enabled(!this.merchantRequestUnconfirmed)
+          .onClick((): void => { this.merchant = undefined; this.historicalShop = ''; }).attributeModifier(new QuietActionStyle());
       } else {
         Text(this.historicalShop.length > 0 ? '历史店名文本：' + this.historicalShop : '无店铺也可以发布。')
           .fontSize(13).fontColor($r('app.color.muted')).width('100%');
         Text('未关联可靠店铺时，此内容不进入地图和距离功能。').fontSize(13).lineHeight(19).fontColor($r('app.color.muted'));
       }
-      Button(this.merchantBusy ? '正在选取 / 核验…' : '在地图中选择店铺').height(48).width('100%').enabled(!this.merchantRequestUnconfirmed)
-        .backgroundColor($r('app.color.accent_soft')).fontColor($r('app.color.accent_action')).onClick((): void => { void this.chooseMerchant(); });
+      Button(this.merchantBusy ? '正在选取 / 核验…' : '在地图中选择店铺').height(48).width('100%').enabled(!this.merchantRequestUnconfirmed).onClick((): void => { void this.chooseMerchant(); }).attributeModifier(new SecondaryActionStyle());
       if (this.merchantChoice !== undefined) {
         this.fieldLabel('确认店名');
         TextInput({ text: this.merchantName, placeholder: '普通地图点请补充店名' }).height(48).maxLength(100).enabled(!this.merchantRequestUnconfirmed)
@@ -623,12 +709,12 @@ export struct CreateCardPage {
         TextInput({ text: this.merchantAddress, placeholder: '地点地址' }).height(48).maxLength(600).enabled(!this.merchantRequestUnconfirmed)
           .backgroundColor($r('app.color.canvas')).onChange((value: string): void => { this.merchantAddress = value; });
         if (this.merchantChoice.providerPoiId.length > 0 && this.providerEnabled) {
-          Button('关联官方 POI').height(48).width('100%').enabled(!this.merchantRequestUnconfirmed).onClick((): void => { void this.confirmMerchant(true); });
+          Button('关联官方 POI').height(48).width('100%').enabled(!this.merchantRequestUnconfirmed).onClick((): void => { void this.confirmMerchant(true); }).attributeModifier(new SecondaryActionStyle());
         }
         Button(this.merchantRequestUnconfirmed ? '重试原地点请求' : this.correctingMerchant ? '保存修正并重新送审' : '创建用户确认地点（待审）').height(48).width('100%')
-          .onClick((): void => { void this.confirmMerchant(false); });
-        Button('取消本次选点').height(48).width('100%').enabled(!this.merchantRequestUnconfirmed).backgroundColor($r('app.color.canvas')).fontColor($r('app.color.ink'))
-          .onClick((): void => { this.merchantChoice = undefined; this.pendingMerchantRequest = undefined; });
+          .onClick((): void => { void this.confirmMerchant(false); }).attributeModifier(new SecondaryActionStyle());
+        Button('取消本次选点').height(48).width('100%').enabled(!this.merchantRequestUnconfirmed)
+          .onClick((): void => { this.merchantChoice = undefined; this.pendingMerchantRequest = undefined; }).attributeModifier(new QuietActionStyle());
       }
     }.width('100%').padding(14).backgroundColor($r('app.color.surface')).borderRadius(18)
       .border({ width: 1, color: $r('app.color.line') }).enabled((!this.isEditing() || this.editContextReady) && !this.initializing && !this.publishing && !this.merchantBusy && !this.requestUnconfirmed);
@@ -643,8 +729,7 @@ export struct CreateCardPage {
           const platform: DeliveryPlatform | undefined = this.platformOptions()[index];
           if (platform !== undefined && platform.enabled) { this.platformKey = platform.key; this.platformLabel = platform.key.length > 0 ? platform.label : ''; }
         });
-      Button(this.moreDeliveryInfo ? '收起更多信息' : '更多信息：订单总额 / 配送费 / 购买日期').height(48).width('100%')
-        .backgroundColor($r('app.color.canvas')).fontColor($r('app.color.ink')).onClick((): void => { this.moreDeliveryInfo = !this.moreDeliveryInfo; });
+      Button(this.moreDeliveryInfo ? '收起更多信息' : '更多信息：订单总额 / 配送费 / 购买日期').height(48).width('100%').onClick((): void => { this.moreDeliveryInfo = !this.moreDeliveryInfo; }).attributeModifier(new QuietActionStyle());
       if (this.moreDeliveryInfo) {
         this.fieldLabel('订单总额（可选，元）');
         TextInput({ text: this.orderTotal, placeholder: '例如 20.00' }).height(48).maxLength(12)
@@ -688,7 +773,7 @@ export struct CreateCardPage {
           Text(photo.url.length > 0 ? '保留现有照片' : '预览暂不可用，可保留或重选').fontSize(13).fontColor($r('app.color.muted')).layoutWeight(1);
           Button('移除').height(48).fontSize(13).onClick((): void => {
             this.retainedPhotos = this.retainedPhotos.filter((value: RetainedPhoto): boolean => value.id !== photo.id);
-          });
+          }).attributeModifier(new DangerActionStyle());
         }.width('100%');
       }, (photo: RetainedPhoto): string => photo.id);
       if (this.photoPreviewUris.length > 0) {
@@ -696,7 +781,7 @@ export struct CreateCardPage {
         Text('新照片 ' + this.photoPreviewUris.length + ' 张。' + this.photoLabel).fontSize(13).fontColor($r('app.color.muted'));
       }
       Button(this.preparedPhotos.length > 0 ? '更换新照片' : '添加新照片').height(48).width('100%')
-        .enabled(this.retainedPhotos.length < MAX_CARD_PHOTOS).onClick((): void => { void this.chooseOwnedPhoto(); });
+        .enabled(this.retainedPhotos.length < MAX_CARD_PHOTOS).onClick((): void => { void this.chooseOwnedPhoto(); }).attributeModifier(new SecondaryActionStyle());
       Row({ space: 8 }) {
         Checkbox({ name: 'photo-rights', group: 'manual-publish' }).select(this.ownsPhoto).onChange((value: boolean): void => { this.ownsPhoto = value; });
         Text('确认照片由本人拍摄或已获授权').fontSize(13).fontColor($r('app.color.ink')).layoutWeight(1);
@@ -710,15 +795,15 @@ export struct CreateCardPage {
       this.fieldLabel('可见范围');
       Row({ space: 10 }) {
         Button(this.cardVisibility === 'PUBLIC' ? '公开 · 已选' : '公开').height(48).layoutWeight(1)
-          .onClick((): void => { this.cardVisibility = 'PUBLIC'; });
+          .onClick((): void => { this.cardVisibility = 'PUBLIC'; }).attributeModifier(new ChoiceActionStyle(this.cardVisibility === 'PUBLIC'));
         Button(this.cardVisibility === 'FRIENDS' ? '仅好友 · 已选' : '仅好友').height(48).layoutWeight(1)
           .enabled(this.friendsEnabled && (!this.isEditing() || this.baseCard === undefined || this.baseCard.visibility === 'FRIENDS'))
-          .onClick((): void => { this.cardVisibility = 'FRIENDS'; });
+          .onClick((): void => { this.cardVisibility = 'FRIENDS'; }).attributeModifier(new ChoiceActionStyle(this.cardVisibility === 'FRIENDS'));
       }.width('100%').enabled(this.formEnabled());
       if (!this.friendsEnabled) { Text('仅好友发布等待权限验收后开放。').fontSize(13).fontColor($r('app.color.muted')); }
       if (this.isEditing() && this.baseCard !== undefined && this.baseCard.visibility !== 'FRIENDS') {
         Button('立即设为仅好友可见').height(48).width('100%').enabled(this.friendsEnabled && this.formEnabled())
-          .onClick((): void => { void this.narrow(); });
+          .onClick((): void => { void this.narrow(); }).attributeModifier(new SecondaryActionStyle());
         Text('立即生效，旧待审编辑失效；其他内容需在新基准上重新编辑。').fontSize(13).lineHeight(19).fontColor($r('app.color.muted'));
       } else if (this.isEditing() && this.cardVisibility === 'PUBLIC') {
         Text('扩大为公开需审核，通过前维持当前好友范围。').fontSize(13).fontColor($r('app.color.muted'));
@@ -726,26 +811,45 @@ export struct CreateCardPage {
     }.width('100%').padding(14).backgroundColor($r('app.color.surface')).borderRadius(18)
       .border({ width: 1, color: $r('app.color.line') });
   }
+  @Builder
+  private draftPanel() {
+    Column({ space: 8 }) {
+      Row({ space: 8 }) {
+        Text('本机草稿').fontSize(14).fontColor($r('app.color.muted')).layoutWeight(1)
+        Button('保存草稿').attributeModifier(new QuietActionStyle()).height(48)
+          .enabled(!this.initializing && !this.publishing).onClick((): void => { void this.flushDraft(); })
+        Button('草稿箱').attributeModifier(new QuietActionStyle()).height(48)
+          .onClick((): void => { this.showDraftChoices = !this.showDraftChoices; void this.loadDraftChoices(); })
+      }.width('100%').padding({ left: 12, right: 4 }).backgroundColor($r('app.color.surface'))
+        .borderRadius(14).border({ width: 1, color: $r('app.color.line') })
+      Text(this.draftNotice.length > 0 ? this.draftNotice : '最多 10 份 · 30 天未编辑自动清理。')
+        .fontSize(12).lineHeight(18).fontColor($r('app.color.muted')).width('100%')
+      if (this.showDraftChoices) { ForEach(this.draftChoices, (draft: LocalDraft): void => {
+        Row({ space: 8 }) { Button((draft.draftType === 'EDIT' ? '编辑 · ' : '新发布 · ') + (draft.form.productName || '未命名')).height(48).layoutWeight(1).enabled(draft.targetCardId === this.editCardId).onClick((): void => { void this.restoreDraft(draft); }).attributeModifier(new SecondaryActionStyle()); Button('删除').height(48).onClick((): void => { void this.deleteDraft(draft); }).attributeModifier(new DangerActionStyle()); }
+      }, (draft: LocalDraft): string => draft.draftId); }
+    }.width('100%')
+  }
   build() {
     Scroll() {
       Column({ space: 14 }) {
         Row({ space: 12 }) {
           Text(this.isEditing() ? '编辑推荐' : '制作推荐').fontSize(23).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink')).layoutWeight(1);
           if (this.isEditing()) {
-            Button('返回详情').height(48).onClick((): void => this.onEditingFinished());
+            Button('返回详情').height(48).onClick((): void => this.onEditingFinished()).attributeModifier(new QuietActionStyle());
           } else {
             Button('重置').height(48).enabled(this.formEnabled()).onClick((): void => {
               try { ModeFieldCache.clear(this.context(), this.activeUid, this.editCardId); } catch (_error) { }
               this.resetForm();
-            });
+            }).attributeModifier(new QuietActionStyle());
           }
         }.width('100%');
+        this.draftPanel();
         if (this.initializing) {
           LoadingProgress().height(40).width(40).color($r('app.color.accent_action'));
           Text('正在读取当前权限与编辑状态…').fontSize(13).fontColor($r('app.color.muted'));
         }
         if (this.hasPublishedNotice) {
-          Button('继续发布同店菜品').height(52).width('100%').onClick((): void => this.continueSameMerchant());
+          Button('继续发布同店菜品').height(52).width('100%').onClick((): void => this.continueSameMerchant()).attributeModifier(new SecondaryActionStyle());
         }
         this.productInfoSection(); this.merchantSection();
         if (this.mode === 'DELIVERY') { this.deliverySection(); }
@@ -754,19 +858,18 @@ export struct CreateCardPage {
           .width('100%').padding(12).backgroundColor($r('app.color.accent_soft')).borderRadius(12);
         if (this.isEditing() && !this.editContextReady && !this.initializing && !this.requestUnconfirmed) {
           Button('读取最新基准并保留表单').height(48).width('100%').enabled(!this.publishing)
-            .onClick((): void => { void this.reloadEditBasis(); });
+            .onClick((): void => { void this.reloadEditBasis(); }).attributeModifier(new SecondaryActionStyle());
         }
         Button(this.publishing ? '正在保存…' : this.requestUnconfirmed ? '重试原请求' : this.isEditing() ? '提交待审编辑' : '发布这张卡')
-          .enabled((!this.isEditing() || this.editContextReady || this.requestUnconfirmed) && !this.publishing && !this.initializing && !this.merchantBusy && !this.merchantRequestUnconfirmed).width('100%').height(52).fontSize(16).fontWeight(FontWeight.Bold)
-          .fontColor($r('app.color.on_accent_action')).backgroundColor($r('app.color.accent_action')).borderRadius(15)
-          .onClick((): void => { void this.publish(); });
+          .enabled((!this.isEditing() || this.editContextReady || this.requestUnconfirmed) && !this.publishing && !this.initializing && !this.merchantBusy && !this.merchantRequestUnconfirmed).width('100%').height(52)
+          .onClick((): void => { void this.publish(); }).attributeModifier(new PrimaryActionStyle()).fontSize(16).fontWeight(FontWeight.Bold);
         if (this.isEditing() && this.currentRevision !== undefined && this.currentRevision.status === 'PENDING') {
-          Button('撤回待审编辑').height(48).width('100%').enabled(this.formEnabled()).onClick((): void => { void this.withdraw(); });
+          Button('撤回待审编辑').height(48).width('100%').enabled(this.formEnabled()).onClick((): void => { void this.withdraw(); }).attributeModifier(new DangerActionStyle());
         }
         if (!this.formEnabled() && !this.initializing && this.requestUnconfirmed) {
           Text('结果未确认，表单已锁定。重试使用原 UUID 与图片，避免重复发布。').fontSize(13).lineHeight(19).fontColor($r('app.color.warning'));
         }
       }.width('100%').padding({ left: 14, right: 14, top: 14, bottom: 28 }).alignItems(HorizontalAlign.Start);
-    }.width('100%').height('100%').backgroundColor($r('app.color.canvas'));
+    }.width('100%').height('100%').align(Alignment.TopStart).backgroundColor($r('app.color.canvas'));
   }
 }

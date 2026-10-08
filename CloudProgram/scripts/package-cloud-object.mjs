@@ -11,10 +11,10 @@ import { fileURLToPath } from 'node:url';
 const cloudRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const definitions = {
   'shike-auth': { entry: 'shikeAuth', className: 'ShikeAuth', modules: ['runtime.js'] },
-  'shike-media': { entry: 'shikeMedia', className: 'ShikeMedia', modules: ['runtime.js', 'content-policy.js'] },
+  'shike-media': { entry: 'shikeMedia', className: 'ShikeMedia', modules: ['runtime.js', 'read-errors.js', 'content-policy.js'] },
   'shike-service': { entry: 'shikeService', className: 'ShikeService',
-    modules: ['runtime.js', 'content-policy.js', 'stage1-services.js', 'stage2-services.js', 'stage3-services.js'] },
-  'shike-location': { entry: 'shikeLocation', className: 'ShikeLocation', modules: ['runtime.js', 'content-policy.js'] }
+    modules: ['runtime.js', 'read-errors.js', 'content-policy.js', 'stage1-services.js', 'stage2-services.js', 'stage3-services.js', 'stages47-common.js', 'stage4-services.js', 'stage5-services.js', 'stage6-services.js', 'stage7-services.js', 'personal-collections.js', 'moderation-services.js', 'lifecycle-services.js', 'authentication-cleanup.js'] },
+  'shike-location': { entry: 'shikeLocation', className: 'ShikeLocation', modules: ['runtime.js', 'read-errors.js', 'content-policy.js'] }
 };
 
 function requireFile(path) {

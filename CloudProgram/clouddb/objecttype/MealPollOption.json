@@ -1,0 +1,83 @@
+{
+  "objectTypeName": "MealPollOption",
+  "fields": [
+    {
+      "fieldName": "pollId",
+      "fieldType": "String",
+      "notNull": true,
+      "belongPrimaryKey": true
+    },
+    {
+      "fieldName": "optionId",
+      "fieldType": "String",
+      "notNull": true,
+      "belongPrimaryKey": true
+    },
+    {
+      "fieldName": "addedByUid",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "cardId",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "merchantId",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "status",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "createdAt",
+      "fieldType": "Date"
+    }
+  ],
+  "indexes": [
+    {
+      "indexName": "index_1",
+      "indexList": [
+        {
+          "fieldName": "pollId",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "optionId",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "added_by",
+      "indexList": [
+        {
+          "fieldName": "addedByUid",
+          "sortType": "ASC"
+        }
+      ]
+    }
+  ],
+  "permissions": [
+    {
+      "role": "World",
+      "rights": []
+    },
+    {
+      "role": "Authenticated",
+      "rights": []
+    },
+    {
+      "role": "Creator",
+      "rights": []
+    },
+    {
+      "role": "Administrator",
+      "rights": [
+        "Read",
+        "Upsert",
+        "Delete"
+      ]
+    }
+  ]
+}

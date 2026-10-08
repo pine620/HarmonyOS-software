@@ -1,3 +1,6 @@
+import { FoodListRepository } from '../repository/FoodListRepository';
+import { FoodListItemsPage, FoodListItem } from '../model/FoodListModels';
+import { AccountRequestGuard } from '../service/AccountRequestGuard';
 import { common } from '@kit.AbilityKit';
 import { FoodCard } from '../model/CloudContracts';
 import {
@@ -23,6 +26,10 @@ function messageTime(timestamp: number): string {
 
 @Component
 export struct ChatPage {
+  @StorageLink('stage47AppActive') @Watch('onAppActiveChanged') appActive: boolean = true;
+  private destinationVisible: boolean = true;
+  private onAppActiveChanged(): void { if (!this.appActive) this.aboutToDisappear(); else if (this.destinationVisible) this.aboutToAppear(); }
+
   @Consume('pathStack') pathStack: NavPathStack;
   @Prop friend: SocialUser = emptySocialUser();
   onOpenCard: (card: FoodCard) => void = (_card: FoodCard): void => {};
@@ -30,6 +37,8 @@ export struct ChatPage {
   @State messages: Array<ChatMessage> = [];
   @State nextBeforeToken: string = '';
   @State textDraft: string = '';
+  @State favoriteCursor: string = '';
+  private pageGeneration: number = 0;
   @State cardCandidates: Array<FoodCard> = [];
   @State cardPickerVisible: boolean = false;
   @State loading: boolean = false;
@@ -42,11 +51,13 @@ export struct ChatPage {
   private refreshTimer: number | undefined = undefined;
 
   aboutToAppear(): void {
+    this.pageGeneration++; this.messages = []; this.cardCandidates = []; this.loading = false; this.loadingOlder = false;
     this.loadMessages(true);
     this.startAutoRefresh();
   }
 
   aboutToDisappear(): void {
+    this.pageGeneration++; this.messages = []; this.cardCandidates = []; this.cardPickerVisible = false; this.favoriteCursor = ''; this.loading = false; this.loadingOlder = false; this.cardsLoading = false; this.sending = false;
     if (this.refreshTimer !== undefined) {
       clearInterval(this.refreshTimer);
       this.refreshTimer = undefined;
@@ -54,6 +65,7 @@ export struct ChatPage {
   }
 
   private onSocialForegroundChanged(): void {
+    if (!this.destinationVisible || !this.appActive) return;
     if (this.socialForegroundRevision > 0) this.loadMessages(true);
   }
 
@@ -74,6 +86,7 @@ export struct ChatPage {
   private async loadMessages(reset: boolean): Promise<void> {
     if (this.loading || this.loadingOlder) return;
     if (!reset && this.nextBeforeToken.length === 0) return;
+    const generation: number = this.pageGeneration; const owner: string = AccountRequestGuard.owner();
     if (reset) this.loading = true;
     else this.loadingOlder = true;
     try {
@@ -84,54 +97,46 @@ export struct ChatPage {
         pageSize: MESSAGE_PAGE_SIZE
       };
       const response = await this.friendRepository.listMessages(context, request);
+      if (generation !== this.pageGeneration || owner !== AccountRequestGuard.owner()) return;
       this.messages = reset ? response.messages : response.messages.concat(this.messages);
       this.nextBeforeToken = response.nextBeforeToken;
       this.status = '';
     } catch (error) {
+      if (generation !== this.pageGeneration) return; this.messages = [];
       this.status = `消息加载失败：${errorText(error as ErrorDetail)}`;
     } finally {
-      this.loading = false;
-      this.loadingOlder = false;
+      if (generation === this.pageGeneration) { this.loading = false; this.loadingOlder = false; }
     }
   }
 
-  private async loadCardCandidates(): Promise<void> {
-    if (this.cardsLoading) return;
-    this.cardsLoading = true;
-    try {
-      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      const collections = await Promise.all([
-        this.cardRepository.myFavoriteCards(context), this.cardRepository.myCards(context)
-      ]);
-      const combined: Array<FoodCard> = [];
-      collections[0].forEach((card: FoodCard): void => {
-        if (card.status === 'APPROVED') combined.push(card);
-      });
-      collections[1].forEach((card: FoodCard): void => {
-        if (card.status === 'APPROVED' && !this.containsCard(combined, card.id)) combined.push(card);
-      });
-      this.cardCandidates = combined;
-      this.status = combined.length === 0 ? '暂无可发送的卡片。先收藏或发布一张公开卡片吧。' : '';
-    } catch (error) {
-      this.status = `卡片加载失败：${errorText(error as ErrorDetail)}`;
-    } finally {
-      this.cardsLoading = false;
-    }
+  private async loadCardCandidates(more: boolean = false): Promise<void> {
+    if (this.cardsLoading) return; const generation: number = this.pageGeneration; this.cardsLoading = true;
+    try { const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      const page: FoodListItemsPage = await new FoodListRepository().items('FAVORITES', more ? this.favoriteCursor : '');
+      if (generation !== this.pageGeneration) return;
+      const combined: Array<FoodCard> = more ? this.cardCandidates.slice() : [];
+      for (const item of page.items) { const card: FoodCard | null = item.card; if (card !== null && !this.containsCard(combined, card.id)) combined.push(card); }
+      if (!more) { const own: Array<FoodCard> = await this.cardRepository.myCards(context); if (generation !== this.pageGeneration) return; for (const card of own) if (card.status === 'APPROVED' && !this.containsCard(combined, card.id)) combined.push(card); }
+      this.cardCandidates = combined; this.favoriteCursor = page.nextCursor;
+    } catch (error) { if (generation === this.pageGeneration) this.status = `卡片加载失败：${errorText(error as ErrorDetail)}`; }
+    finally { if (generation === this.pageGeneration) this.cardsLoading = false; }
   }
 
   private async sendRequest(request: SendMessageRequest): Promise<void> {
     if (this.sending) return;
-    this.sending = true;
+    const generation: number = this.pageGeneration; const owner: string = AccountRequestGuard.owner(); this.sending = true;
     try {
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
       const message = await this.friendRepository.sendMessage(context, request);
+      if (generation !== this.pageGeneration || owner !== AccountRequestGuard.owner()) return;
       this.messages = this.messages.concat([message]);
       this.textDraft = '';
       this.status = '已发送。';
     } catch (error) {
+      if (generation !== this.pageGeneration || owner !== AccountRequestGuard.owner()) return;
       this.status = `发送失败：${errorText(error as ErrorDetail)}`;
     } finally {
-      this.sending = false;
+      if (generation === this.pageGeneration) this.sending = false;
     }
   }
 
@@ -325,7 +330,7 @@ export struct ChatPage {
           LoadingProgress().width(22).height(22).color($r('app.color.accent_action'));
           Text('正在读取已收藏和已发布卡片').fontSize(13).fontColor($r('app.color.muted'));
         }.width('100%').height(56).justifyContent(FlexAlign.Center);
-      } else if (this.cardPickerVisible && this.cardCandidates.length === 0) {
+      } else if (this.cardPickerVisible && this.cardCandidates.length === 0 && this.favoriteCursor.length === 0) {
         Column({ space: 8 }) {
           Text('暂无可发送卡片，先收藏或发布一张公开卡片。').fontSize(12).fontColor($r('app.color.muted'));
           Button('重新加载').height(40).fontSize(12).backgroundColor($r('app.color.accent_soft'))
@@ -342,6 +347,7 @@ export struct ChatPage {
         .width('100%').height(96).listDirection(Axis.Horizontal).scrollBar(BarState.Off)
         .edgeEffect(EdgeEffect.Spring);
       }
+      if (this.cardPickerVisible && this.favoriteCursor.length > 0) { Button('加载更多收藏').height(48).enabled(!this.cardsLoading).onClick((): void => { void this.loadCardCandidates(true); }); }
     }
     .width('100%').padding(10).backgroundColor($r('app.color.surface'))
     .border({ width: 1, color: $r('app.color.line') }).borderRadius(18);
@@ -394,7 +400,7 @@ export struct ChatPage {
       .width('100%').height('100%').padding({ left: 14, right: 14, top: 0, bottom: 10 })
       .backgroundColor($r('app.color.canvas'));
     }
-    .hideTitleBar(true)
+    .hideTitleBar(true).onShown((): void => { this.destinationVisible = true; this.aboutToAppear(); }).onHidden((): void => { this.destinationVisible = false; this.aboutToDisappear(); })
     .onBackPressed((): boolean => {
       this.closeChat();
       return true;

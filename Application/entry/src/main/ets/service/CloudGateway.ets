@@ -1,14 +1,37 @@
-import { cloudCommon } from '@kit.CloudFoundationKit';
+import { cloudCommon, cloudFunction } from '@kit.CloudFoundationKit';
 import { importObject, ShikeAuth, ShikeLocation, ShikeMedia, ShikeService } from '@shike/cloud-objects';
 import type { CloudEnvelope } from '@shike/cloud-objects';
+import { FeaturePerformanceTrace, FeatureTraceName } from './FeaturePerformanceTrace';
 import { AuthSessionStore } from './AuthSessionStore';
+import { CloudBusinessError, ReadCancelledError, cloudReadError } from './CloudReadErrors';
+import { ReadRequestOptions, ReadScheduler } from './ReadScheduler';
+export { CloudBusinessError } from './CloudReadErrors';
 
 type MediaOperation = 'prepare-card-photo' | 'upload-card-photo' | 'get-public-media';
 type MediaErrorSource = 'cloud-call' | 'business-response';
 type MediaCloudObjectName = 'shike-media' | 'shike-service';
+type Stage47ServiceMethod = 'getStage47Capabilities' | 'getTastePreference' | 'updateTastePreference' |
+  'clearTastePreference' | 'listPersonalizedRecommendations' | 'listFoodLists' | 'createFoodList' |
+  'updateFoodList' | 'deleteFoodList' | 'listFoodListItems' | 'addFoodListItem' | 'removeFoodListItem' |
+  'reorderFoodListItems' | 'getPersonalFoodState' | 'updatePersonalFoodState' | 'getMealCandidates' |
+  'recordMealChoice' | 'listMealChoiceHistory' | 'createMealPoll' | 'getMealPoll' | 'addMealPollOption' |
+  'voteMealPoll' | 'closeMealPoll' | 'cancelMealPoll' | 'stopMealPollOptions' | 'getUserPage' |
+  'listMerchantRankings' | 'listFormerFriendContentGrants' | 'setCardReactionV2' |
+  'getCardPreviews' | 'listPersonalCollection' | 'getPersonalCollectionMigration' |
+  'startPersonalCollectionMigration' | 'resumePersonalCollectionMigration' | 'setCardFavorite' | 'setCardWanted' | 'getStage89Capabilities' | 'listModerationQueue' | 'getModerationDetail' | 'decideModeration' | 'listMyReports' | 'reportMerchant' | 'listOwnReviewRequests' | 'listDeletedCards' | 'restoreDeletedCard' | 'listLifecycleJobs' | 'getLifecycleJob' | 'retryLifecycleJob' | 'confirmAuthCleanup' | 'getReviewMedia' | 'runLifecycleJob';
+
+interface ReadCloudEnvelope extends CloudEnvelope {
+  readRequestId: string;
+  readAttempt: number;
+}
+
+interface Stage47ServiceInvocation {
+  method: Stage47ServiceMethod;
+  params: Array<CloudEnvelope>;
+}
 
 interface CloudHandlerErrorDetail {
-  code?: number;
+  code?: number | string;
   message?: string;
 }
 
@@ -22,14 +45,15 @@ export class MediaServiceUnavailableError extends Error {
   }
 }
 
-export class CloudBusinessError extends Error {
-  code: string;
-  constructor(message: string, code: string) { super(message); this.name = 'CloudBusinessError'; this.code = code; }
-}
-
 interface ApiResponse<T> {
   ok: boolean;
   code?: string;
+  retryable?: boolean;
+  retryAfterMs?: number;
+  requestId?: string;
+  operation?: string;
+  stage?: string;
+  functionVersion?: string;
   data: T;
   message: string;
 }
@@ -37,8 +61,28 @@ interface ApiResponse<T> {
 interface CloudObjectResponse {
   ok: boolean;
   code?: string;
+  retryable?: boolean;
+  retryAfterMs?: number;
+  requestId?: string;
+  operation?: string;
+  stage?: string;
+  functionVersion?: string;
   data: object;
   message: string;
+}
+
+interface ReadCardIdentity { id: string; }
+interface ReadCandidateIdentity { card: ReadCardIdentity; }
+interface ReadPreviewSummaryItem { accessible: boolean; }
+interface ReadPageSummary {
+  cards?: Array<ReadCardIdentity>;
+  candidates?: Array<ReadCandidateIdentity>;
+  items?: Array<ReadPreviewSummaryItem>;
+  nextCursor?: string;
+  coverage?: string;
+  scannedCandidateCount?: number;
+  consumedCandidateCount?: number;
+  fetchedCandidateCount?: number;
 }
 
 function decode<T>(raw: string | object): ApiResponse<T> {
@@ -86,7 +130,7 @@ export class CloudGateway {
   private static cloudHandlerCode(error: Object): string {
     if (error === null || error === undefined) return 'not-provided';
     const detail: CloudHandlerErrorDetail = error as CloudHandlerErrorDetail;
-    return typeof detail.code === 'number' ? String(detail.code) : 'not-provided';
+    return detail.code === undefined ? 'not-provided' : String(detail.code);
   }
 
   private static logMediaHandlerError(operation: MediaOperation, source: MediaErrorSource,
@@ -135,6 +179,8 @@ export class CloudGateway {
       }
       throw new Error('当前未开放媒体接口。');
     } catch (error) {
+      const normalized: Error = cloudReadError(error as Object, operation, '');
+      if (normalized instanceof CloudBusinessError && normalized.code === '3007009') throw normalized;
       const message: string = CloudGateway.cloudHandlerMessage(error as Object);
       if (message.includes('Call handler error')) {
         CloudGateway.logMediaHandlerError(operation, 'cloud-call', 'shike-media', message,
@@ -147,9 +193,21 @@ export class CloudGateway {
         console.error('[MediaService] handler error; operation=' + operation + '.');
         throw new Error('实拍图服务处理请求失败，请稍后重试。');
       }
-      if (error instanceof Error) throw error;
-      throw new Error(message.length > 0 ? message : '云端请求失败，请稍后重试。');
+      throw cloudReadError(error as Object, operation, '');
     }
+  }
+
+  private static async invokeStage47(method: Stage47ServiceMethod,
+    envelope: CloudEnvelope): Promise<CloudObjectResponse> {
+    // Match the generated importObject protocol while its declarations contain only older methods.
+    const invocation: Stage47ServiceInvocation = { method, params: [envelope] };
+    const parameters: cloudFunction.FunctionParams = {
+      name: 'shike-service',
+      version: '$latest',
+      data: invocation
+    };
+    const response: cloudFunction.FunctionResult = await cloudFunction.call(parameters);
+    return decode<object>(response.result as string | object);
   }
 
   private static initialize(): void {
@@ -177,32 +235,226 @@ export class CloudGateway {
     return AuthSessionStore.hasCachedSession();
   }
 
-  static async callPublic<T>(name: string, payload: object): Promise<T> {
-    return CloudGateway.execute<T>(name, payload, false);
+  static async callPublic<T>(name: string, payload: object, options: ReadRequestOptions = {}): Promise<T> {
+    return CloudGateway.dispatch<T>(name, payload, false, options);
   }
 
-  static async callAuthenticated<T>(name: string, payload: object): Promise<T> {
-    return CloudGateway.execute<T>(name, payload, true);
+  static async callAuthenticated<T>(name: string, payload: object, options: ReadRequestOptions = {}): Promise<T> {
+    return CloudGateway.dispatch<T>(name, payload, true, options);
   }
 
-  private static async execute<T>(name: string, payload: object, authenticated: boolean): Promise<T> {
+  private static async dispatch<T>(name: string, payload: object, authenticated: boolean,
+    options: ReadRequestOptions): Promise<T> {
+    const trace: FeatureTraceName | undefined = FeaturePerformanceTrace.traceNameForOperation(name, payload);
+    if (trace !== undefined) return FeaturePerformanceTrace.measure<T>(trace, (): Promise<T> => CloudGateway.dispatchRead<T>(name, payload, authenticated, options));
+    return CloudGateway.dispatchRead<T>(name, payload, authenticated, options);
+  }
+
+  private static async dispatchRead<T>(name: string, payload: object, authenticated: boolean, options: ReadRequestOptions): Promise<T> {
+    if (!ReadScheduler.allows(name)) return CloudGateway.execute<T>(name, payload, authenticated);
+    const value: object = await ReadScheduler.schedule(name, payload, authenticated, options,
+      (requestId: string, attempt: number): Promise<object> => CloudGateway.execute<object>(name, payload, authenticated, requestId, attempt));
+    if (options.mayContinue !== undefined && !await options.mayContinue()) throw new ReadCancelledError();
+    return value as T;
+  }
+
+  private static changesReadContent(name: string): boolean {
+    switch (name) {
+      case 'update-taste-preference': case 'clear-taste-preference':
+      case 'create-food-list': case 'update-food-list': case 'delete-food-list':
+      case 'add-food-list-item': case 'remove-food-list-item': case 'reorder-food-list-items':
+      case 'set-card-favorite': case 'set-card-wanted': case 'set-card-reaction-v2':
+      case 'start-personal-collection-migration': case 'resume-personal-collection-migration':
+      case 'update-personal-food-state': case 'toggle-card-action':
+      case 'set-card-visibility': case 'revoke-friend-content-access':
+      case 'block-user': case 'unblock-user': case 'remove-friend': case 'respond-friend-request':
+      case 'delete-own-card': case 'delete-account-data': case 'publish-card': case 'publish-cards':
+      case 'decide-moderation': case 'restore-deleted-card': case 'report-merchant':
+      case 'retry-lifecycle-job': case 'confirm-auth-cleanup':
+      case 'moderate-card': case 'moderate-card-revision':
+        return true;
+      default: return false;
+    }
+  }
+
+  private static logReadPage(name: string, data: object, requestId: string): void {
+    if (name === 'get-card-previews' || name === 'list-personal-collection' || name === 'get-user-page') {
+      const preview: ReadPageSummary = data as ReadPageSummary;
+      const count: number = preview.items !== undefined ? preview.items.length : (preview.cards?.length || 0);
+      const readable: number = preview.items !== undefined ?
+        preview.items.filter((item: ReadPreviewSummaryItem): boolean => item.accessible).length : count;
+      console.info('[ReadPage] operation=' + name + ' requestId=' + requestId + ' references=' + count +
+        ' readable=' + readable + ' hasMore=' + String((preview.nextCursor || '').length > 0));
+      return;
+    }
+    if (name !== 'list-personalized-recommendations' && name !== 'get-meal-candidates') return;
+    const summary: ReadPageSummary = data as ReadPageSummary;
+    const ids: Array<string> = summary.cards !== undefined
+      ? summary.cards.map((card: ReadCardIdentity): string => card.id)
+      : summary.candidates === undefined ? [] : summary.candidates.map((item: ReadCandidateIdentity): string => item.card.id);
+    console.info('[ReadPage] operation=' + name + ' requestId=' + requestId + ' returnedCount=' + ids.length +
+      ' cardIds=' + ids.join(',') + ' hasMore=' + String(summary.nextCursor !== undefined && summary.nextCursor.length > 0) +
+      ' coverage=' + (summary.coverage || '') + ' scanned=' + (summary.scannedCandidateCount || 0) +
+      ' consumed=' + (summary.consumedCandidateCount || 0) + ' fetched=' + (summary.fetchedCandidateCount || 0));
+  }
+
+  private static async execute<T>(name: string, payload: object, authenticated: boolean,
+    readRequestId: string = '', readAttempt: number = 1): Promise<T> {
     // All callers are reachable only after the startup privacy consent gate.
     const mediaOperation: MediaOperation | undefined = CloudGateway.mediaOperationFor(name);
     CloudGateway.initialize();
-    const accessToken: string = authenticated ? await AuthSessionStore.getAccessToken(false) : '';
+    const session: number = AuthSessionStore.generation();
+    let accessToken: string = '';
+    if (authenticated) {
+      try { accessToken = await AuthSessionStore.getAccessToken(false); }
+      catch (error) {
+        const failure: Error = cloudReadError(error as Object, name, readRequestId);
+        if (failure instanceof CloudBusinessError) { failure.retryable = false; failure.stage = 'authentication'; }
+        throw failure;
+      }
+    }
+    if (session !== AuthSessionStore.generation()) throw new ReadCancelledError();
     if (authenticated && accessToken.length === 0) {
       throw new Error('登录状态已失效，请重新登录。');
     }
     if (mediaOperation !== undefined && CloudGateway.isMediaServiceUnavailable()) {
       throw new MediaServiceUnavailableError();
     }
-    const envelope: CloudEnvelope = {
-      accessToken,
-      payload
-    };
+    const envelope: ReadCloudEnvelope = { accessToken, payload, readRequestId, readAttempt };
     const mediaGeneration: number = CloudGateway.mediaCircuitGeneration;
     let raw: CloudObjectResponse | undefined = undefined;
     switch (name) {
+      case 'get-card-previews':
+        raw = await CloudGateway.invokeStage47('getCardPreviews', envelope); break;
+      case 'list-personal-collection':
+        raw = await CloudGateway.invokeStage47('listPersonalCollection', envelope); break;
+      case 'get-personal-collection-migration':
+        raw = await CloudGateway.invokeStage47('getPersonalCollectionMigration', envelope); break;
+      case 'start-personal-collection-migration':
+        raw = await CloudGateway.invokeStage47('startPersonalCollectionMigration', envelope); break;
+      case 'resume-personal-collection-migration':
+        raw = await CloudGateway.invokeStage47('resumePersonalCollectionMigration', envelope); break;
+      case 'set-card-favorite':
+        raw = await CloudGateway.invokeStage47('setCardFavorite', envelope); break;
+      case 'set-card-wanted':
+        raw = await CloudGateway.invokeStage47('setCardWanted', envelope); break;
+      case 'get-stage89-capabilities':
+        raw = await CloudGateway.invokeStage47('getStage89Capabilities', envelope); break;
+      case 'list-moderation-queue':
+        raw = await CloudGateway.invokeStage47('listModerationQueue', envelope); break;
+      case 'get-moderation-detail':
+        raw = await CloudGateway.invokeStage47('getModerationDetail', envelope); break;
+      case 'decide-moderation':
+        raw = await CloudGateway.invokeStage47('decideModeration', envelope); break;
+      case 'list-my-reports':
+        raw = await CloudGateway.invokeStage47('listMyReports', envelope); break;
+      case 'report-merchant':
+        raw = await CloudGateway.invokeStage47('reportMerchant', envelope); break;
+      case 'list-own-review-requests':
+        raw = await CloudGateway.invokeStage47('listOwnReviewRequests', envelope); break;
+      case 'list-deleted-cards':
+        raw = await CloudGateway.invokeStage47('listDeletedCards', envelope); break;
+      case 'restore-deleted-card':
+        raw = await CloudGateway.invokeStage47('restoreDeletedCard', envelope); break;
+      case 'list-lifecycle-jobs':
+        raw = await CloudGateway.invokeStage47('listLifecycleJobs', envelope); break;
+      case 'get-lifecycle-job':
+        raw = await CloudGateway.invokeStage47('getLifecycleJob', envelope); break;
+      case 'retry-lifecycle-job':
+        raw = await CloudGateway.invokeStage47('retryLifecycleJob', envelope); break;
+      case 'confirm-auth-cleanup':
+        raw = await CloudGateway.invokeStage47('confirmAuthCleanup', envelope); break;
+      case 'get-review-media':
+        raw = await CloudGateway.invokeStage47('getReviewMedia', envelope); break;
+      case 'run-lifecycle-job':
+        raw = await CloudGateway.invokeStage47('runLifecycleJob', envelope); break;
+      case 'get-stage47-capabilities':
+        raw = await CloudGateway.invokeStage47('getStage47Capabilities', envelope);
+        break;
+      case 'get-taste-preference':
+        raw = await CloudGateway.invokeStage47('getTastePreference', envelope);
+        break;
+      case 'update-taste-preference':
+        raw = await CloudGateway.invokeStage47('updateTastePreference', envelope);
+        break;
+      case 'clear-taste-preference':
+        raw = await CloudGateway.invokeStage47('clearTastePreference', envelope);
+        break;
+      case 'list-personalized-recommendations':
+        raw = await CloudGateway.invokeStage47('listPersonalizedRecommendations', envelope);
+        break;
+      case 'list-food-lists':
+        raw = await CloudGateway.invokeStage47('listFoodLists', envelope);
+        break;
+      case 'create-food-list':
+        raw = await CloudGateway.invokeStage47('createFoodList', envelope);
+        break;
+      case 'update-food-list':
+        raw = await CloudGateway.invokeStage47('updateFoodList', envelope);
+        break;
+      case 'delete-food-list':
+        raw = await CloudGateway.invokeStage47('deleteFoodList', envelope);
+        break;
+      case 'list-food-list-items':
+        raw = await CloudGateway.invokeStage47('listFoodListItems', envelope);
+        break;
+      case 'add-food-list-item':
+        raw = await CloudGateway.invokeStage47('addFoodListItem', envelope);
+        break;
+      case 'remove-food-list-item':
+        raw = await CloudGateway.invokeStage47('removeFoodListItem', envelope);
+        break;
+      case 'reorder-food-list-items':
+        raw = await CloudGateway.invokeStage47('reorderFoodListItems', envelope);
+        break;
+      case 'get-personal-food-state':
+        raw = await CloudGateway.invokeStage47('getPersonalFoodState', envelope);
+        break;
+      case 'update-personal-food-state':
+        raw = await CloudGateway.invokeStage47('updatePersonalFoodState', envelope);
+        break;
+      case 'get-meal-candidates':
+        raw = await CloudGateway.invokeStage47('getMealCandidates', envelope);
+        break;
+      case 'record-meal-choice':
+        raw = await CloudGateway.invokeStage47('recordMealChoice', envelope);
+        break;
+      case 'list-meal-choice-history':
+        raw = await CloudGateway.invokeStage47('listMealChoiceHistory', envelope);
+        break;
+      case 'create-meal-poll':
+        raw = await CloudGateway.invokeStage47('createMealPoll', envelope);
+        break;
+      case 'get-meal-poll':
+        raw = await CloudGateway.invokeStage47('getMealPoll', envelope);
+        break;
+      case 'add-meal-poll-option':
+        raw = await CloudGateway.invokeStage47('addMealPollOption', envelope);
+        break;
+      case 'vote-meal-poll':
+        raw = await CloudGateway.invokeStage47('voteMealPoll', envelope);
+        break;
+      case 'close-meal-poll':
+        raw = await CloudGateway.invokeStage47('closeMealPoll', envelope);
+        break;
+      case 'cancel-meal-poll':
+        raw = await CloudGateway.invokeStage47('cancelMealPoll', envelope);
+        break;
+      case 'stop-meal-poll-options':
+        raw = await CloudGateway.invokeStage47('stopMealPollOptions', envelope);
+        break;
+      case 'get-user-page':
+        raw = await CloudGateway.invokeStage47('getUserPage', envelope);
+        break;
+      case 'list-merchant-rankings':
+        raw = await CloudGateway.invokeStage47('listMerchantRankings', envelope);
+        break;
+      case 'list-former-friend-content-grants':
+        raw = await CloudGateway.invokeStage47('listFormerFriendContentGrants', envelope);
+        break;
+      case 'set-card-reaction-v2':
+        raw = await CloudGateway.invokeStage47('setCardReactionV2', envelope);
+        break;
       case 'get-discovery-capabilities':
         raw = await (CloudGateway.serviceObject as ShikeService).getDiscoveryCapabilities(envelope);
         break;
@@ -471,7 +723,19 @@ export class CloudGateway {
         console.error('[MediaService] handler returned an error; operation=' + mediaOperation + '.');
         throw new Error('实拍图服务处理请求失败，请稍后重试。');
       }
-      throw new CloudBusinessError(message, decoded.code === undefined ? 'REQUEST_FAILED' : decoded.code);
+      const code: string = decoded.code === undefined ? 'REQUEST_FAILED' : decoded.code;
+      throw new CloudBusinessError(message, code, decoded.retryable === undefined ? code === '3007009' : decoded.retryable,
+        decoded.retryAfterMs || 0, decoded.requestId || readRequestId, decoded.operation || name, decoded.stage || 'business-response');
+    }
+    if (session === AuthSessionStore.generation() && CloudGateway.changesReadContent(name)) ReadScheduler.contentChanged();
+    if (session === AuthSessionStore.generation() && ['block-user', 'unblock-user', 'remove-friend', 'respond-friend-request'].includes(name))
+      AppStorage.setOrCreate('accountContentRevision', (AppStorage.get<number>('accountContentRevision') || 0) + 1);
+    if (ReadScheduler.allows(name) && session === AuthSessionStore.generation() &&
+      AppStorage.get<boolean>('stage47AppActive') !== false) {
+      const requestId: string = decoded.requestId || readRequestId;
+      console.info('[ReadResponse] operation=' + name + ' requestId=' + requestId +
+        ' code=OK functionVersion=' + (decoded.functionVersion || 'not-returned'));
+      CloudGateway.logReadPage(name, decode<object>(raw).data, requestId);
     }
     return decoded.data;
   }

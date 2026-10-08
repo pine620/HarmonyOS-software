@@ -1,0 +1,16 @@
+{
+  "kind": "PROVIDER_NEUTRAL_CONSOLE_ROUTING_CONTRACT",
+  "origin": "",
+  "assetRoot": ".",
+  "requiredRewrites": [{"path": "/card/**", "serve": "/index.html"}, {"path": "/card", "serve": "/index.html"}],
+  "requiredHeaders": {
+    "Cache-Control": "no-store, max-age=0",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+  },
+  "appliesHeadersTo": ["HTML", "JS", "CSS", "config.json", "error responses"],
+  "cacheEnabled": false,
+  "configuredBy": "CloudProgram/scripts/configure-share-hosting.mjs",
+  "providerManifest": false
+}

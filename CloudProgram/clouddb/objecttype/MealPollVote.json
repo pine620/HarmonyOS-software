@@ -1,0 +1,75 @@
+{
+  "objectTypeName": "MealPollVote",
+  "fields": [
+    {
+      "fieldName": "pollId",
+      "fieldType": "String",
+      "notNull": true,
+      "belongPrimaryKey": true
+    },
+    {
+      "fieldName": "voterUid",
+      "fieldType": "String",
+      "notNull": true,
+      "belongPrimaryKey": true
+    },
+    {
+      "fieldName": "optionId",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "updatedAt",
+      "fieldType": "Date"
+    }
+  ],
+  "indexes": [
+    {
+      "indexName": "index_1",
+      "indexList": [
+        {
+          "fieldName": "pollId",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "optionId",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "voterUid",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "voter_uid",
+      "indexList": [
+        {
+          "fieldName": "voterUid",
+          "sortType": "ASC"
+        }
+      ]
+    }
+  ],
+  "permissions": [
+    {
+      "role": "World",
+      "rights": []
+    },
+    {
+      "role": "Authenticated",
+      "rights": []
+    },
+    {
+      "role": "Creator",
+      "rights": []
+    },
+    {
+      "role": "Administrator",
+      "rights": [
+        "Read",
+        "Upsert",
+        "Delete"
+      ]
+    }
+  ]
+}

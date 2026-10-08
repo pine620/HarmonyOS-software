@@ -1,27 +1,106 @@
 {
   "objectTypeName": "IdentityBinding",
   "fields": [
-    { "fieldName": "id", "fieldType": "String", "notNull": true, "belongPrimaryKey": true },
-    { "fieldName": "provider", "fieldType": "String", "notNull": true, "defaultValue": "AGC" },
-    { "fieldName": "providerUid", "fieldType": "String", "notNull": true, "defaultValue": "" },
-    { "fieldName": "canonicalUid", "fieldType": "String", "notNull": true, "defaultValue": "" },
-    { "fieldName": "status", "fieldType": "String", "notNull": true, "defaultValue": "ACTIVE" },
-    { "fieldName": "createdAt", "fieldType": "Long", "notNull": true, "defaultValue": 0 },
-    { "fieldName": "updatedAt", "fieldType": "Long", "notNull": true, "defaultValue": 0 }
+    {
+      "fieldName": "id",
+      "fieldType": "String",
+      "notNull": true,
+      "belongPrimaryKey": true
+    },
+    {
+      "fieldName": "provider",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": "AGC"
+    },
+    {
+      "fieldName": "providerUid",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "canonicalUid",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "status",
+      "fieldType": "String",
+      "notNull": true,
+      "defaultValue": "ACTIVE"
+    },
+    {
+      "fieldName": "createdAt",
+      "fieldType": "Long",
+      "notNull": true,
+      "defaultValue": 0
+    },
+    {
+      "fieldName": "updatedAt",
+      "fieldType": "Long",
+      "notNull": true,
+      "defaultValue": 0
+    }
   ],
   "indexes": [
-    { "indexName": "provider_providerUid", "indexList": [
-      { "fieldName": "provider", "sortType": "ASC" },
-      { "fieldName": "providerUid", "sortType": "ASC" }
-    ] },
-    { "indexName": "canonicalUid", "indexList": [
-      { "fieldName": "canonicalUid", "sortType": "ASC" }
-    ] }
+    {
+      "indexName": "provider_providerUid",
+      "indexList": [
+        {
+          "fieldName": "provider",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "providerUid",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "canonicalUid",
+      "indexList": [
+        {
+          "fieldName": "canonicalUid",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "canonicalUid_id",
+      "indexList": [
+        {
+          "fieldName": "canonicalUid",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "id",
+          "sortType": "ASC"
+        }
+      ]
+    }
   ],
   "permissions": [
-    { "role": "World", "rights": [] },
-    { "role": "Authenticated", "rights": [] },
-    { "role": "Creator", "rights": [] },
-    { "role": "Administrator", "rights": ["Read", "Upsert", "Delete"] }
+    {
+      "role": "World",
+      "rights": []
+    },
+    {
+      "role": "Authenticated",
+      "rights": []
+    },
+    {
+      "role": "Creator",
+      "rights": []
+    },
+    {
+      "role": "Administrator",
+      "rights": [
+        "Read",
+        "Upsert",
+        "Delete"
+      ]
+    }
   ]
 }

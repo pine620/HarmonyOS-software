@@ -1,6 +1,6 @@
 # 项目文件索引
 
-按 2026-10-06 的现有发布文件结构整理，重点覆盖 `Application` 与 `CloudProgram`。先看下面的职责说明，完整文件清单在文末。首次运行见 [README](README.md)，后端操作见 [云端指南](CloudProgram/README.md)。
+按 2026-10-08 的现有发布文件结构整理，重点覆盖 `Application` 与 `CloudProgram`。先看下面的职责说明，完整文件清单在文末。首次运行见 [README](README.md)，后端操作见 [云端指南](CloudProgram/README.md)。
 
 路径从项目根目录起算。GitHub 仓库包含 Application 与 CloudProgram 的源码；三个不含签名的 build profile 随源码共享；本地签名、SDK 和云工程关联配置另列，不提交配置值。
 
@@ -26,7 +26,9 @@ Application/
 └── scripts/                  离线指标汇总
 CloudProgram/
 ├── cloud-config.json         本地生成的团队/项目/应用关联元数据
-├── cloudfunctions/           四个云对象
+├── cloudfunctions/           四个云对象与两个独立云函数
+├── hosting/share/            公开分享网页与托管约定
+├── scripts/                  云对象、分享及维护打包工具
 ├── clouddb/objecttype/       当前数据库对象定义
 ├── clouddb/db-config.json    默认存储区与数据处理位置
 └── AppScope/resources/       平台生成的历史 schema
@@ -77,6 +79,21 @@ CloudProgram/
 | `CardHistoryPage.ets` | 本机访问历史及卡片打开 |
 | `ReceivedCommentsPage.ets` | 保留历史评论页面，当前导航入口已退场 |
 | `NotificationInboxPage.ets` | 通知分页、未读/已读、全部已读和目标跳转 |
+
+| `DeletedCardsPage.ets` | 软删除列表与恢复 |
+| `FoodListPicker.ets` | 选择加入的私人清单 |
+| `FoodListsPage.ets` | 私人清单管理与条目 |
+| `LifecycleJobPage.ets` | 生命周期任务详情与重试 |
+| `LifecycleJobsPage.ets` | 管理员任务列表 |
+| `MealPollPage.ets` | 群投票详情、选项和投票 |
+| `ModerationCenterPage.ets` | 管理员审核队列 |
+| `ModerationDetailPage.ets` | 审核详情、差异与决策 |
+| `PersonalFoodPage.ets` | 收藏、想吃与个人食物状态 |
+| `PreferenceSetupPage.ets` | 口味偏好配置 |
+| `ReportContentPage.ets` | 卡片/商家举报 |
+| `SocialDiscoveryPages.ets` | 社交发现导航页面 |
+| `TodayEatPage.ets` | 今天吃什么候选与选择记录 |
+| `UserProfileContent.ets` | 用户内容列表 |
 
 ## Application：业务封装、服务与模型
 
@@ -131,6 +148,20 @@ CloudProgram/
 | `servicecard/ServiceCardFormAbility.ets`、`ServiceCardPresentation.ets`、`pages/ServiceCard.ets` | 卡片生命周期、尺寸回调、路由/展示格式和双规格布局 |
 | `servicecard/pages/ServiceCard.ets` | 桌面卡片布局、刷新与打开操作 |
 
+| `repository/PreferenceRepository.ets`、`model/PreferenceModels.ets` | 偏好与个性化推荐接口和 DTO |
+| `repository/FoodListRepository.ets`、`model/FoodListModels.ets` | 私人清单与条目 |
+| `repository/PersonalCollectionRepository.ets`、`model/PersonalCollectionModels.ets` | 收藏/想吃集合及历史数据迁移 |
+| `repository/MealRepository.ets`、`model/MealModels.ets` | 候选、选择历史与群投票 |
+| `repository/SocialDiscoveryRepository.ets`、`model/SocialDiscoveryModels.ets` | 用户内容、商家榜与关系授权 |
+| `repository/OperationsRepository.ets`、`model/OperationsModels.ets` | 审核举报、删除恢复和生命周期任务 |
+| `service/DraftStore.ets`、`model/DraftModels.ets` | 本机草稿保存/恢复及账号隔离 |
+| `service/AccountRequestGuard.ets`、`service/OperationsPageGuard.ets` | 账号、会话、页面代次与异步回写资格检查 |
+| `service/CloudReadErrors.ets`、`service/ReadScheduler.ets` | 结构化读取错误、受控只读重试、并发与请求去重 |
+| `service/PagedDataSource.ets`、`service/PersonalPreviewLoader.ets` | 稳定分页数据源与个人缩略图加载 |
+| `service/FeaturePerformanceTrace.ets` | 地图、搜索、清单、审核等固定性能 trace |
+| `service/MerchantNavigationService.ets` | 商家位置导航 |
+| `common/OperationsUi.ets`、`common/Stage47Ui.ets`、`components/PersonalPreviewTile.ets` | 管理/个人内容公共界面和预览单元 |
+
 ## Application：代理、资源与脚本
 
 | 路径 | 职责 |
@@ -168,11 +199,13 @@ CloudProgram/
 
 每个目录均有 `runtime.js`（实际 JS 实现）、`function-config.json`（类型/handler/超时/鉴权）、`package.json` 与 `package-lock.json`（该对象独立依赖）、`tsconfig.json`（CommonJS 入口编译）。TS 导出负责包装响应，部署包必须带相邻 runtime 和生产依赖。media 另有 `check-deployment.mjs`供成员预检源码包/解包产物。
 
-service/media/location 各带一致的 `content-policy.js`，service 另带 `stage1-services.js`（审核／任务／迁移）、`stage2-services.js`（发布／商家／计数）、`stage3-services.js`（地图／搜索／查询门槛）；部署时这些模块必须与 runtime 同包。`CloudProgram/scripts/package-cloud-object.mjs` 为部署成员准备编译入口、随包 JS 模块和独立依赖；不会自动部署 AGC。
+service/media/location 各带 `content-policy.js` 与 `read-errors.js`；service 另带 `stage1-services.js` 至 `stage7-services.js`、`stages47-common.js`、`personal-collections.js`、`moderation-services.js`、`lifecycle-services.js`、`authentication-cleanup.js`。部署时必须随 runtime 同包，完整打包/已知问题见云端指南。`CloudProgram/scripts/package-cloud-object.mjs` 为部署成员准备编译入口、随包 JS 模块和独立依赖；不会自动部署 AGC。
+
+独立入口：`cloudfunctions/shike-share/shikeShare.js` 提供公开分享 HTTP，`cloudfunctions/shike-maintenance/shikeMaintenance.js` 提供受秘密校验的定时任务。`hosting/share/` 是分享页；`scripts/package-share-http.mjs`、`configure-share-hosting.mjs`、`package-maintenance.mjs` 准备部署产物，`check-release-source.mjs` 供负责人手动检查。部署约定 JSON 不表示平台已配置。
 
 环境变量名称、用途及团队配置流程见云端指南；秘密只保存在 AGC 配置或团队约定的安全渠道。
 
-## CloudProgram：二十五个当前数据库对象
+## CloudProgram：三十三个当前数据库对象
 
 均位于 `CloudProgram/clouddb/objecttype/<对象名>.json`，包含字段、主键、索引和权限。
 
@@ -204,6 +237,15 @@ service/media/location 各带一致的 `content-policy.js`，service 另带 `sta
 | WidgetRegistration | 桌面卡片实例、设备、加密 Token |
 | NotificationEvent | 通知来源/对象/接收者/已读，不存正文 |
 
+| TastePreference | 个人口味偏好 |
+| FoodList | 私人清单元信息 |
+| FoodListItem | 清单条目和顺序 |
+| PersonalFoodState | 收藏/想吃等个人状态 |
+| MealChoiceHistory | 今天吃什么选择历史 |
+| MealPoll | 群投票状态与生命周期 |
+| MealPollOption | 投票候选项 |
+| MealPollVote | 成员投票与去重 |
+
 对象均只开放 Administrator 直读写。线上若有历史 CardRating，先保留数据；不能因为当前目录没有该定义而直接删线上对象。
 
 ## 修改入口与维护
@@ -219,7 +261,7 @@ service/media/location 各带一致的 `content-policy.js`，service 另带 `sta
 以下按当前源码重新生成，排除依赖、构建产物、缓存、日志和本地配置。克隆 GitHub 仓库可获得下列文件；首次需补齐的两个 AGC 配置路径单独列在末尾。
 
 <details>
-<summary>Application：161 个文件</summary>
+<summary>Application：220 个文件</summary>
 
 ```text
 Application/.gitignore
@@ -254,10 +296,13 @@ Application/entry/oh-package-lock.json5
 Application/entry/oh-package.json5
 Application/entry/src/main/ets/common/BreakpointSystem.ets
 Application/entry/src/main/ets/common/ErrorKit.ets
+Application/entry/src/main/ets/common/OperationsUi.ets
+Application/entry/src/main/ets/common/Stage47Ui.ets
 Application/entry/src/main/ets/components/DiscoveryCard.ets
 Application/entry/src/main/ets/components/DiscoveryMap.ets
 Application/entry/src/main/ets/components/FoodCover.ets
 Application/entry/src/main/ets/components/MerchantRecommendationSheet.ets
+Application/entry/src/main/ets/components/PersonalPreviewTile.ets
 Application/entry/src/main/ets/components/review/ReviewDisplay.ets
 Application/entry/src/main/ets/components/social/SocialDisplay.ets
 Application/entry/src/main/ets/entryability/EntryAbility.ets
@@ -265,55 +310,91 @@ Application/entry/src/main/ets/mapper/CloudCardViewMapper.ets
 Application/entry/src/main/ets/model/CardPrice.ets
 Application/entry/src/main/ets/model/CloudContracts.ets
 Application/entry/src/main/ets/model/DiscoveryModels.ets
+Application/entry/src/main/ets/model/DraftModels.ets
+Application/entry/src/main/ets/model/FoodListModels.ets
 Application/entry/src/main/ets/model/FriendModels.ets
+Application/entry/src/main/ets/model/MealModels.ets
 Application/entry/src/main/ets/model/MerchantModels.ets
 Application/entry/src/main/ets/model/NotificationModels.ets
+Application/entry/src/main/ets/model/OperationsModels.ets
+Application/entry/src/main/ets/model/PersonalCollectionModels.ets
+Application/entry/src/main/ets/model/PreferenceModels.ets
 Application/entry/src/main/ets/model/PublishingModels.ets
+Application/entry/src/main/ets/model/SocialDiscoveryModels.ets
 Application/entry/src/main/ets/model/TasteScore.ets
 Application/entry/src/main/ets/pages/CardDetailPage.ets
 Application/entry/src/main/ets/pages/CardHistoryPage.ets
 Application/entry/src/main/ets/pages/ChatPage.ets
 Application/entry/src/main/ets/pages/CreateCardPage.ets
+Application/entry/src/main/ets/pages/DeletedCardsPage.ets
 Application/entry/src/main/ets/pages/DiscoveryFeed.ets
 Application/entry/src/main/ets/pages/FavoriteCardsPage.ets
+Application/entry/src/main/ets/pages/FoodListPicker.ets
+Application/entry/src/main/ets/pages/FoodListsPage.ets
 Application/entry/src/main/ets/pages/FriendProfilePage.ets
 Application/entry/src/main/ets/pages/FriendSearchPage.ets
 Application/entry/src/main/ets/pages/FriendsPage.ets
 Application/entry/src/main/ets/pages/GroupChatPage.ets
 Application/entry/src/main/ets/pages/Index.ets
+Application/entry/src/main/ets/pages/LifecycleJobPage.ets
+Application/entry/src/main/ets/pages/LifecycleJobsPage.ets
+Application/entry/src/main/ets/pages/MealPollPage.ets
+Application/entry/src/main/ets/pages/ModerationCenterPage.ets
+Application/entry/src/main/ets/pages/ModerationDetailPage.ets
 Application/entry/src/main/ets/pages/NearbyPage.ets
 Application/entry/src/main/ets/pages/NotificationInboxPage.ets
+Application/entry/src/main/ets/pages/PersonalFoodPage.ets
+Application/entry/src/main/ets/pages/PreferenceSetupPage.ets
 Application/entry/src/main/ets/pages/ProfilePage.ets
 Application/entry/src/main/ets/pages/ProfileSubPages.ets
 Application/entry/src/main/ets/pages/RankingPage.ets
 Application/entry/src/main/ets/pages/ReceivedCommentsPage.ets
+Application/entry/src/main/ets/pages/ReportContentPage.ets
 Application/entry/src/main/ets/pages/ShareCardPage.ets
+Application/entry/src/main/ets/pages/SocialDiscoveryPages.ets
+Application/entry/src/main/ets/pages/TodayEatPage.ets
+Application/entry/src/main/ets/pages/UserProfileContent.ets
 Application/entry/src/main/ets/repository/CardEditRepository.ets
 Application/entry/src/main/ets/repository/CardRepository.ets
 Application/entry/src/main/ets/repository/DiscoveryRepository.ets
+Application/entry/src/main/ets/repository/FoodListRepository.ets
 Application/entry/src/main/ets/repository/FriendRepository.ets
+Application/entry/src/main/ets/repository/MealRepository.ets
 Application/entry/src/main/ets/repository/MerchantRepository.ets
 Application/entry/src/main/ets/repository/NotificationRepository.ets
+Application/entry/src/main/ets/repository/OperationsRepository.ets
+Application/entry/src/main/ets/repository/PersonalCollectionRepository.ets
+Application/entry/src/main/ets/repository/PreferenceRepository.ets
+Application/entry/src/main/ets/repository/SocialDiscoveryRepository.ets
+Application/entry/src/main/ets/service/AccountRequestGuard.ets
 Application/entry/src/main/ets/service/AuthService.ets
 Application/entry/src/main/ets/service/AuthSessionStore.ets
 Application/entry/src/main/ets/service/CardAppLink.ets
 Application/entry/src/main/ets/service/CardVisitStore.ets
 Application/entry/src/main/ets/service/CloudGateway.ets
+Application/entry/src/main/ets/service/CloudReadErrors.ets
 Application/entry/src/main/ets/service/ContinuationState.ets
 Application/entry/src/main/ets/service/DeliveryPlatformConfigService.ets
 Application/entry/src/main/ets/service/DiscoveryCache.ets
+Application/entry/src/main/ets/service/DraftStore.ets
+Application/entry/src/main/ets/service/FeaturePerformanceTrace.ets
 Application/entry/src/main/ets/service/FriendRankingPreloadService.ets
 Application/entry/src/main/ets/service/ImagePreparationService.ets
 Application/entry/src/main/ets/service/LocationService.ets
 Application/entry/src/main/ets/service/MapViewportStore.ets
 Application/entry/src/main/ets/service/MerchantLocationPicker.ets
+Application/entry/src/main/ets/service/MerchantNavigationService.ets
 Application/entry/src/main/ets/service/ModeFieldCache.ets
 Application/entry/src/main/ets/service/NearbyPerformanceTrace.ets
 Application/entry/src/main/ets/service/NearbyPreloadService.ets
+Application/entry/src/main/ets/service/OperationsPageGuard.ets
+Application/entry/src/main/ets/service/PagedDataSource.ets
+Application/entry/src/main/ets/service/PersonalPreviewLoader.ets
 Application/entry/src/main/ets/service/PhotoUploadService.ets
 Application/entry/src/main/ets/service/PrivacyStore.ets
 Application/entry/src/main/ets/service/PublishVisibilityStore.ets
 Application/entry/src/main/ets/service/PushNotificationService.ets
+Application/entry/src/main/ets/service/ReadScheduler.ets
 Application/entry/src/main/ets/service/SafeSourceLink.ets
 Application/entry/src/main/ets/service/SearchHistoryStore.ets
 Application/entry/src/main/ets/service/ServiceCardCoverCache.ets
@@ -339,11 +420,23 @@ Application/entry/src/main/resources/base/media/food_fresh.png
 Application/entry/src/main/resources/base/media/food_other.png
 Application/entry/src/main/resources/base/media/food_snack.png
 Application/entry/src/main/resources/base/media/food_staple.png
+Application/entry/src/main/resources/base/media/ic_action_dislike.svg
+Application/entry/src/main/resources/base/media/ic_action_dislike_on.svg
+Application/entry/src/main/resources/base/media/ic_action_favorite.svg
+Application/entry/src/main/resources/base/media/ic_action_favorite_on.svg
+Application/entry/src/main/resources/base/media/ic_action_like.svg
+Application/entry/src/main/resources/base/media/ic_action_like_on.svg
+Application/entry/src/main/resources/base/media/ic_action_wanted.svg
+Application/entry/src/main/resources/base/media/ic_action_wanted_on.svg
 Application/entry/src/main/resources/base/media/ic_card_share.svg
 Application/entry/src/main/resources/base/media/ic_chevron_right.svg
 Application/entry/src/main/resources/base/media/ic_link.svg
 Application/entry/src/main/resources/base/media/ic_message.svg
 Application/entry/src/main/resources/base/media/ic_more.svg
+Application/entry/src/main/resources/base/media/ic_planning_draft.svg
+Application/entry/src/main/resources/base/media/ic_planning_grant.svg
+Application/entry/src/main/resources/base/media/ic_planning_meal.svg
+Application/entry/src/main/resources/base/media/ic_planning_preference.svg
 Application/entry/src/main/resources/base/media/ic_profile_cards.svg
 Application/entry/src/main/resources/base/media/ic_profile_comments.svg
 Application/entry/src/main/resources/base/media/ic_profile_favorite.svg
@@ -366,6 +459,14 @@ Application/entry/src/main/resources/base/media/nav_recommend.svg
 Application/entry/src/main/resources/base/profile/form_config.json
 Application/entry/src/main/resources/base/profile/main_pages.json
 Application/entry/src/main/resources/dark/element/color.json
+Application/entry/src/main/resources/dark/media/ic_action_dislike.svg
+Application/entry/src/main/resources/dark/media/ic_action_dislike_on.svg
+Application/entry/src/main/resources/dark/media/ic_action_favorite.svg
+Application/entry/src/main/resources/dark/media/ic_action_favorite_on.svg
+Application/entry/src/main/resources/dark/media/ic_action_like.svg
+Application/entry/src/main/resources/dark/media/ic_action_like_on.svg
+Application/entry/src/main/resources/dark/media/ic_action_wanted.svg
+Application/entry/src/main/resources/dark/media/ic_action_wanted_on.svg
 Application/entry/src/main/resources/dark/media/ic_card_share.svg
 Application/entry/src/main/resources/dark/media/ic_chevron_right.svg
 Application/entry/src/main/resources/dark/media/ic_link.svg
@@ -388,7 +489,7 @@ Application/scripts/summarize_preload_metrics.py
 </details>
 
 <details>
-<summary>CloudProgram：62 个文件</summary>
+<summary>CloudProgram：97 个文件</summary>
 
 ```text
 CloudProgram/AppScope/resources/rawfile/schema.json
@@ -404,6 +505,8 @@ CloudProgram/clouddb/objecttype/CommentReaction.json
 CloudProgram/clouddb/objecttype/Conversation.json
 CloudProgram/clouddb/objecttype/FoodCard.json
 CloudProgram/clouddb/objecttype/FoodCardRevision.json
+CloudProgram/clouddb/objecttype/FoodList.json
+CloudProgram/clouddb/objecttype/FoodListItem.json
 CloudProgram/clouddb/objecttype/FriendContentAccessGrant.json
 CloudProgram/clouddb/objecttype/FriendReport.json
 CloudProgram/clouddb/objecttype/Friendship.json
@@ -412,11 +515,17 @@ CloudProgram/clouddb/objecttype/GroupMember.json
 CloudProgram/clouddb/objecttype/GroupMessage.json
 CloudProgram/clouddb/objecttype/IdentityBinding.json
 CloudProgram/clouddb/objecttype/MaintenanceJob.json
+CloudProgram/clouddb/objecttype/MealChoiceHistory.json
+CloudProgram/clouddb/objecttype/MealPoll.json
+CloudProgram/clouddb/objecttype/MealPollOption.json
+CloudProgram/clouddb/objecttype/MealPollVote.json
 CloudProgram/clouddb/objecttype/Merchant.json
 CloudProgram/clouddb/objecttype/NotificationEvent.json
+CloudProgram/clouddb/objecttype/PersonalFoodState.json
 CloudProgram/clouddb/objecttype/PublishRequestRecord.json
 CloudProgram/clouddb/objecttype/PushRegistration.json
 CloudProgram/clouddb/objecttype/Report.json
+CloudProgram/clouddb/objecttype/TastePreference.json
 CloudProgram/clouddb/objecttype/UserProfile.json
 CloudProgram/clouddb/objecttype/WidgetRegistration.json
 CloudProgram/cloudfunctions/shike-auth/function-config.json
@@ -429,30 +538,57 @@ CloudProgram/cloudfunctions/shike-location/content-policy.js
 CloudProgram/cloudfunctions/shike-location/function-config.json
 CloudProgram/cloudfunctions/shike-location/package-lock.json
 CloudProgram/cloudfunctions/shike-location/package.json
+CloudProgram/cloudfunctions/shike-location/read-errors.js
 CloudProgram/cloudfunctions/shike-location/runtime.js
 CloudProgram/cloudfunctions/shike-location/shikeLocation.ts
 CloudProgram/cloudfunctions/shike-location/tsconfig.json
+CloudProgram/cloudfunctions/shike-maintenance/function-config.json
+CloudProgram/cloudfunctions/shike-maintenance/shikeMaintenance.js
+CloudProgram/cloudfunctions/shike-maintenance/timer-contract.json
 CloudProgram/cloudfunctions/shike-media/check-deployment.mjs
 CloudProgram/cloudfunctions/shike-media/content-policy.js
 CloudProgram/cloudfunctions/shike-media/function-config.json
 CloudProgram/cloudfunctions/shike-media/package-lock.json
 CloudProgram/cloudfunctions/shike-media/package.json
+CloudProgram/cloudfunctions/shike-media/read-errors.js
 CloudProgram/cloudfunctions/shike-media/runtime.js
 CloudProgram/cloudfunctions/shike-media/shikeMedia.ts
 CloudProgram/cloudfunctions/shike-media/tsconfig.json
+CloudProgram/cloudfunctions/shike-service/authentication-cleanup.js
 CloudProgram/cloudfunctions/shike-service/content-policy.js
 CloudProgram/cloudfunctions/shike-service/function-config.json
+CloudProgram/cloudfunctions/shike-service/lifecycle-services.js
+CloudProgram/cloudfunctions/shike-service/moderation-services.js
 CloudProgram/cloudfunctions/shike-service/package-lock.json
 CloudProgram/cloudfunctions/shike-service/package.json
+CloudProgram/cloudfunctions/shike-service/personal-collections.js
+CloudProgram/cloudfunctions/shike-service/read-errors.js
 CloudProgram/cloudfunctions/shike-service/runtime.js
 CloudProgram/cloudfunctions/shike-service/shikeService.ts
 CloudProgram/cloudfunctions/shike-service/stage1-services.js
 CloudProgram/cloudfunctions/shike-service/stage2-services.js
 CloudProgram/cloudfunctions/shike-service/stage3-services.js
+CloudProgram/cloudfunctions/shike-service/stage4-services.js
+CloudProgram/cloudfunctions/shike-service/stage5-services.js
+CloudProgram/cloudfunctions/shike-service/stage6-services.js
+CloudProgram/cloudfunctions/shike-service/stage7-services.js
+CloudProgram/cloudfunctions/shike-service/stages47-common.js
 CloudProgram/cloudfunctions/shike-service/tsconfig.json
+CloudProgram/cloudfunctions/shike-share/function-config.json
+CloudProgram/cloudfunctions/shike-share/gateway-contract.json
+CloudProgram/cloudfunctions/shike-share/shikeShare.js
+CloudProgram/hosting/share/app.js
+CloudProgram/hosting/share/config.json
+CloudProgram/hosting/share/hosting-contract.json
+CloudProgram/hosting/share/index.html
+CloudProgram/hosting/share/style.css
 CloudProgram/package-lock.json
 CloudProgram/package.json
+CloudProgram/scripts/check-release-source.mjs
+CloudProgram/scripts/configure-share-hosting.mjs
 CloudProgram/scripts/package-cloud-object.mjs
+CloudProgram/scripts/package-maintenance.mjs
+CloudProgram/scripts/package-share-http.mjs
 ```
 
 </details>

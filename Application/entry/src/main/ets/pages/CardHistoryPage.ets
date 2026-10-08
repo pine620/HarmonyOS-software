@@ -1,142 +1,96 @@
 import { common } from '@kit.AbilityKit';
 import { FoodCard } from '../model/CloudContracts';
-import { coverFor } from '../components/FoodCover';
 import { CardRepository } from '../repository/CardRepository';
 import { AuthService } from '../service/AuthService';
+import { AuthSessionStore } from '../service/AuthSessionStore';
 import { CardVisit, CardVisitStore } from '../service/CardVisitStore';
-
-interface HistoryError {
-  message?: string;
-}
-
-function historyDate(timestamp: number): string {
-  const date: Date = new Date(timestamp);
-  if (!Number.isFinite(date.getTime())) return '';
-  const month: number = date.getMonth() + 1;
-  const day: number = date.getDate();
-  return `${date.getFullYear()}-${month < 10 ? `0${month}` : month.toString()}-${day < 10 ? `0${day}` : day.toString()}`;
-}
+import { PersonalPreviewLoader, PersonalPreviewRow, PersonalPreviewSource } from '../service/PersonalPreviewLoader';
+import { PersonalPreviewTile } from '../components/PersonalPreviewTile';
+import { ErrorDetail, errorText } from '../common/ErrorKit';
+import { ReadRequestOptions } from '../service/ReadScheduler';
 
 @Component
 export struct CardHistoryPage {
   onOpenCard: (card: FoodCard) => void = (_card: FoodCard): void => {};
-  @State visits: Array<CardVisit> = [];
-  @State openingCardId: string = '';
+  @StorageLink('stage47AppActive') @Watch('onEnvironmentChanged') appActive: boolean = true;
+  @StorageLink('accountContentRevision') @Watch('onEnvironmentChanged') accountContentRevision: number = 0;
+  @State count: number = 0;
+  @State opening: boolean = false;
   @State clearPending: boolean = false;
-  @State status: string = '';
-  private repository: CardRepository = new CardRepository();
-
-  aboutToAppear(): void {
-    this.loadVisits();
-  }
-
-  private loadVisits(): void {
-    const uid: string = AuthService.profile()?.uid || '';
-    if (uid.length === 0) {
-      this.visits = [];
-      this.status = '登录状态已失效，请重新登录。';
-      return;
-    }
+  @State message: string = '';
+  private source: PersonalPreviewSource = new PersonalPreviewSource();
+  private previews: PersonalPreviewLoader = new PersonalPreviewLoader(this.source);
+  private cards: CardRepository = new CardRepository();
+  private active: boolean = false;
+  private visible: boolean = false;
+  private generation: number = 0;
+  private owner: string = '';
+  private session: number = 0;
+  private context(): common.UIAbilityContext { return this.getUIContext().getHostContext() as common.UIAbilityContext; }
+  private valid(generation: number): boolean { return this.active && this.appActive && generation === this.generation &&
+    this.owner === (AuthService.profile()?.uid || '') && this.session === AuthSessionStore.generation(); }
+  private activate(): void {
+    if (this.active || !this.appActive) return;
+    this.active = true; this.generation++; this.owner = AuthService.profile()?.uid || ''; this.session = AuthSessionStore.generation();
+    this.previews.reset(true); this.opening = false; this.message = '';
     try {
-      const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      this.visits = CardVisitStore.list(context, uid);
-      this.status = '';
-    } catch (error) {
-      this.status = `浏览记录读取失败：${(error as HistoryError).message || '请稍后重试'}`;
-    }
+      const visits: Array<CardVisit> = CardVisitStore.list(this.context(), this.owner);
+      this.source.setRows(visits.map((visit: CardVisit): PersonalPreviewRow => new PersonalPreviewRow(visit.cardId, visit.visitedAt)));
+      this.count = visits.length; this.window(0, 5);
+    } catch (error) { this.message = errorText(error as ErrorDetail); }
   }
-
-  private async openVisit(visit: CardVisit): Promise<void> {
-    if (this.openingCardId.length > 0) return;
-    this.openingCardId = visit.cardId;
+  private deactivate(): void {
+    this.active = false; this.generation++; this.previews.reset(false); this.source.setRows([]);
+    this.count = 0; this.opening = false; this.clearPending = false;
+  }
+  private onEnvironmentChanged(): void { this.deactivate(); if (this.visible && this.appActive) this.activate(); }
+  aboutToDisappear(): void { this.visible = false; this.deactivate(); }
+  private window(first: number, last: number): void { if (this.active) this.previews.window(this.context(), first, last, true); }
+  private refresh(): void { this.deactivate(); this.activate(); }
+  private clear(): void {
+    if (!this.active || this.owner.length === 0) return;
+    try { CardVisitStore.clear(this.context(), this.owner); this.deactivate(); this.activate(); this.message = '本机浏览记录已清空。'; }
+    catch (error) { this.message = errorText(error as ErrorDetail); }
+  }
+  private async open(cardId: string): Promise<void> {
+    if (!this.active || this.opening) return;
+    const generation: number = this.generation; this.opening = true;
     try {
-      const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      const card: FoodCard = await this.repository.detail(context, visit.cardId);
-      this.status = '';
-      this.onOpenCard(card);
-    } catch (error) {
-      this.status = `卡片暂时无法打开：${(error as HistoryError).message || '请稍后重试'}`;
-    } finally {
-      this.openingCardId = '';
-    }
+      const options: ReadRequestOptions = { mayContinue: async (): Promise<boolean> => this.valid(generation) };
+      const card: FoodCard = await this.cards.detail(this.context(), cardId, options);
+      if (!this.valid(generation)) return;
+      CardVisitStore.backfillCover(this.context(), this.owner, card); this.onOpenCard(card);
+    } catch (error) { if (this.valid(generation)) { this.refresh(); this.message = errorText(error as ErrorDetail); } }
+    finally { if (this.valid(generation)) this.opening = false; }
   }
-
-  private clearVisits(): void {
-    const uid: string = AuthService.profile()?.uid || '';
-    if (uid.length === 0) return;
-    try {
-      const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      CardVisitStore.clear(context, uid);
-      this.visits = [];
-      this.status = '本机浏览记录已清空。';
-      this.clearPending = false;
-    } catch (error) {
-      this.status = `清空失败：${(error as HistoryError).message || '请稍后重试'}`;
-    }
-  }
-
   build() {
     NavDestination() {
       Column({ space: 12 }) {
         Row() {
           Column({ space: 3 }) {
-            Text('浏览记录').fontSize(20).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'));
-            Text('只保存在本机，最多保留最近 100 张卡片')
-              .fontSize(12).fontColor($r('app.color.muted'));
-          }.alignItems(HorizontalAlign.Start);
-          Blank();
-          if (this.visits.length > 0) {
-            Button(this.clearPending ? '取消' : '清空').height(44).fontSize(12)
-              .backgroundColor($r('app.color.surface')).fontColor($r('app.color.danger'))
-              .onClick((): void => { this.clearPending = !this.clearPending; });
-          }
-        }.width('100%').padding(14).backgroundColor($r('app.color.surface')).borderRadius(18);
-        if (this.clearPending) {
-          Column({ space: 8 }) {
-            Text('确认清空这台设备上的浏览记录？').fontSize(13)
-              .fontColor($r('app.color.ink')).width('100%');
-            Button('确认清空').height(44).width('100%')
-              .backgroundColor($r('app.color.danger_action')).fontColor($r('app.color.on_danger_action'))
-              .onClick((): void => this.clearVisits());
-          }.width('100%').padding(12).backgroundColor($r('app.color.danger_soft')).borderRadius(14);
-        }
-        if (this.status.length > 0) {
-          Text(this.status).fontSize(12).fontColor($r('app.color.muted'))
-            .width('100%').padding(10);
-        }
-        if (this.visits.length === 0) {
-          Text('还没有浏览记录。打开商品卡片后，会在这里留下足迹。')
-            .fontSize(14).fontColor($r('app.color.muted')).textAlign(TextAlign.Center)
-            .width('100%').padding(28).backgroundColor($r('app.color.surface')).borderRadius(18);
-        } else {
-          List({ space: 8 }) {
-            ForEach(this.visits, (visit: CardVisit): void => {
-              ListItem() {
-                Button() {
-                  Row({ space: 12 }) {
-                    Image(coverFor(visit.category)).width(58).height(58)
-                      .objectFit(ImageFit.Cover).borderRadius(12).accessibilityLevel('no');
-                    Column({ space: 4 }) {
-                      Text(visit.productName).fontSize(15).fontWeight(FontWeight.Medium)
-                        .fontColor($r('app.color.ink')).maxLines(1)
-                        .textOverflow({ overflow: TextOverflow.Ellipsis });
-                      if (visit.priceText.length > 0) {
-                        Text(visit.priceText).fontSize(12).fontColor($r('app.color.accent_action'));
-                      }
-                      Text(historyDate(visit.visitedAt)).fontSize(11).fontColor($r('app.color.muted'));
-                    }.layoutWeight(1).alignItems(HorizontalAlign.Start);
-                    Image($r('app.media.ic_chevron_right')).width(18).height(18).accessibilityLevel('no');
-                  }.width('100%').padding(12);
-                }.width('100%').padding(0).backgroundColor($r('app.color.surface'))
-                  .borderRadius(16).enabled(this.openingCardId.length === 0)
-                  .accessibilityText(`${visit.productName}，${historyDate(visit.visitedAt)}浏览，打开卡片`)
-                  .onClick((): void => { void this.openVisit(visit); });
-              }
-            }, (visit: CardVisit): string => visit.cardId);
-          }.width('100%').layoutWeight(1).edgeEffect(EdgeEffect.Spring).scrollBar(BarState.Off);
-        }
-      }.width('100%').height('100%').padding({ left: 16, right: 16, top: 12, bottom: 20 })
+            Text(`浏览记录 · ${this.count} 条`).fontSize(18).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'));
+            Text('仅保存在本机，最多保留最近 100 张卡片').fontSize(12).fontColor($r('app.color.muted'));
+          }.layoutWeight(1).alignItems(HorizontalAlign.Start);
+          Button(this.clearPending ? '取消' : '清空').constraintSize({ minWidth: 48, minHeight: 48 })
+            .fontSize(12).backgroundColor(Color.Transparent).fontColor($r('app.color.danger'))
+            .enabled(this.count > 0 && !this.opening).onClick((): void => { this.clearPending = !this.clearPending; });
+        }.width('100%').padding(12).backgroundColor($r('app.color.surface')).borderRadius(16);
+        if (this.clearPending) { Button('确认清空本机浏览记录').width('100%').constraintSize({ minHeight: 48 })
+          .backgroundColor($r('app.color.danger_action')).fontColor($r('app.color.on_danger_action'))
+          .onClick((): void => this.clear()); }
+        if (this.message.length > 0) { Text(this.message).fontSize(13).fontColor($r('app.color.muted')).width('100%'); }
+        Button('重新读取预览').constraintSize({ minHeight: 48 }).fontSize(13).enabled(!this.opening)
+          .fontColor($r('app.color.action_text')).backgroundColor(Color.Transparent).onClick((): void => this.refresh());
+        if (this.count === 0) { Text('还没有本机浏览记录').fontSize(16).fontColor($r('app.color.muted')).width('100%').padding(20); }
+        List({ space: 10 }) {
+          LazyForEach(this.source, (row: PersonalPreviewRow): void => {
+            ListItem() { PersonalPreviewTile({ row, busy: this.opening,
+              onOpen: (cardId: string): void => { void this.open(cardId); } }); }
+          }, (row: PersonalPreviewRow): string => row.cardId);
+        }.width('100%').layoutWeight(1).cachedCount(2).onScrollIndex((first: number, last: number): void => this.window(first, last));
+      }.width('100%').height('100%').padding({ left: 16, right: 16, top: 8, bottom: 12 })
         .backgroundColor($r('app.color.canvas')).alignItems(HorizontalAlign.Start);
-    }.title('浏览记录');
+    }.title('浏览记录').onShown((): void => { this.visible = true; this.activate(); })
+      .onHidden((): void => { this.visible = false; this.deactivate(); });
   }
 }

@@ -1,0 +1,90 @@
+{
+  "objectTypeName": "PersonalFoodState",
+  "fields": [
+    {
+      "fieldName": "ownerUid",
+      "fieldType": "String",
+      "notNull": true,
+      "belongPrimaryKey": true
+    },
+    {
+      "fieldName": "cardId",
+      "fieldType": "String",
+      "notNull": true,
+      "belongPrimaryKey": true
+    },
+    {
+      "fieldName": "state",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "privateNote",
+      "fieldType": "Text"
+    },
+    {
+      "fieldName": "eatenAt",
+      "fieldType": "Date"
+    },
+    {
+      "fieldName": "personalScore",
+      "fieldType": "Integer"
+    },
+    {
+      "fieldName": "createdAt",
+      "fieldType": "Date"
+    },
+    {
+      "fieldName": "updatedAt",
+      "fieldType": "Date"
+    },
+    {
+      "fieldName": "version",
+      "fieldType": "Long"
+    }
+  ],
+  "indexes": [
+    {
+      "indexName": "index_1",
+      "indexList": [
+        {
+          "fieldName": "ownerUid",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "state",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "updatedAt",
+          "sortType": "DESC"
+        },
+        {
+          "fieldName": "cardId",
+          "sortType": "ASC"
+        }
+      ]
+    }
+  ],
+  "permissions": [
+    {
+      "role": "World",
+      "rights": []
+    },
+    {
+      "role": "Authenticated",
+      "rights": []
+    },
+    {
+      "role": "Creator",
+      "rights": []
+    },
+    {
+      "role": "Administrator",
+      "rights": [
+        "Read",
+        "Upsert",
+        "Delete"
+      ]
+    }
+  ]
+}
