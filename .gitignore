@@ -37,3 +37,13 @@ local.properties
 /AGENTS.md
 /.github-publish/
 **/__pycache__/
+
+# Generated cloud entries and function-owned DevEco dependency copies
+CloudProgram/cloudfunctions/shike-auth/shikeAuth.js*
+CloudProgram/cloudfunctions/shike-service/shikeService.js*
+CloudProgram/cloudfunctions/shike-media/shikeMedia.js*
+CloudProgram/cloudfunctions/shike-location/shikeLocation.js*
+CloudProgram/cloudfunctions/*/shared/
+CloudProgram/cloudfunctions/shike-maintenance/service/
+CloudProgram/cloudfunctions/shike-maintenance/media/
+CloudProgram/cloudfunctions/shike-share/service/

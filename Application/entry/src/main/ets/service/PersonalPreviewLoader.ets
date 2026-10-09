@@ -2,7 +2,7 @@ import { common } from '@kit.AbilityKit';
 import { FoodCard } from '../model/CloudContracts';
 import { CardPreviewItem, CardPreviewsResponse } from '../model/PersonalCollectionModels';
 import { PersonalCollectionRepository } from '../repository/PersonalCollectionRepository';
-import { PhotoUploadService } from './PhotoUploadService';
+import { ImageRepository } from './ImageRepository';
 import { CloudBusinessError, ReadCancelledError } from './CloudReadErrors';
 import { AuthService } from './AuthService';
 import { AuthSessionStore } from './AuthSessionStore';
@@ -116,8 +116,8 @@ export class PersonalPreviewLoader {
     const card: FoodCard | undefined = row.card;
     if (card === undefined) return;
     try {
-      const url: string = await PhotoUploadService.getDownloadUrl(context, card.photoBucket, card.photoPath,
-        index > this.last ? 'low' : 'high', async (): Promise<boolean> => this.valid(generation) && this.wanted(index));
+      const url: string = await ImageRepository.getDownloadUrl(context, card.photoBucket, card.photoPath,
+        index > this.last ? 'low' : 'high', async (): Promise<boolean> => this.valid(generation) && this.wanted(index), card.photos?.[0], true);
       if (!this.valid(generation) || !this.wanted(index)) return;
       card.photoUrl = url; row.card = card; row.state = url.length > 0 ? 'READY' : 'ERROR'; this.source.changed(index);
     } catch (error) {

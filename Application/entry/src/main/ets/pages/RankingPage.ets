@@ -37,7 +37,7 @@ export struct RankingPage {
       const result: MerchantRankingPage = await this.repo.ranking(request); if (!this.active || generation !== this.generation) return;
       this.cards = more ? this.cards.concat(result.cards.filter((c: FoodCard): boolean => !this.cards.some((r: FoodCard): boolean => r.id === c.id))) : result.cards;
       this.cursor = result.nextCursor; this.message = this.cards.length === 0 ? '当前范围暂无推荐。' :
-        '已找到 ' + this.cards.length.toString() + ' 条推荐' + (this.cursor.length > 0 ? '，可继续加载。' : '。');
+        '已找到 ' + this.cards.length.toString() + ' 条推荐' + (this.cursor.length > 0 ? '，可继续加载。' : '。') + (result.coverage !== 'COMPLETE' ? ' 当前有界结果未覆盖全部卡片。' : '');
     } catch (error) { if (generation === this.generation) { this.cards = []; this.cursor = ''; this.loadFailed = true; this.featureNotReady = featureUnavailable(error as Object); this.message = stage47ErrorText(error as Object, '榜单加载失败。'); } }
     finally { if (generation === this.generation) this.busy = false; }
   }
@@ -55,7 +55,7 @@ export struct RankingPage {
       } else {
         Text(this.featureNotReady ? '榜单暂未开放' : this.loadFailed ? '榜单暂时加载失败' : '附近暂无推荐')
           .fontSize(18).fontWeight(FontWeight.Medium).fontColor($r('app.color.ink'))
-        Text(this.featureNotReady ? '先看看公开推荐，开放后可在这里查看附近榜单。' : this.message)
+        Text(this.message)
           .fontSize(14).lineHeight(21).textAlign(TextAlign.Center).fontColor($r('app.color.muted')).width('100%')
         if (this.featureNotReady) {
           Button('返回推荐').attributeModifier(new SecondaryActionStyle()).height(48)

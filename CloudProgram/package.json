@@ -10,7 +10,14 @@
     "package:share": "node scripts/package-share-http.mjs",
     "package:share:web": "node scripts/configure-share-hosting.mjs",
     "package:maintenance": "node scripts/package-maintenance.mjs",
-    "check:release-source": "node scripts/check-release-source.mjs"
+    "test:optimization": "node --test tests/optimization-contracts.test.cjs",
+    "check:release-source": "node scripts/check-release-source.mjs",
+    "test:repair": "node --test tests/repair-contracts.test.cjs",
+    "package:image": "node scripts/package-functions.mjs shike-image",
+    "test:image": "node --test tests/image-read-contracts.test.cjs tests/image-handler-contracts.test.cjs",
+    "check:artifact": "node scripts/check-artifact.mjs",
+    "prepare:deveco": "node scripts/prepare-deveco.mjs",
+    "check:deveco": "node scripts/prepare-deveco.mjs --check"
   },
   "author": "",
   "license": "ISC",

@@ -6,7 +6,7 @@ import { CardPhoto } from '../model/CloudContracts';
 import { ModerationKind, ModerationDetailRequest, ModerationDetail, ModerationAction, ModerationDecisionRequest, ReviewField } from '../model/OperationsModels';
 import { OperationsRepository } from '../repository/OperationsRepository';
 import { OperationsPageGuard, OperationsTicket } from '../service/OperationsPageGuard';
-import { PhotoUploadService } from '../service/PhotoUploadService';
+import { ImageRepository } from '../service/ImageRepository';
 @Component
 export struct ModerationDetailPage {
   @Prop kind: ModerationKind = 'CARD'; @Prop itemId: string = '';
@@ -38,7 +38,7 @@ export struct ModerationDetailPage {
     const ticket: OperationsTicket = this.guard.ticket(); if (!this.guard.valid(ticket) || this.photoBusy || this.busy) return;
     this.photoBusy = true; this.photoUrl = ''; this.selectedPhoto = photo.id;
     try { const context: common.Context = getContext(this); const guard: () => Promise<boolean> = async (): Promise<boolean> => this.guard.valid(ticket);
-      const url: string = this.kind === 'REVISION' ? await PhotoUploadService.getRevisionDownloadUrl(context, this.itemId, photo.id, guard) : await PhotoUploadService.getReviewDownloadUrl(context, photo.id, guard);
+      const url: string = this.kind === 'REVISION' ? await ImageRepository.getRevisionDownloadUrl(context, this.itemId, photo.id, guard) : await ImageRepository.getReviewDownloadUrl(context, photo.id, guard);
       if (this.guard.valid(ticket)) this.photoUrl = url;
     } catch (error) { if (this.guard.valid(ticket)) this.message = stage47ErrorText(error as Object, '图片读取失败，可重试。'); }
     finally { if (this.guard.valid(ticket)) this.photoBusy = false; }
@@ -81,7 +81,11 @@ export struct ModerationDetailPage {
           .attributeModifier(new ChoiceActionStyle(this.selectedPhoto === photo.id)).onClick((): void => { void this.photo(photo); })
       }, (photo: CardPhoto): string => photo.id)
       if (this.photoBusy) { Text('正在读取实拍…').fontSize(14).fontColor($r('app.color.muted')) }
-      if (this.photoUrl.length > 0) { Image(this.photoUrl).width('100%').height(280).objectFit(ImageFit.Contain).accessibilityText('当前审核内容实拍图') }
+      if (this.photoUrl.length > 0) { Image(this.photoUrl).width('100%').height(280).objectFit(ImageFit.Contain)
+        .onError((): void => { const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
+          void ImageRepository.reportDecodeFailure(context, this.selectedPhoto, 'ORIGINAL', this.kind === 'REVISION' ? 'REVISION' : 'REVIEW', this.kind === 'REVISION' ? this.itemId : '').catch((): void => {});
+          this.photoUrl = ''; this.message = '图片解码失败，请重新读取实拍图。'; })
+        .accessibilityText('当前审核内容实拍图') }
     }
     if (this.kind === 'MERCHANT') {
       Text('审核坐标系').fontSize(15).fontColor($r('app.color.ink'))

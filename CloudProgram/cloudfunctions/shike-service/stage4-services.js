@@ -1,6 +1,6 @@
 'use strict';
 const crypto=require('crypto');
-const {dateMillis}=require('./content-policy');
+const {dateMillis}=require('./shared/content-policy');
 const {fail,hash,int,version,token,encode,preference,preferenceView,hasPreference,score,friendsAllowed}=require('./stages47-common');
 function createStage4Services(ctx) {
  const {collection,one,models}=ctx; const model=(name,row)=>Object.assign(new models[name](),row);
@@ -17,7 +17,7 @@ function createStage4Services(ctx) {
   }});if(!committed)throw fail('偏好未保存，请重试。','CONFLICT');return result;
  }
  async function recommendations(uid,payload,env) {
-  const p=uid?await get(uid,env):{...preference(payload.preference||{}),version:0};
+  const p=uid?await ctx.withReadPhase('preferences',()=>get(uid,env)):{...preference(payload.preference||{}),version:0};
   const size=int(payload.pageSize===undefined?6:payload.pageSize,1,30);const signature=hash({uid,p,kind:'recommendations'});
   let saved=token(payload.cursor,signature); const at=saved?saved.at:Date.now();const seed=saved?saved.seed:crypto.randomBytes(12).toString('hex');
   if(saved && (!Array.isArray(saved.order)||saved.order.length>400||!saved.order.every(x=>x && typeof x.id==='string' && typeof x.explore==='boolean')||new Set(saved.order.map(x=>x.id)).size!==saved.order.length||!Number.isSafeInteger(saved.position)||saved.position<0||saved.position>saved.order.length||typeof seed!=='string'||seed.length>64))throw fail('推荐分页失效。','CURSOR_STALE');
@@ -26,10 +26,12 @@ function createStage4Services(ctx) {
    // Reserve the other new index for stable owner pagination; never alter an existing index.
    // Published-time ordering stays inside this pool. No action/state/history data is read for scores.
    const caps=await ctx.stage3().capabilities(env);
-   const raw=await collection(env,'FoodCard').query().equalTo('status','APPROVED').lessThanOrEqualTo('createdAt',at).orderByDesc('createdAt').orderByAsc('id').limit(400).get();
+   const raw=await ctx.withReadPhase('candidates',()=>collection(env,'FoodCard').query().equalTo('status','APPROVED').lessThanOrEqualTo('createdAt',at).orderByDesc('createdAt').orderByAsc('id').limit(400).get());
+   ctx.recordReadCounts({scannedCandidateCount:raw.length});
    const candidates=raw.filter(r=>{const published=dateMillis(r.publishedAt);return friendsAllowed(env,r) && (!caps.searchEnabled || published!==null && published<=at);});
    if(caps.searchEnabled)candidates.sort((a,b)=>dateMillis(b.publishedAt)-dateMillis(a.publishedAt) || a.id.localeCompare(b.id));
    const readable=await ctx.withReadPhase('candidate-permissions',()=>ctx.readableCardRows(candidates,uid,env,!uid));
+   ctx.recordReadCounts({eligibleCandidateCount:readable.length});
    let order=readable.map(r=>({id:r.id,explore:false}));
    if(hasPreference(p)){
     const ranked=readable.slice().sort((a,b)=>score(b,p,at).value-score(a,p,at).value || Number(b.createdAt)-Number(a.createdAt) || a.id.localeCompare(b.id));
@@ -44,6 +46,7 @@ function createStage4Services(ctx) {
    saved={order,position:0,seed,scanned:raw.length,coverage:raw.length===400?'PARTIAL_SCAN_LIMIT':'COMPLETE'};
   }
   let cards=[];const reasons=new Map(),sources=new Map(),fetchedIds=new Set();let position=saved.position,consumed=0;
+  ctx.recordReadCounts({scannedCandidateCount:saved.scanned});
   // Prefetch up to ten IDs, but consume only visited positions; unused rows stay on the next page.
   // Deleted/denied/changed rows consume their position. Refill is bounded per response.
   while(position<saved.order.length && cards.length<size && consumed<60){
@@ -52,6 +55,7 @@ function createStage4Services(ctx) {
      const count=Math.min(10,60-consumed);
      const entries=saved.order.slice(position,position+count);
      for(const entry of entries)fetchedIds.add(entry.id);
+     ctx.recordReadCounts({fetchedCandidateCount:fetchedIds.size,consumedCandidateCount:consumed});
      const byId=await ctx.readCardRowsByIds(entries.map(entry=>entry.id),env);
      const rows=entries.map(entry=>byId.get(entry.id)).filter(row=>row&&friendsAllowed(env,row));
      const context=await ctx.createCardReadContext(rows,uid,env);
@@ -66,6 +70,7 @@ function createStage4Services(ctx) {
       cards.push(card);sources.set(card.id,row);
       reasons.set(card.id,{cardId:row.id,reasons:entry.explore?['探索推荐']:score(row,p,at).reasons,exploration:entry.explore});
      }
+     ctx.recordReadCounts({consumedCandidateCount:consumed});
     }
    });
    // A new authority context on EVERY final pass, including after a refill.

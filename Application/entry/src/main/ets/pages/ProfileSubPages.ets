@@ -10,6 +10,7 @@ import { CardVisitStore } from '../service/CardVisitStore';
 import { AuthService } from '../service/AuthService';
 import { LocationService } from '../service/LocationService';
 import { AvatarCrop, ImageDimensions, ImagePreparationService, PreparedPhoto } from '../service/ImagePreparationService';
+import { ImageRepository } from '../service/ImageRepository';
 import { PhotoUploadService } from '../service/PhotoUploadService';
 import { PushNotificationService, PushNotificationStatus } from '../service/PushNotificationService';
 import { ServiceCardRemoteSyncService, ServiceCardRemoteSyncStatus } from '../service/ServiceCardRemoteSyncService';
@@ -965,7 +966,7 @@ export struct ProfileEditPage {
       profile.coverBucket === undefined || profile.coverBucket.length === 0) return;
     try {
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      const coverUrl = await PhotoUploadService.getDownloadUrl(context, profile.coverBucket, profile.coverPath);
+      const coverUrl = await ImageRepository.getDownloadUrl(context, profile.coverBucket, profile.coverPath);
       if (this.preparedCover === undefined && !this.clearCoverRequested) this.coverPreviewUri = coverUrl;
     } catch (_error) {
       if (this.preparedCover === undefined && !this.clearCoverRequested) this.coverPreviewUri = '';

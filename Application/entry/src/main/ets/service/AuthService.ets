@@ -15,10 +15,11 @@ import {
 } from '../model/CloudContracts';
 import { AuthSessionStore } from './AuthSessionStore';
 import { CloudGateway } from './CloudGateway';
-import { MediaPriority, PhotoUploadService } from './PhotoUploadService';
+import { MediaPriority, ImageRepository } from './ImageRepository';
 import { PushNotificationService } from './PushNotificationService';
 import { ServiceCardRemoteSyncService } from './ServiceCardRemoteSyncService';
-import { DiscoveryCache } from './DiscoveryCache';
+import { DiscoveryFeedState } from './DiscoveryFeedState';
+import { SessionRestoreStore, SessionProviderHint } from './SessionRestoreStore';
 
 type AuthMode = 'none' | 'email' | 'huawei';
 
@@ -45,6 +46,9 @@ function authErrorCode(error: Object): string {
 export class AuthService {
   private static currentProfile: UserProfile | undefined = undefined;
   private static authMode: AuthMode = 'none';
+  private static intent: number = 0;
+  static sessionIntent(): number { return AuthService.intent; }
+  private static assertIntent(intent: number): void { if (intent !== AuthService.intent) throw new Error('登录操作已被新的账号操作取代。'); }
 
   static profile(): UserProfile | undefined {
     return AuthService.currentProfile;
@@ -65,6 +69,8 @@ export class AuthService {
     verifyCode: string,
     register: boolean
   ): Promise<UserProfile> {
+    const intent: number = ++AuthService.intent;
+    AppStorage.setOrCreate('sessionRestoreMessage', '');
     AuthSessionStore.initialize(context);
     try {
       if (register) {
@@ -85,19 +91,23 @@ export class AuthService {
     } catch (error) {
       throw new Error(`邮箱认证失败：${authErrorText(error as Object)}`);
     }
+    AuthService.assertIntent(intent);
     AuthService.authMode = 'email';
+    await SessionRestoreStore.save(context, 'EMAIL');
     try {
-      return await AuthService.loadProfile(context);
+      return await AuthService.loadProfile(context, intent);
     } catch (error) {
       throw new Error(`食刻资料初始化失败：${authErrorText(error as Object)}`);
     }
   }
 
   static async login(context: common.Context, interactive: boolean = true): Promise<UserProfile> {
+    if (interactive) { AuthService.intent++; AppStorage.setOrCreate('sessionRestoreMessage', ''); }
+    const intent: number = AuthService.intent;
     AuthSessionStore.initialize(context);
     // Never let a native email user or an expired legacy AGC token become the
     // credential for the next Huawei compatibility exchange.
-    await AuthSessionStore.signOut();
+    if (interactive) await AuthSessionStore.signOut();
     const state: string = util.generateRandomUUID();
     const nonce: string = util.generateRandomUUID();
     // Huawei ID remains a compatibility entry point. It is exchanged for an
@@ -108,6 +118,7 @@ export class AuthService {
     request.nonce = nonce;
     const controller = new authentication.AuthenticationController(context);
     const raw = await controller.executeRequest(request);
+    AuthService.assertIntent(intent);
     const response = raw as authentication.LoginWithHuaweiIDResponse;
     if (response.state !== state) {
       throw new Error('华为账号登录校验失败，请重新发起授权。');
@@ -128,6 +139,7 @@ export class AuthService {
     } catch (error) {
       throw new Error(`华为账号会话交换失败：${authErrorText(error as Object)}`);
     }
+    AuthService.assertIntent(intent);
     if (session.migrationTicket === undefined || session.migrationTicket.length === 0) {
       AuthSessionStore.clearLegacyAccessToken();
       throw new Error('兼容账号迁移凭证缺失，请联系管理员。');
@@ -140,15 +152,16 @@ export class AuthService {
       if (!migrationResult.success) {
         throw new Error('兼容账号迁移未完成。');
       }
+      AuthService.assertIntent(intent);
       AuthService.authMode = 'huawei';
+      await SessionRestoreStore.save(context, 'HUAWEI');
     } catch (error) {
-      AuthService.clearLocalSession();
+      if (intent === AuthService.intent) AuthSessionStore.clearLegacyAccessToken();
       throw new Error(`华为账号迁移失败：${authErrorText(error as Object)}`);
     }
     try {
-      return await AuthService.loadProfile(context);
+      return await AuthService.loadProfile(context, intent);
     } catch (error) {
-      AuthService.clearLocalSession();
       throw new Error(`食刻资料初始化失败：${authErrorText(error as Object)}`);
     }
   }
@@ -262,8 +275,7 @@ export class AuthService {
         await AuthService.login(context, false);
         return;
       } catch (_error) {
-        AuthService.clearLocalSession();
-        throw new Error('登录状态已过期，静默续期未完成，请重新登录。');
+        throw new Error('会话暂未恢复，请检查网络后重试；系统要求时请继续登录。');
       }
     }
     AuthService.clearLocalSession();
@@ -271,19 +283,35 @@ export class AuthService {
   }
 
   static async restore(context: common.Context, allowHuaweiRestore: boolean = true): Promise<UserProfile | undefined> {
+    const intent: number = AuthService.intent;
     AuthSessionStore.initialize(context);
+    AppStorage.setOrCreate('sessionRestoreMessage', '');
     try {
+      const hint: SessionProviderHint = await SessionRestoreStore.read(context);
+      if (intent !== AuthService.intent) return AuthService.currentProfile;
+      if (hint === 'SIGNED_OUT') { AuthService.clearLocalSession(); return undefined; }
       const currentUser = await AuthSessionStore.getCurrentUser();
+      if (intent !== AuthService.intent) return AuthService.currentProfile;
       if (currentUser !== null) {
-        await AuthSessionStore.getAccessToken(false);
         AuthService.authMode = 'email';
-        return await AuthService.loadProfile(context);
+        await AuthSessionStore.getAccessToken(false);
+        const profile: UserProfile = await AuthService.loadProfile(context, intent);
+        if (intent !== AuthService.intent) return AuthService.currentProfile;
+        await SessionRestoreStore.save(context, 'EMAIL');
+        return profile;
       }
-      if (allowHuaweiRestore) return await AuthService.login(context, false);
-      AuthService.clearLocalSession();
+      if (allowHuaweiRestore && hint === 'HUAWEI') return await AuthService.login(context, false);
       return undefined;
-    } catch (_error) {
-      AuthService.clearLocalSession();
+    } catch (error) {
+      if (intent !== AuthService.intent) return AuthService.currentProfile;
+      const code: string = authErrorCode(error as Object);
+      if (code === 'ACCOUNT_INACTIVE' || code === 'AUTH_REQUIRED') {
+        AuthService.clearLocalSession();
+        AppStorage.setOrCreate('sessionRestoreMessage', '账号需要重新认证，请继续登录。');
+      } else {
+        // A failed network/profile request must not sign the SDK user out.
+        AppStorage.setOrCreate('sessionRestoreMessage', '会话暂未恢复，可重试或继续登录。');
+      }
       return undefined;
     }
   }
@@ -296,11 +324,16 @@ export class AuthService {
     return resolvedProfile;
   }
 
-  private static async loadProfile(context: common.Context): Promise<UserProfile> {
+  private static async loadProfile(context: common.Context, expectedIntent: number = AuthService.intent): Promise<UserProfile> {
+    const intent: number = expectedIntent;
+    AuthService.assertIntent(intent);
+    const session: number = AuthSessionStore.generation();
     const profileRequest: UpdateProfileRequest = { nickname: '', avatarMediaId: '', readOnly: true };
     const storedProfile: UserProfile = await CloudGateway.callAuthenticated<UserProfile>('upsert-profile', profileRequest);
+    AuthService.assertIntent(intent);
+    if (session !== AuthSessionStore.generation()) throw new Error('账号状态已变化，请重试。');
     AuthSessionStore.setBusinessOwner(storedProfile.uid);
-    PhotoUploadService.setCacheOwner(storedProfile.uid);
+    ImageRepository.setCacheOwner(storedProfile.uid);
     AuthService.currentProfile = storedProfile; DraftStore.activateOwner(storedProfile.uid);
     void AuthService.resolveAvatar(context, storedProfile, 'low').then((resolved: UserProfile): void => {
       if (AuthService.currentProfile !== storedProfile) return;
@@ -315,7 +348,7 @@ export class AuthService {
     if (profile.avatarPath !== undefined && profile.avatarPath.length > 0 &&
       profile.avatarBucket !== undefined && profile.avatarBucket.length > 0) {
       try {
-        profile.avatarUrl = await PhotoUploadService.getDownloadUrl(context, profile.avatarBucket,
+        profile.avatarUrl = await ImageRepository.getDownloadUrl(context, profile.avatarBucket,
           profile.avatarPath, priority);
       } catch (_error) {
         // A temporary download URL failure should not block the signed-in profile.
@@ -325,7 +358,7 @@ export class AuthService {
     if (profile.coverPath !== undefined && profile.coverPath.length > 0 &&
       profile.coverBucket !== undefined && profile.coverBucket.length > 0) {
       try {
-        profile.coverUrl = await PhotoUploadService.getDownloadUrl(context, profile.coverBucket,
+        profile.coverUrl = await ImageRepository.getDownloadUrl(context, profile.coverBucket,
           profile.coverPath, priority);
       } catch (_error) {
         profile.coverUrl = '';
@@ -335,16 +368,18 @@ export class AuthService {
   }
 
   private static clearLocalSession(): void {
-    DiscoveryCache.clear();
+    DiscoveryFeedState.clear();
     AuthSessionStore.clearLegacyAccessToken();
     AuthSessionStore.invalidateCachedToken();
     AuthSessionStore.setBusinessOwner('');
-    PhotoUploadService.setCacheOwner('');
+    ImageRepository.setCacheOwner('');
     AuthService.currentProfile = undefined; DraftStore.activateOwner('');
     AuthService.authMode = 'none';
   }
 
   static async logout(context: common.Context): Promise<void> {
+    AuthService.intent++; AppStorage.setOrCreate('sessionRestoreMessage', '');
+    await SessionRestoreStore.save(context, 'SIGNED_OUT');
     await DraftStore.flushActive();
     DraftStore.flushHandler = undefined;
     try {
@@ -376,6 +411,7 @@ export class AuthService {
     emailAddress: string = '',
     verifyCode: string = ''
   ): Promise<string> {
+    AuthService.intent++;
     const nativeEmailSession: boolean = AuthService.isEmailSession();
     if (nativeEmailSession) {
       await AuthService.ensureSession(context);
@@ -426,6 +462,7 @@ export class AuthService {
     }
     // Keep provider identity until the durable server task has cleaned all
     // related records. A client must not delete credentials ahead of that job.
+    await SessionRestoreStore.save(context, 'SIGNED_OUT');
     AuthService.clearLocalSession();
     const accountMessage: string = result.cleanupPending
       ? '注销申请已受理，账号已停用，内容已不可访问；云端数据与认证身份待后台清理完成。'

@@ -7,15 +7,11 @@ import {
   PublishCardResponse, PublicCardsRequest, ReceivedCommentItem, ReceivedCommentsRequest, ReceivedCommentsResponse, ReportCardRequest,
   ToggleCardActionRequest, ToggleCommentReactionRequest
 } from '../model/CloudContracts';
+import { CloudBusinessError, ReadCancelledError } from '../service/CloudReadErrors';
 import { AuthService } from '../service/AuthService';
 import { CloudGateway, MediaServiceUnavailableError } from '../service/CloudGateway';
 import { NearbyPerformanceTrace } from '../service/NearbyPerformanceTrace';
-import { MediaPriority, MediaRequestGuard, PhotoUploadService } from '../service/PhotoUploadService';
-
-// The Cloud Object returns image bytes, not a direct storage URL. Keep this
-// low so the recommendation waterfall cannot exhaust Cloud Foundation's
-// function-request quota while the app is restoring or preloading nearby data.
-const NEARBY_MEDIA_URL_CONCURRENCY: number = 2;
+import { MediaPriority, MediaRequestGuard, ImageRepository } from '../service/ImageRepository';
 
 export class CardRepository {
   async listRecommendationsMetadata(request: PublicCardsRequest,
@@ -38,9 +34,14 @@ export class CardRepository {
       photo.url = '';
       return;
     }
+    photo.accessDenied = false;
     try {
-      photo.url = await PhotoUploadService.getDownloadUrl(context, photo.bucket, photo.path, priority, mayContinue);
+      photo.url = await ImageRepository.getDownloadUrl(context, photo.bucket, photo.path, priority, mayContinue, photo, true);
     } catch (error) {
+      // Leaving a page cancels its subscriber, not the image itself. Preserve
+      // any resolved URL and let the active page request it through its guard.
+      if (error instanceof ReadCancelledError) throw error;
+      photo.accessDenied = error instanceof CloudBusinessError && ['CONTENT_ACCESS_DENIED', 'CONTENT_UNAVAILABLE', 'ACCOUNT_INACTIVE'].includes(error.code);
       photo.url = '';
       if (!(error instanceof MediaServiceUnavailableError)) {
         console.warn('[PhotoDownload] get-public-media failed; showing a placeholder.');
@@ -48,72 +49,24 @@ export class CardRepository {
     }
   }
 
-  /** The waterfall uses one cover image; full galleries stay on the detail path. */
-  private async resolveNearbyPrimaryPhotoUrl(context: common.Context, card: FoodCard,
-    priority: MediaPriority, mayContinue?: MediaRequestGuard): Promise<void> {
-    const photos: Array<CardPhoto> = card.photos === undefined ? [] : card.photos;
-    let primary: CardPhoto | undefined = photos.length > 0 ? photos[0] : undefined;
-    if (primary === undefined && card.photoPath.length > 0) {
-      primary = {
-        id: '', url: card.photoUrl, path: card.photoPath, bucket: card.photoBucket,
-        width: card.photoWidth, height: card.photoHeight
-      };
-    }
-    if (primary === undefined) {
-      card.photoUrl = '';
-      card.primaryPhotoResolved = true;
-      card.primaryPhotoLoadFailed = false;
-      return;
-    }
-    card.primaryPhotoResolved = false;
-    card.primaryPhotoLoadFailed = false;
-    await this.resolvePhotoUrl(context, primary, priority, mayContinue);
-    card.photos = [primary];
-    card.photoUrl = primary.url;
-    card.photoPath = primary.path;
-    card.photoBucket = primary.bucket;
-    card.photoWidth = primary.width;
-    card.photoHeight = primary.height;
-    card.primaryPhotoResolved = true;
-    card.primaryPhotoLoadFailed = primary.url.length === 0;
-    if (card.primaryPhotoLoadFailed && !PhotoUploadService.isMediaServiceUnavailable()) {
-      console.warn('[NearbyPhoto] preview URL was empty after Cloud Storage resolution.');
-    }
-  }
-
-  /**
-   * Resolves only the waterfall cover images. Callers can hydrate the visible
-   * cards first and keep the rest off the first-contentful-render path.
-   */
   async hydrateNearbyPrimaryPhotoUrls(context: common.Context, cards: Array<FoodCard>, startIndex: number = 0,
-    maxCount: number = cards.length, priority: MediaPriority = 'normal', mayContinue?: MediaRequestGuard): Promise<void> {
-    const safeStart: number = Math.max(0, startIndex);
-    const safeCount: number = Math.max(0, maxCount);
-    const endIndex: number = Math.min(cards.length, safeStart + safeCount);
-    if (safeStart >= endIndex) return;
-    const traceTaskId: number = NearbyPerformanceTrace.start('shike.nearby.primary_media');
-    try {
-      for (let start = safeStart; start < endIndex; start += NEARBY_MEDIA_URL_CONCURRENCY) {
-        if (mayContinue !== undefined && !await mayContinue()) return;
-        const batch: Array<FoodCard> = cards.slice(start, Math.min(endIndex, start + NEARBY_MEDIA_URL_CONCURRENCY));
-        await Promise.all(batch.map((card: FoodCard): Promise<void> =>
-          this.resolveNearbyPrimaryPhotoUrl(context, card, priority, mayContinue)));
-      }
-    } finally {
-      NearbyPerformanceTrace.finish('shike.nearby.primary_media', traceTaskId);
-    }
+    maxCount: number = cards.length, priority: MediaPriority = 'normal', mayContinue?: MediaRequestGuard,
+    onSettled?: (card: FoodCard) => void, isCardNeeded?: (card: FoodCard) => boolean): Promise<void> {
+    const guard: MediaRequestGuard = mayContinue === undefined ? async (): Promise<boolean> => true : mayContinue;
+    const settled: (card: FoodCard) => void = onSettled === undefined ? (_card: FoodCard): void => {} : onSettled;
+    await ImageRepository.hydrateCovers(context, cards.slice(Math.max(0, startIndex), Math.max(0, startIndex) + Math.max(0, maxCount)), guard, settled, false, priority, isCardNeeded);
   }
 
   async hydrateDetailPhoto(context: common.Context, photo: CardPhoto,
-    priority: MediaPriority = 'normal'): Promise<string> {
+    priority: MediaPriority = 'normal', mayContinue?: MediaRequestGuard): Promise<string> {
     if (photo.path.length === 0 || photo.bucket.length === 0) return '';
-    return PhotoUploadService.getDownloadUrl(context, photo.bucket, photo.path, priority);
+    return ImageRepository.getDownloadUrl(context, photo.bucket, photo.path, priority, mayContinue, photo, false);
   }
 
   async hydrateCommentAvatar(context: common.Context, comment: CardComment): Promise<string> {
     if (comment.authorAvatarPath.length === 0 || comment.authorAvatarBucket.length === 0) return '';
     try {
-      return await PhotoUploadService.getDownloadUrl(context, comment.authorAvatarBucket,
+      return await ImageRepository.getDownloadUrl(context, comment.authorAvatarBucket,
         comment.authorAvatarPath, 'low');
     } catch (_error) {
       return '';
@@ -124,7 +77,7 @@ export class CardRepository {
     await Promise.all(comments.map(async (comment: CardComment): Promise<void> => {
       if (comment.authorAvatarPath.length > 0 && comment.authorAvatarBucket.length > 0) {
         try {
-          comment.authorAvatarUrl = await PhotoUploadService.getDownloadUrl(context,
+          comment.authorAvatarUrl = await ImageRepository.getDownloadUrl(context,
             comment.authorAvatarBucket, comment.authorAvatarPath);
         } catch (_error) {
           comment.authorAvatarUrl = '';
@@ -160,7 +113,7 @@ export class CardRepository {
       card.authorAvatarUrl = '';
     } else {
       try {
-        card.authorAvatarUrl = await PhotoUploadService.getDownloadUrl(context, avatarBucket, avatarPath);
+        card.authorAvatarUrl = await ImageRepository.getDownloadUrl(context, avatarBucket, avatarPath);
       } catch (_error) {
         // A missing legacy avatar should fall back to the app icon in the UI.
         card.authorAvatarUrl = '';
@@ -249,7 +202,7 @@ export class CardRepository {
     const bucket: string = typeof item.authorAvatarBucket === 'string' ? item.authorAvatarBucket : '';
     if (path.length === 0 || bucket.length === 0) return '';
     try {
-      return await PhotoUploadService.getDownloadUrl(context, bucket, path, 'low');
+      return await ImageRepository.getDownloadUrl(context, bucket, path, 'low');
     } catch (_error) {
       return '';
     }

@@ -23,10 +23,13 @@ type MediaOperation = 'execute' | 'prepareCardPhoto' | 'uploadCardPhoto' | 'getP
 
 const runtime = require('./runtime') as RuntimeModule;
 interface ReadErrorsModule {
+  READ_OPT_VERSION: string;
   requestId(input: object): string;
   errorResponse(error: unknown, operation: string, requestId: string): CloudResponse;
 }
-const readErrors = require('./read-errors') as ReadErrorsModule;
+const readErrors = require('./shared/read-errors') as ReadErrorsModule;
+interface ReleaseInfo { buildId: string; policyHash: string; protocolVersion: string; }
+const releaseInfo = require('./shared/release-info') as { buildInfo: ReleaseInfo };
 
 /**
  * Cloud Object invokes exported methods without preserving their class
@@ -39,7 +42,7 @@ async function executeMediaOperation(operation: MediaOperation, input: object): 
   try {
     const request = Object.assign({}, input, { readRequestId: requestId });
     const data = await runtime[operation](request, process.env);
-    return { ok: true, data, message: '', requestId, operation: operationName, functionVersion: 'stages89-20261007-v1' };
+    return { ok: true, data, message: '', requestId, operation: operationName, functionVersion: readErrors.READ_OPT_VERSION, ...releaseInfo.buildInfo };
   } catch (error) {
     const response: CloudResponse = readErrors.errorResponse(error, operationName, requestId);
     console.error(`${operationName} requestId=${requestId} code=${response.code} stage=${response.stage} failed: ${runtime.safeLogError(error)}`);

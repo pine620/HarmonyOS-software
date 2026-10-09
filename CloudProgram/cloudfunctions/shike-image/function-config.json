@@ -1,0 +1,7 @@
+{
+  "handler": "shikeImage.handler",
+  "functionType": 0,
+  "triggers": [{ "type": "http", "properties": {
+    "enableUrlDecode": false, "authFlag": "true", "authAlgor": "HDA-SYSTEM", "authType": "apigw-client"
+  }}]
+}

@@ -8,7 +8,7 @@ import { PersonalPreviewLoader, PersonalPreviewRow, PersonalPreviewSource } from
 import { PersonalPreviewTile } from '../components/PersonalPreviewTile';
 import { AuthService } from '../service/AuthService';
 import { AuthSessionStore } from '../service/AuthSessionStore';
-import { PhotoUploadService } from '../service/PhotoUploadService';
+import { ImageRepository } from '../service/ImageRepository';
 import { ReadRequestOptions } from '../service/ReadScheduler';
 import { CloudBusinessError } from '../service/CloudReadErrors';
 import { ErrorDetail, errorText } from '../common/ErrorKit';
@@ -79,12 +79,12 @@ export struct UserProfileContent {
   }
   private async loadHeader(result: UserPageResponse, generation: number): Promise<void> {
     try {
-      const avatar: string = await PhotoUploadService.getDownloadUrl(this.context(), result.profile.avatarBucket,
+      const avatar: string = await ImageRepository.getDownloadUrl(this.context(), result.profile.avatarBucket,
         result.profile.avatarPath, 'normal', async (): Promise<boolean> => this.valid(generation));
       if (!this.valid(generation)) return;
       this.avatarUrl = avatar;
       if ((result.relationshipState === 'FRIEND' || result.relationshipState === 'SELF') && result.profile.coverPath !== undefined && result.profile.coverBucket !== undefined) {
-        const cover: string = await PhotoUploadService.getDownloadUrl(this.context(), result.profile.coverBucket,
+        const cover: string = await ImageRepository.getDownloadUrl(this.context(), result.profile.coverBucket,
           result.profile.coverPath, 'low', async (): Promise<boolean> => this.valid(generation));
         if (this.valid(generation)) this.coverUrl = cover;
       }

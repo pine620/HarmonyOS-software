@@ -1,7 +1,7 @@
 'use strict';
 
 const crypto = require('crypto');
-const { accessError, dateMillis, isAccountActive, readableCardState, currentVisibility } = require('./content-policy');
+const { accessError, dateMillis, isAccountActive, readableCardState, currentVisibility } = require('./shared/content-policy');
 const DAY = 24 * 60 * 60 * 1000;
 const BATCH = 20;
 const CATEGORY_MAP = Object.freeze({ staple: 'RICE_SET', bakery: 'NOODLES', drink: 'DRINK',
@@ -122,16 +122,31 @@ function createStage1Services(ctx) {
     const cardId = String(payload.cardId || '');
     const desired = String(payload.reaction || '');
     if (!legacyToggle && !['', 'NONE', 'LIKE', 'DISLIKE'].includes(desired)) throw new Error('赞踩状态无效。');
+    const receiptId = !legacyToggle && payload.requestId ? hash('reaction:' + uid + ':' + uuid(payload.requestId)) : '';
+    const payloadHash = hash(JSON.stringify([cardId, desired, payload.expectedReaction]));
+    if (payload.expectedReaction !== undefined && !['', 'LIKE', 'DISLIKE'].includes(payload.expectedReaction)) {
+      throw accessError('赞踩基准状态无效。', 'VALIDATION_ERROR');
+    }
     let active = false;
     const committed = await collection(env, 'CardReaction').runTransaction({ apply: async (tx) => {
       const profile = await activeProfile(tx, uid, env);
       const card = await txOne(tx, env, 'FoodCard', 'id', cardId);
       await transactionPolicy(tx, env, [profile]).assertCardReadable(uid, card);
+      const receipt = receiptId ? await txOne(tx, env, 'PublishRequestRecord', 'requestId', receiptId) : null;
+      if (receipt) {
+        if (receipt.uid !== uid || receipt.operationType !== 'REACTION' || receipt.payloadHash !== payloadHash || receipt.status !== 'COMMITTED') {
+          throw accessError('请求标识已用于其他操作。', 'CONFLICT');
+        }
+        active = desired === 'LIKE'; return true;
+      }
       const rows = await tx.executeQuery(collection(env, 'CardReaction').query().equalTo('cardId', cardId).equalTo('uid', uid).limit(1));
       const old = await tx.executeQuery(collection(env, 'CardAction').query().equalTo('cardId', cardId)
         .equalTo('actorUid', uid).equalTo('kind', 'LIKE').limit(50));
       if (old.length === 50) throw accessError('旧互动记录过多，请先迁移后再操作。', 'MIGRATION_REQUIRED');
       const current = rows[0] ? String(rows[0].reaction) : old.length > 0 ? 'LIKE' : '';
+      if (!legacyToggle && payload.expectedReaction !== undefined && payload.expectedReaction !== current) {
+        throw accessError('赞踩状态已在其他设备变化，请刷新后重试。', 'STALE_VERSION');
+      }
       const next = legacyToggle ? current === 'LIKE' ? '' : 'LIKE' : desired === 'NONE' ? '' : desired;
       const now = logicalWriteTime(profile.updatedAt, rows[0] && dateMillis(rows[0].updatedAt));
       if (old.length > 0) tx.executeDelete(old);
@@ -140,11 +155,16 @@ function createStage1Services(ctx) {
         createdAt: rows[0] ? rows[0].createdAt : new Date(now), updatedAt: new Date(now) })]);
       // Existing rows serialize first writes and NONE against legacy migration.
       upsertRows(tx, [model('FoodCard', card), profileForWrite(profile, now)]);
+      if (receiptId) upsertRows(tx, [model('PublishRequestRecord', { requestId: receiptId, uid, operationType: 'REACTION',
+        payloadHash, resultEntityId: cardId, status: 'COMMITTED', createdAt: new Date(now), expiresAt: new Date(now + 30 * DAY) })]);
       active = next === 'LIKE';
       return true;
     } });
     if (!committed) throw new Error('互动未保存，请重试。');
-    return { active, ...(await reactionSummary(cardId, uid, env)) };
+    const summary = await reactionSummary(cardId, uid, env);
+    const current = await one(collection(env, 'FoodCard').query().equalTo('id', cardId));
+    await ctx.contentPolicy(env).assertCardReadable(uid, current);
+    return { active, ...summary };
   }
   async function toggleFavorite(uid, payload, env) {
     const cardId = String(payload.cardId || '');
@@ -541,11 +561,9 @@ function createStage1Services(ctx) {
   }
   // Internal Stage 3 gate: no admin task payload is exposed to public callers.
   async function migrationReadiness(env, includeJobs = false) {
-    const jobs = [];
-    for (const type of MIGRATION_TYPES) {
-      const row = await one(collection(env, 'MaintenanceJob').query().equalTo('jobId', hash(type + ':stage1-v1:1')));
-      if (row) jobs.push(jobView(row, true));
-    }
+    const ids = MIGRATION_TYPES.map(type => hash(type + ':stage1-v1:1'));
+    const rows = await collection(env, 'MaintenanceJob').query().in('jobId', ids).limit(ids.length).get();
+    const jobs = ids.map(id => rows.find(row => row.jobId === id)).filter(Boolean).map(row => jobView(row, true));
     const cardJob = jobs.find((job) => job.jobType === 'BACKFILL_CARD');
     const reactionJob = jobs.find((job) => job.jobType === 'MIGRATE_REACTION');
     const complete = (job) => !!job && job.status === 'DONE' && job.checkpoint.coverageComplete === true &&

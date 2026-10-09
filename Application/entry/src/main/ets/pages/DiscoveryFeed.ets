@@ -1,6 +1,7 @@
 import { PreferenceRepository } from '../repository/PreferenceRepository';
 import { RecommendationPage, RecommendationReason } from '../model/PreferenceModels';
-import { ReadRequestOptions } from '../service/ReadScheduler';
+import { CardPreviewsRequest, CardPreviewsResponse, CardPreviewItem } from '../model/PersonalCollectionModels';
+import { ReadRequestOptions, ReadScheduler } from '../service/ReadScheduler';
 import { common } from '@kit.AbilityKit';
 import { FoodCard, FoodCategoryV2, NearbyCardsResponse, PublicCardsRequest, UserProfile } from '../model/CloudContracts';
 import { copyCardQuery, copyViewport, DiscoveryCamera, DiscoveryCapabilities, DiscoveryCardPage, DiscoveryMode, DiscoveryScope,
@@ -11,7 +12,8 @@ import { DiscoveryRepository } from '../repository/DiscoveryRepository';
 import { CardRepository } from '../repository/CardRepository';
 import { AuthService } from '../service/AuthService';
 import { CloudBusinessError, CloudGateway } from '../service/CloudGateway';
-import { DiscoveryCache } from '../service/DiscoveryCache';
+import { DiscoveryFeedState, DiscoverySnapshot, DiscoveryEntry, PreviousRegion } from '../service/DiscoveryFeedState';
+import { ImageRepository } from '../service/ImageRepository';
 import { MapViewportStore } from '../service/MapViewportStore';
 import { SearchHistoryStore } from '../service/SearchHistoryStore';
 import { DiscoveryMap } from '../components/DiscoveryMap';
@@ -20,8 +22,6 @@ import { MerchantRecommendationSheet } from '../components/MerchantRecommendatio
 import { BreakpointSystem, LayoutBreakpoint } from '../common/BreakpointSystem';
 import { ChoiceActionStyle, PrimaryActionStyle, QuietActionStyle, SecondaryActionStyle, stage47ErrorText } from '../common/Stage47Ui';
 
-interface DiscoveryEntry { card: FoodCard; coverUrl: string; }
-interface PreviousRegion { viewport: DiscoveryViewport; camera: DiscoveryCamera; }
 interface SortOption { value: DiscoverySort; label: string; }
 const SORT_OPTIONS: Array<SortOption> = [{ value: 'LATEST', label: '最新发布' }, { value: 'SCORE_DESC', label: '评分优先' },
   { value: 'PRICE_ASC', label: '价格升序' }, { value: 'PRICE_DESC', label: '价格降序' }];
@@ -29,8 +29,10 @@ const SORT_OPTIONS: Array<SortOption> = [{ value: 'LATEST', label: '最新发布
 @Component
 export struct DiscoveryFeed {
   @StorageLink('stage47AppActive') @Watch('onAppActiveChanged') appActive: boolean = true;
+  @StorageLink('discoveryVisible') @Watch('onNavigationVisibilityChanged') navigationVisible: boolean = true;
   private visibleLifecycle: boolean = true;
-  private onAppActiveChanged(): void { if (!this.appActive) this.aboutToDisappear(); else if (this.visibleLifecycle) this.aboutToAppear(); }
+  private onNavigationVisibilityChanged(): void { if (this.navigationVisible && this.appActive && this.visibleLifecycle) this.resume(); else this.pause(false); }
+  private onAppActiveChanged(): void { if (!this.appActive) this.pause(false); else if (this.visibleLifecycle) this.resume(); }
 
   @Consume('windowBreakpoint') windowBreakpoint: LayoutBreakpoint;
   @Require @Prop @Watch('onCapabilitiesChanged') capabilities: DiscoveryCapabilities;
@@ -94,14 +96,15 @@ export struct DiscoveryFeed {
   private listGeneration: number = 0;
   private mapGeneration: number = 0;
   private merchantGeneration: number = 0;
-  private cardSelectionGeneration: number = 0;
   private debounce: number | undefined = undefined;
+  private failedPhotoIds: Set<string> = new Set<string>();
+  private loadingPhotoIds: Set<string> = new Set<string>();
   private hydratedIds: Set<string> = new Set<string>();
   private hydrationRunning: boolean = false;
   private visibleFirst: number = 0;
   private visibleLast: number = 3;
   @StorageLink('accountContentRevision') @Watch('onRevisionChanged') accountContentRevision: number = 0;
-  private onVisibilityChanged(visible: boolean): void { if (visible === this.visibleLifecycle) return; this.visibleLifecycle = visible; if (visible && this.appActive) this.aboutToAppear(); else this.aboutToDisappear(); }
+  private onVisibilityChanged(visible: boolean): void { if (visible === this.visibleLifecycle) return; this.visibleLifecycle = visible; if (visible && this.appActive) this.resume(); else this.pause(false); }
   @StorageLink('preferenceRevision') @Watch('onRevisionChanged') preferenceRevision: number = 0;
   private preferenceRepository: PreferenceRepository = new PreferenceRepository();
   private isRecommendation(query: PublicCardQuery): boolean { return query.scope === 'ALL_PUBLIC' && query.keyword.length === 0 && query.mode === 'ALL' && query.categories.length === 0 && query.sort === 'LATEST' && query.priceMinFen === undefined && query.priceMaxExclusiveFen === undefined; }
@@ -120,16 +123,106 @@ export struct DiscoveryFeed {
     const profile: UserProfile | undefined = AuthService.profile();
     return profile !== undefined && CloudGateway.hasSession() ? profile.uid : 'guest';
   }
-  private current(generation: number): boolean { return this.active && this.appActive && generation === this.listGeneration && this.owner === this.viewer(); }
-  aboutToAppear(): void {
-    this.active = true; this.owner = this.viewer();
-    this.cameraTarget = MapViewportStore.read(this.context(), this.owner); this.currentCamera = this.cameraTarget;
-    try { this.history = SearchHistoryStore.read(this.context(), this.owner); } catch (_error) { this.history = []; }
-    void this.reload();
+  private current(generation: number): boolean { return this.active && this.appActive && this.navigationVisible && generation === this.listGeneration && this.owner === this.viewer(); }
+  private loadedSignature: string = '';
+  private primaryRemoteSync: boolean = false;
+  private signature(): string { return this.revision + ':' + this.accountContentRevision + ':' + this.preferenceRevision; }
+  aboutToAppear(): void { this.resume(); }
+  aboutToDisappear(): void { this.pause(true); }
+  private saveSnapshot(): void {
+    if (this.submittedQuery === undefined || this.owner !== this.viewer() || this.loadedSignature !== this.signature()) return;
+    const value: DiscoverySnapshot = {
+      owner: this.owner, signature: this.signature(), scrollY: this.resultScroller.currentOffset().yOffset,
+      cards: this.cards,
+      keywordInput: this.keywordInput,
+      keyword: this.keyword,
+      mode: this.mode,
+      categories: this.categories,
+      sort: this.sort,
+      priceMin: this.priceMin,
+      priceMax: this.priceMax,
+      pricePreset: this.pricePreset,
+      status: this.status,
+      nextCursor: this.nextCursor,
+      scope: this.scope,
+      submittedQuery: this.submittedQuery,
+      viewport: this.viewport,
+      searchedViewport: this.searchedViewport,
+      queryViewport: this.queryViewport,
+      queryCamera: this.queryCamera,
+      cameraTarget: this.cameraTarget,
+      currentCamera: this.currentCamera,
+      previousResultRegion: this.previousResultRegion,
+      previousCards: this.previousCards,
+      showingPrevious: this.showingPrevious,
+      merchants: this.merchants,
+      mapCursor: this.mapCursor,
+      mapStatus: this.mapStatus,
+      expanded: this.expanded,
+      listOpen: this.listOpen,
+      visibleFirst: this.visibleFirst,
+      visibleLast: this.visibleLast
+    };
+    DiscoveryFeedState.save(value);
   }
-  aboutToDisappear(): void {
-    this.active = false; this.cards = []; this.previousCards = []; this.merchants = []; this.merchantCards = []; this.listGeneration++; this.mapGeneration++; this.merchantGeneration++;
+  private resume(): void {
+    if (this.active || !this.appActive || !this.visibleLifecycle || !this.navigationVisible) return;
+    this.active = true; const owner: string = this.viewer();
+    const snapshot: DiscoverySnapshot | undefined = DiscoveryFeedState.read(owner, this.signature());
+    this.owner = owner;
+    console.info('[DiscoveryFeed] event=resume viewGeneration=' + this.listGeneration + ' snapshot=' + String(snapshot !== undefined) + ' first=' + this.visibleFirst + ' last=' + this.visibleLast);
+    try { this.history = SearchHistoryStore.read(this.context(), owner); } catch (_error) { this.history = []; }
+    if (snapshot !== undefined) {
+      this.cards = snapshot.cards;
+      this.keywordInput = snapshot.keywordInput;
+      this.keyword = snapshot.keyword;
+      this.mode = snapshot.mode;
+      this.categories = snapshot.categories;
+      this.sort = snapshot.sort;
+      this.priceMin = snapshot.priceMin;
+      this.priceMax = snapshot.priceMax;
+      this.pricePreset = snapshot.pricePreset;
+      this.status = snapshot.status;
+      this.nextCursor = snapshot.nextCursor;
+      this.scope = snapshot.scope;
+      this.submittedQuery = snapshot.submittedQuery;
+      this.viewport = snapshot.viewport;
+      this.searchedViewport = snapshot.searchedViewport;
+      this.queryViewport = snapshot.queryViewport;
+      this.queryCamera = snapshot.queryCamera;
+      this.cameraTarget = snapshot.cameraTarget;
+      this.currentCamera = snapshot.currentCamera;
+      this.previousResultRegion = snapshot.previousResultRegion;
+      this.previousCards = snapshot.previousCards;
+      this.showingPrevious = snapshot.showingPrevious;
+      this.merchants = snapshot.merchants;
+      this.mapCursor = snapshot.mapCursor;
+      this.mapStatus = snapshot.mapStatus;
+      this.expanded = snapshot.expanded;
+      this.listOpen = snapshot.listOpen;
+      this.visibleFirst = snapshot.visibleFirst;
+      this.visibleLast = snapshot.visibleLast;
+
+      this.cards = this.cards.map((entry: DiscoveryEntry): DiscoveryEntry => { return { card: entry.card, coverUrl: '', allowed: false }; });
+      this.hydratedIds.clear(); this.failedPhotoIds.clear(); this.loadingPhotoIds.clear(); this.hydrationRunning = false;
+      this.loading = false; this.loadingMore = false; this.mapLoading = false;
+      this.loadedSignature = this.signature();
+      void this.revalidateVisible(snapshot.scrollY);
+    } else {
+      this.cameraTarget = MapViewportStore.read(this.context(), owner); this.currentCamera = this.cameraTarget;
+      void this.reload();
+    }
+  }
+  private pause(destroying: boolean): void {
+    if (!this.active) return;
+    console.info('[DiscoveryFeed] event=pause viewGeneration=' + this.listGeneration);
+    this.saveSnapshot(); this.active = false; this.listGeneration++; this.mapGeneration++; this.merchantGeneration++; ImageRepository.subscriptionsChanged(); ReadScheduler.subscriptionsChanged();
+    if (!destroying) { this.selectedMerchant = undefined; this.merchantCards = []; this.cards = this.cards.map((entry: DiscoveryEntry): DiscoveryEntry => { return { card: entry.card, coverUrl: '', allowed: false }; }); }
     if (this.debounce !== undefined) { clearTimeout(this.debounce); this.debounce = undefined; }
+  }
+  private async revalidateVisible(scrollY: number): Promise<void> {
+    await this.hydrateVisible(this.visibleFirst, this.visibleLast, true);
+    if (this.active) this.resultScroller.scrollTo({ xOffset: 0, yOffset: scrollY, animation: false });
   }
   private onCapabilitiesChanged(): void {
     if (!this.capabilities.mapEnabled) {
@@ -140,7 +233,7 @@ export struct DiscoveryFeed {
   }
   private onRevisionChanged(): void {
     if (!this.active) return;
-    DiscoveryCache.clear(); this.listGeneration++; this.mapGeneration++; this.closeMerchant();
+    DiscoveryFeedState.clear(); this.listGeneration++; this.mapGeneration++; this.closeMerchant();
     if (this.owner !== this.viewer()) {
       this.owner = this.viewer(); this.cards = []; this.previousCards = []; this.previousResultRegion = undefined;
       this.showingPrevious = false; this.keyword = ''; this.keywordInput = ''; this.scope = 'ALL_PUBLIC';
@@ -175,12 +268,20 @@ export struct DiscoveryFeed {
     return query;
   }
   private entries(cards: Array<FoodCard>): Array<DiscoveryEntry> {
-    return cards.map((card: FoodCard): DiscoveryEntry => { return { card, coverUrl: card.photoUrl }; });
+    return cards.map((card: FoodCard): DiscoveryEntry => { return { card, coverUrl: card.photoUrl, allowed: true }; });
+  }
+  private entryRenderKey(entry: DiscoveryEntry): string {
+    // Entries are replaced after asynchronous reads. An ID-only ForEach key keeps
+    // the old item's placeholder and callbacks even after its cover is ready.
+    const parts: Array<string> = [entry.card.id, entry.card.contentRevision || '', entry.coverUrl,
+      String(entry.allowed), String(entry.card.primaryPhotoResolved === true),
+      String(entry.card.primaryPhotoLoadFailed === true)];
+    return JSON.stringify(parts);
   }
   private merge(current: Array<DiscoveryEntry>, incoming: Array<FoodCard>): Array<DiscoveryEntry> {
     const output: Array<DiscoveryEntry> = current.slice(); const seen: Set<string> = new Set<string>();
     for (const value of current) seen.add(value.card.id);
-    for (const card of incoming) if (!seen.has(card.id)) { const value: DiscoveryEntry = { card, coverUrl: card.photoUrl }; output.push(value); seen.add(card.id); }
+    for (const card of incoming) if (!seen.has(card.id)) { const value: DiscoveryEntry = { card, coverUrl: card.photoUrl, allowed: true }; output.push(value); seen.add(card.id); }
     return output;
   }
   private resultStatus(count: number, coverage: QueryCoverage, cursor: string): string {
@@ -199,7 +300,7 @@ export struct DiscoveryFeed {
     if (this.debounce !== undefined) { clearTimeout(this.debounce); this.debounce = undefined; }
     const generation: number = ++this.listGeneration;
     this.loadFailed = false; this.featureNotReady = false;
-    this.loading = true; this.loadingMore = false; this.loadMoreFailed = false; this.hydrationRunning = false; this.hydratedIds.clear(); this.nextCursor = '';
+    this.loading = true; this.loadingMore = false; this.loadMoreFailed = false; this.hydrationRunning = false; this.hydratedIds.clear(); this.failedPhotoIds.clear(); this.loadingPhotoIds.clear(); this.nextCursor = '';
     let query: PublicCardQuery;
     try { query = this.makeQuery(); } catch (failure) { this.status = stage47ErrorText(failure as Object, '筛选条件无效。'); this.loading = false; return; }
     this.cards = []; this.status = '正在重新验证推荐…';
@@ -207,18 +308,15 @@ export struct DiscoveryFeed {
       const result: DiscoveryCardPage = await this.queryCards(query, '');
       if (!this.current(generation)) return;
       if (query.scope === 'VIEWPORT' && (this.mapEmpty || (result.cards.length === 0 && result.coverage === 'COMPLETE')) && this.previousCards.length > 0) {
-        const fresh: Array<FoodCard> = []; for (const previous of this.previousCards.slice(0, 30)) { try { const card: FoodCard = await this.cardRepository.detail(this.context(), previous.card.id); if (card.visibility !== 'FRIENDS') fresh.push(card); } catch (_error) {} }
-        if (!this.current(generation)) return; this.cards = this.entries(fresh); this.showingPrevious = true; this.nextCursor = '';
+        const fresh: Array<FoodCard> = this.previousCards.filter((entry: DiscoveryEntry): boolean => entry.card.visibility !== 'FRIENDS').map((entry: DiscoveryEntry): FoodCard => entry.card);
+        if (!this.current(generation)) return; this.cards = this.entries(fresh).map((entry: DiscoveryEntry): DiscoveryEntry => { return { card: entry.card, coverUrl: '', allowed: false }; }); this.hydratedIds.clear(); this.showingPrevious = true; this.nextCursor = '';
         this.status = '当前区域无结果，暂时展示上一地区结果。';
       } else {
         this.cards = this.entries(result.cards); this.nextCursor = result.nextCursor; this.showingPrevious = false;
         this.status = this.resultStatus(this.cards.length, result.coverage, result.nextCursor);
-        if (this.capabilities.searchEnabled && !this.isRecommendation(query)) DiscoveryCache.save(this.owner, query, result);
       }
       this.submittedQuery = copyCardQuery(query);
-      if (!this.showingPrevious && query.scope === 'ALL_PUBLIC' && query.keyword.length === 0 && query.mode === 'ALL' &&
-        query.categories.length === 0 && query.priceMinFen === undefined && query.priceMaxExclusiveFen === undefined &&
-        query.sort === 'LATEST' && result.cards.length > 0 && result.cards[0].visibility !== 'FRIENDS') this.onPrimaryCard(result.cards[0], remoteSync);
+      this.primaryRemoteSync = remoteSync; this.loadedSignature = this.signature();
       this.historyOpen = false;
       // A submitted search is recorded only after the matching successful result state is assigned.
       if (recordHistory && query.keyword.length > 0 && !this.showingPrevious) {
@@ -230,7 +328,7 @@ export struct DiscoveryFeed {
       this.loadFailed = true;
       this.featureNotReady = failure instanceof CloudBusinessError && failure.code === 'FEATURE_NOT_READY';
       if (this.featureNotReady) {
-        DiscoveryCache.clear(); this.cards = [];
+        DiscoveryFeedState.clear(); this.cards = [];
         if (this.capabilities.searchEnabled || this.capabilities.mapEnabled) this.onUnavailable();
       }
       this.status = stage47ErrorText(failure as Object, '推荐加载失败，请稍后重试。');
@@ -250,33 +348,77 @@ export struct DiscoveryFeed {
     } catch (failure) {
       if (!this.current(generation)) return;
       this.loadMoreFailed = true;
-      if (failure instanceof CloudBusinessError && failure.code === 'CURSOR_STALE') { this.nextCursor = ''; DiscoveryCache.clear(); this.status = '内容已变化，请点击刷新，筛选已保留。'; }
+      if (failure instanceof CloudBusinessError && failure.code === 'CURSOR_STALE') { this.nextCursor = ''; DiscoveryFeedState.clear(); this.status = '内容已变化，请点击刷新，筛选已保留。'; }
       else if (failure instanceof CloudBusinessError && failure.code === 'FEATURE_NOT_READY') {
-        DiscoveryCache.clear();
+        DiscoveryFeedState.clear();
         if (this.capabilities.searchEnabled || this.capabilities.mapEnabled) this.onUnavailable();
         this.status = stage47ErrorText(failure as Object, '推荐暂未开放。');
       }
       else this.status = stage47ErrorText(failure as Object, '推荐加载失败。');
     } finally { if (this.current(generation)) this.loadingMore = false; }
   }
-  private async hydrateVisible(first: number, last: number): Promise<void> {
+  private async hydrateVisible(first: number, last: number, revalidate: boolean = false): Promise<void> {
     this.visibleFirst = first; this.visibleLast = last;
-    if (this.hydrationRunning || !this.active) return;
+    if (this.hydrationRunning || !this.active || !this.navigationVisible || !this.appActive) return;
     const generation: number = this.listGeneration;
-    const chosen: Array<FoodCard> = this.cards.slice(Math.max(0, first), Math.min(this.cards.length, last + 3))
-      .map((entry: DiscoveryEntry): FoodCard => entry.card).filter((card: FoodCard): boolean => !this.hydratedIds.has(card.id));
+    const chosen: Array<FoodCard> = this.cards.slice(Math.max(0, first), Math.min(this.cards.length, last + 1))
+      .map((entry: DiscoveryEntry): FoodCard => entry.card).filter((card: FoodCard): boolean => !this.hydratedIds.has(card.id) && !this.failedPhotoIds.has(card.id) && !this.loadingPhotoIds.has(card.id));
     if (chosen.length === 0) return;
-    this.hydrationRunning = true;
-    for (const card of chosen) this.hydratedIds.add(card.id);
+    const confirm: boolean = revalidate || chosen.some((card: FoodCard): boolean => this.cards.some((entry: DiscoveryEntry): boolean => entry.card.id === card.id && !entry.allowed));
+    const withoutMedia: Array<string> = confirm ? chosen.filter((card: FoodCard): boolean => card.photoPath.length === 0).map((card: FoodCard): string => card.id) : [];
+    console.info('[DiscoveryFeed] event=hydrate viewGeneration=' + generation + ' count=' + chosen.length + ' confirm=' + String(confirm) + ' first=' + first + ' last=' + last);
+    this.hydrationRunning = true; const changed: Array<string> = [];
+    for (const card of chosen) this.loadingPhotoIds.add(card.id);
     try {
-      await this.cardRepository.hydrateNearbyPrimaryPhotoUrls(this.context(), chosen, 0, chosen.length, 'normal', async (): Promise<boolean> => this.current(generation));
+      if (withoutMedia.length > 0) await this.refreshChangedCards(withoutMedia, generation);
       if (!this.current(generation)) return;
-      this.cards = this.cards.map((entry: DiscoveryEntry): DiscoveryEntry => { return { card: entry.card, coverUrl: entry.card.photoUrl }; });
+      const images: Array<FoodCard> = chosen.filter((card: FoodCard): boolean => !withoutMedia.includes(card.id));
+      await ImageRepository.hydrateCovers(this.context(), images, async (): Promise<boolean> => this.current(generation),
+        (card: FoodCard): void => {
+          if (!this.current(generation)) return;
+          this.loadingPhotoIds.delete(card.id);
+          if (card.mediaAccessDenied === true) { this.cards = this.cards.filter((entry: DiscoveryEntry): boolean => entry.card.id !== card.id); this.status = '部分内容已不可访问，请刷新推荐。'; return; }
+          if (card.primaryPhotoLoadFailed === true) this.failedPhotoIds.add(card.id);
+          else this.hydratedIds.add(card.id);
+          if (card.mediaContentChanged === true) changed.push(card.id);
+          const settled: DiscoveryEntry = { card, coverUrl: card.photoUrl, allowed: card.mediaContentChanged !== true && (card.photoUrl.length > 0 || card.photoPath.length === 0) };
+          console.info('[DiscoveryFeed] event=cover-settled viewGeneration=' + generation + ' cardId=' + card.id +
+            ' ready=' + String(settled.coverUrl.length > 0) + ' allowed=' + String(settled.allowed) +
+            ' failed=' + String(card.primaryPhotoLoadFailed === true));
+          if (card.id === this.cards[0]?.card.id && card.visibility !== 'FRIENDS' && this.submittedQuery !== undefined && this.isRecommendation(this.submittedQuery) && settled.allowed) { this.onPrimaryCard(card, this.primaryRemoteSync); this.primaryRemoteSync = false; }
+          this.cards = this.cards.map((entry: DiscoveryEntry): DiscoveryEntry => entry.card.id === card.id ? settled : entry);
+        }, confirm, 'normal', (card: FoodCard): boolean => { const index: number = this.cards.findIndex((entry: DiscoveryEntry): boolean => entry.card.id === card.id); return index >= this.visibleFirst && index <= this.visibleLast; });
     } catch (_failure) { if (this.current(generation)) this.status = '实拍图暂不可用，推荐信息已保留，可刷新重试。'; }
     finally {
       if (this.current(generation)) {
+        if (changed.length > 0) await this.refreshChangedCards(changed, generation);
         this.hydrationRunning = false;
-        if (this.visibleFirst !== first || this.visibleLast !== last) void this.hydrateVisible(this.visibleFirst, this.visibleLast);
+        for (const card of chosen) this.loadingPhotoIds.delete(card.id);
+        if (withoutMedia.length > 0 || changed.length > 0 || this.visibleFirst !== first || this.visibleLast !== last) void this.hydrateVisible(this.visibleFirst, this.visibleLast);
+      }
+    }
+  }
+  private async refreshChangedCards(ids: Array<string>, generation: number): Promise<void> {
+    const options: ReadRequestOptions = { mayContinue: async (): Promise<boolean> => this.current(generation) };
+    for (let offset: number = 0; offset < ids.length && this.current(generation); offset += 10) {
+      const request: CardPreviewsRequest = { cardIds: ids.slice(offset, offset + 10) };
+      try {
+        const result: CardPreviewsResponse = await CloudGateway.callPublic<CardPreviewsResponse>('get-card-previews', request, options);
+        if (!this.current(generation)) return;
+        for (const id of request.cardIds) {
+          const item: CardPreviewItem | undefined = result.items.find((value: CardPreviewItem): boolean => value.cardId === id);
+          if (item === undefined || !item.accessible || item.card === null) this.cards = this.cards.filter((entry: DiscoveryEntry): boolean => entry.card.id !== id);
+          else {
+            const card: FoodCard = item.card;
+            const fresh: DiscoveryEntry = { card, coverUrl: '', allowed: true };
+            this.cards = this.cards.map((entry: DiscoveryEntry): DiscoveryEntry => entry.card.id === id ? fresh : entry);
+            this.hydratedIds.delete(id); this.failedPhotoIds.delete(id);
+          }
+        }
+      } catch (_error) {
+        if (!this.current(generation)) return;
+        for (const id of request.cardIds) { this.failedPhotoIds.add(id); this.hydratedIds.delete(id); }
+        this.status = '内容已变化，暂时隐藏旧内容，请刷新重试。';
       }
     }
   }
@@ -324,8 +466,8 @@ export struct DiscoveryFeed {
       this.mapEmpty = merged.length === 0 && result.coverage === 'COMPLETE';
       this.mapStatus = result.coverage !== 'COMPLETE' ? '仅显示部分地点，请放大地图或继续搜索。' : this.mapEmpty ? '当前区域没有可展示的店铺。' : '已显示当前区域的可展示店铺。';
       if (this.mapEmpty && this.scope === 'VIEWPORT' && this.previousCards.length > 0) {
-        const fresh: Array<FoodCard> = []; for (const previous of this.previousCards.slice(0, 30)) { try { const card: FoodCard = await this.cardRepository.detail(this.context(), previous.card.id); if (card.visibility !== 'FRIENDS') fresh.push(card); } catch (_error) {} }
-        if (!this.current(generation)) return; this.cards = this.entries(fresh); this.showingPrevious = true; this.nextCursor = '';
+        const fresh: Array<FoodCard> = this.previousCards.filter((entry: DiscoveryEntry): boolean => entry.card.visibility !== 'FRIENDS').map((entry: DiscoveryEntry): FoodCard => entry.card);
+        if (!this.active || generation !== this.mapGeneration || uid !== this.viewer()) return; this.cards = this.entries(fresh).map((entry: DiscoveryEntry): DiscoveryEntry => { return { card: entry.card, coverUrl: '', allowed: false }; }); this.hydratedIds.clear(); this.showingPrevious = true; this.nextCursor = ''; void this.hydrateVisible(0, 3, true);
       }
     } catch (failure) {
       if (!this.active || generation !== this.mapGeneration || uid !== this.viewer()) return;
@@ -352,7 +494,7 @@ export struct DiscoveryFeed {
     this.showingPrevious = false; this.mapEmpty = false; void this.reload(); void this.queryMap(previous.viewport, false);
   }
   private closeMerchant(): void {
-    this.cardSelectionGeneration++; this.merchantGeneration++; this.selectedMerchant = undefined; this.selectedMerchantId = '';
+    this.merchantGeneration++; this.selectedMerchant = undefined; this.selectedMerchantId = '';
     this.merchantCards = []; this.merchantCursor = ''; this.merchantLoading = false;
   }
   private selectMerchant(merchant: MapMerchant): void {
@@ -394,27 +536,14 @@ export struct DiscoveryFeed {
       this.merchantStatus = stage47ErrorText(failure as Object, '店铺推荐加载失败。');
     } finally { if (this.active && generation === this.merchantGeneration && uid === this.viewer()) this.merchantLoading = false; }
   }
-  private async openCard(card: FoodCard): Promise<void> {
-    const selection: number = ++this.cardSelectionGeneration;
-    if (!this.showingPrevious && this.capabilities.mapEnabled && card.merchantId !== undefined && card.merchantId.length > 0) {
-      const generation: number = this.listGeneration;
-      let merchant: MapMerchant | undefined = this.merchants.find((value: MapMerchant): boolean => value.merchantId === card.merchantId);
-      try {
-        if (merchant === undefined) {
-          const request: MerchantRecommendationQuery = { merchantId: card.merchantId, mode: this.mode, cursor: '', pageSize: 1 };
-          const page: DiscoveryCardPage = await this.repository.merchant(request); merchant = page.merchant;
-        }
-        if (!this.current(generation) || selection !== this.cardSelectionGeneration) return;
-        if (merchant !== undefined) {
-          const resolved: MapMerchant = merchant;
-          this.selectedMerchantId = resolved.merchantId;
-          if (!this.merchants.some((value: MapMerchant): boolean => value.merchantId === resolved.merchantId)) this.merchants = this.merchants.concat([resolved]);
-          const camera: DiscoveryCamera = { latitude: resolved.latitude, longitude: resolved.longitude, zoom: Math.max(15, this.currentCamera.zoom) };
-          this.cameraTarget = camera;
-        }
-      } catch (_failure) { if (!this.current(generation) || selection !== this.cardSelectionGeneration) return; }
-    }
+  private openCard(card: FoodCard): void {
+    const merchant: MapMerchant | undefined = this.merchants.find((value: MapMerchant): boolean => value.merchantId === card.merchantId);
+    if (!this.showingPrevious && merchant !== undefined) { this.selectedMerchantId = merchant.merchantId; this.cameraTarget = { latitude: merchant.latitude, longitude: merchant.longitude, zoom: Math.max(15, this.currentCamera.zoom) }; }
     this.onOpenCard(card);
+  }
+  private coverFailed(card: FoodCard): void {
+    card.photoUrl = ''; card.primaryPhotoLoadFailed = true; this.failedPhotoIds.add(card.id); this.hydratedIds.delete(card.id);
+    this.cards = this.cards.map((entry: DiscoveryEntry): DiscoveryEntry => { const failed: DiscoveryEntry = { card, coverUrl: '', allowed: entry.allowed }; return entry.card.id === card.id ? failed : entry; });
   }
   private toggleCategory(key: FoodCategoryV2): void {
     if (this.categories.includes(key)) this.categories = this.categories.filter((value: FoodCategoryV2): boolean => value !== key);
@@ -506,7 +635,7 @@ export struct DiscoveryFeed {
         .fontColor($r('app.color.ink')).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1);
       this.preferenceButton();
       Button('刷新').attributeModifier(new QuietActionStyle()).height(48).enabled(!this.loading)
-        .onClick((): void => { DiscoveryCache.clear(); void this.reload(false, true); })
+        .onClick((): void => { DiscoveryFeedState.clear(); void this.reload(false, true); })
     }.width('100%')
     if (this.showingPrevious) { Button('返回上一地区').height(48).fontSize(12).onClick((): void => this.returnPrevious()).attributeModifier(new QuietActionStyle()); }
     else if (this.scope === 'VIEWPORT') { Button('搜全部公开').height(48).fontSize(12).onClick((): void => this.submitSearch(false)).attributeModifier(new SecondaryActionStyle()); }
@@ -539,9 +668,16 @@ export struct DiscoveryFeed {
     } else {
       WaterFlow({ scroller: this.resultScroller }) {
         ForEach(this.cards, (entry: DiscoveryEntry, index: number) => {
-          FlowItem() { DiscoveryCard({ card: entry.card, coverUrl: entry.coverUrl, featured: index % 2 === 0, coverScale: this.coverScale(), selected: !this.showingPrevious && this.selectedMerchantId.length > 0 && entry.card.merchantId === this.selectedMerchantId,
-            onOpen: (): void => { void this.openCard(entry.card); } }) }.width('100%')
-        }, (entry: DiscoveryEntry): string => entry.card.id + ':' + entry.coverUrl)
+          FlowItem() {
+          if (entry.allowed) { DiscoveryCard({ card: entry.card, coverUrl: entry.coverUrl, featured: index % 2 === 0, coverScale: this.coverScale(), selected: !this.showingPrevious && this.selectedMerchantId.length > 0 && entry.card.merchantId === this.selectedMerchantId,
+            onCoverFailed: (): void => this.coverFailed(entry.card),
+            onRetry: (): void => { ImageRepository.retryUnavailableService(); this.failedPhotoIds.delete(entry.card.id); this.hydratedIds.delete(entry.card.id); void this.hydrateVisible(index, index); },
+            onOpen: (): void => this.openCard(entry.card) }) }
+          else { Column({ space: 8 }) { Text('正在验证内容访问权限').fontSize(13).fontColor($r('app.color.muted'));
+            if (this.failedPhotoIds.has(entry.card.id)) { Button('重试').height(48).onClick((): void => { ImageRepository.retryUnavailableService(); this.failedPhotoIds.delete(entry.card.id); void this.hydrateVisible(index, index, true); }); }
+          }.width('100%').height(180).justifyContent(FlexAlign.Center) }
+          }.width('100%')
+        }, (entry: DiscoveryEntry): string => this.entryRenderKey(entry))
       }.width('100%').layoutWeight(1).columnsTemplate(BreakpointSystem.columnsTemplate(this.windowBreakpoint))
         .columnsGap(BreakpointSystem.CARD_GAP).rowsGap(BreakpointSystem.CARD_GAP).scrollBar(BarState.Off)
         .onAreaChange((_oldArea: Area, newArea: Area): void => {
@@ -573,7 +709,7 @@ export struct DiscoveryFeed {
           if (this.expanded) {
             if (!this.listOpen) { this.preferenceButton(); }
             Button('刷新').attributeModifier(new QuietActionStyle()).height(48).enabled(!this.loading)
-              .onClick((): void => { DiscoveryCache.clear(); void this.reload(false, true); })
+              .onClick((): void => { DiscoveryFeedState.clear(); void this.reload(false, true); })
           } else {
             Button('今天吃什么 ›').attributeModifier(new QuietActionStyle()).height(48)
               .accessibilityText('今天吃什么').onClick((): void => this.onOpenMeal())
@@ -647,7 +783,7 @@ export struct DiscoveryFeed {
       if (this.selectedMerchant !== undefined) {
         MerchantRecommendationSheet({ merchant: this.selectedMerchant, cards: this.merchantCards, status: this.merchantStatus,
           loading: this.merchantLoading, nextCursor: this.merchantCursor, onClose: (): void => this.closeMerchant(),
-          onMore: (): void => { void this.loadMerchant(true); }, onRetry: (): void => { void this.loadMerchant(false); }, onOpen: (card: FoodCard): void => { this.cardSelectionGeneration++; this.onOpenCard(card); } })
+          onMore: (): void => { void this.loadMerchant(true); }, onRetry: (): void => { void this.loadMerchant(false); }, onOpen: (card: FoodCard): void => { this.onOpenCard(card); } })
           .width('94%').margin({ bottom: 8 })
       }
     }.height('100%').width('100%').backgroundColor($r('app.color.canvas')).onVisibleAreaChange([0, 1], (_visible: boolean, ratio: number): void => this.onVisibilityChanged(ratio > 0))

@@ -1,35 +1,36 @@
 'use strict';
-const {dateMillis,currentVisibility}=require('./content-policy');
-const {fail,hash,id,int,token,encode,coordinate,distance,friendsAllowed,flag}=require('./stages47-common');
+const {dateMillis,currentVisibility}=require('./shared/content-policy');
+const {fail,hash,id,int,token,encode,coordinate,distance,friendsAllowed,flag,timestampPage,afterTuple}=require('./stages47-common');
 function createStage7Services(ctx){
  const {collection,one}=ctx;
  const stamp=row=>hash([row.id,row.ownerUid,Number(row.updatedAt),dateMillis(row.modifiedAt),Number(row.lifecycleGeneration),Number(row.tasteScore),dateMillis(row.publishedAt)]);
  async function boundary(saved,env){if(!saved)return null;const row=await one(collection(env,'FoodCard').query().equalTo('id',id(saved.lastId)));if(!row||stamp(row)!==saved.lastStamp)throw fail('分页基准已变化，请刷新。','CURSOR_STALE');return Object.assign(new ctx.models.FoodCard(),row);}
- async function capabilities(uid,env){if(uid)await ctx.contentPolicy(env).assertAccountActive(uid);const readiness=await ctx.stage1().migrationReadiness(env);const discovery=await ctx.stage3().capabilities(env);return {friendsEnabled:flag(env,'SHIKE_FRIENDS_PUBLISH_VERIFIED'),reactionsEnabled:readiness.reactionCoverageComplete && flag(env,'SHIKE_REACTION_VERIFIED'),mealEnabled:discovery.searchEnabled,merchantEnabled:discovery.mapEnabled,collectionEnabled:ctx.collections().enabled(env)};}
+ async function rankingCapability(env,readiness){
+  let reason=!flag(env,'SHIKE_RANKINGS_VERIFIED')?'榜单尚未完成上线验证':!readiness.cardCoverageComplete?'卡片历史回填尚未完成':!flag(env,'SHIKE_INDEXED_QUERY_VERIFIED')?'榜单索引尚未验证':String(env.SHIKE_STAGE3_MAP_COORDINATE_SYSTEM||process.env.SHIKE_STAGE3_MAP_COORDINATE_SYSTEM||'')!=='GCJ02'?'附近榜单坐标尚未配置':'';
+  if(!reason&&await one(collection(env,'Merchant').query().equalTo('mapVisible',true).equalTo('coordinateSystem','WGS84')))reason='商家坐标系尚未统一';
+  return {enabled:!reason,reason};
+ }
+ async function capabilities(uid,env){
+  if(uid)await ctx.contentPolicy(env).assertAccountActive(uid);
+  const readiness=await ctx.stage1().migrationReadiness(env), discovery=await ctx.stage3().capabilities(env,readiness), rankings=await rankingCapability(env,readiness);
+  const reactionsEnabled=readiness.reactionCoverageComplete&&flag(env,'SHIKE_REACTION_VERIFIED');
+  return {protocolVersion:2,friendsEnabled:flag(env,'SHIKE_FRIENDS_PUBLISH_VERIFIED'),reactionsEnabled,reactionsReason:!readiness.reactionCoverageComplete?'赞踩历史整理尚未完成':!reactionsEnabled?'赞踩尚未完成上线验证':'',mealEnabled:discovery.searchEnabled,merchantEnabled:discovery.mapEnabled,collectionEnabled:ctx.collections().enabled(env),rankingsEnabled:rankings.enabled,rankingsReason:rankings.reason};
+ }
  async function userPage(uid,p,env){
   const target=id(p.userUid);
   await ctx.contentPolicy(env).assertProfileReadable(uid,target);
   const profile=await one(collection(env,'UserProfile').query().equalTo('uid',target));
-  const sig=hash([uid,target,'user-page']);const saved=token(p.cursor,sig);const at=saved?saved.at:Date.now();
-  const last=await boundary(saved,env);const size=int(p.pageSize===undefined?12:p.pageSize,1,20);
-  let query=collection(env,'FoodCard').query().equalTo('ownerUid',target).equalTo('status','APPROVED')
-   .lessThanOrEqualTo('createdAt',at).orderByDesc('createdAt').orderByAsc('id');if(last)query=query.startAfter(last);
-  const cards=[],sources=[];let consumed=0,frontier=null,hasMore=false;
-  while(consumed<60&&cards.length<size){
-   const rows=await query.limit(Math.min(10,60-consumed)).get();
-   if(!rows.length){hasMore=false;break;}
+  const sig=hash([uid,target,'user-page-v2']);const saved=token(p.cursor,sig);const at=saved?saved.at:Date.now();
+  const size=int(p.pageSize===undefined?12:p.pageSize,1,20);
+  const cards=[],sources=[];let consumed=0,next=saved;
+  do {
+   const page=await timestampPage(collection(env,'FoodCard').query().equalTo('ownerUid',target).equalTo('status','APPROVED').orderByDesc('createdAt'),next,at,Math.min(10,size-cards.length,60-consumed),'id','createdAt');
+   const rows=page.rows;next=page.next;consumed+=rows.length;
    const context=await ctx.createCardReadContext(rows,uid,env);
    const allowed=await ctx.readableCardRows(rows.filter(r=>friendsAllowed(env,r)),uid,env,false,context);
    await ctx.preparePrimaryPhotos(context,allowed,env);
-   for(const row of rows){
-    consumed++;frontier=row;
-    if(allowed.some(r=>r.id===row.id)){cards.push(ctx.previewCard(row,context,env));sources.push(row);}
-    if(cards.length===size)break;
-   }
-   hasMore=cards.length===size||rows.length===10;
-   if(cards.length===size||rows.length<10)break;
-   query=query.startAfter(Object.assign(new ctx.models.FoodCard(),frontier));
-  }
+   for(const row of allowed){cards.push(ctx.previewCard(row,context,env));sources.push(row);}
+  }while(next&&consumed<60&&cards.length<size);
   const fresh=await ctx.finalizeCardReads(cards,sources,uid,env);
   // Recheck profile-level block after assembly even for an empty homepage.
   const relation=await ctx.contentPolicy(env).assertProfileReadable(uid,target);
@@ -40,17 +41,58 @@ function createStage7Services(ctx){
   return {profile:{uid:view.uid,nickname:view.nickname,avatarPath:view.avatarPath,avatarBucket:view.avatarBucket,publishCount:view.publishCount,coverPath:isFriend?view.coverPath||'':'',coverBucket:isFriend?view.coverBucket||'':''},
    relationshipState:uid===target?'SELF':relation&&relation.status==='ACCEPTED'?'FRIEND':'VISITOR',
    cards:isFriend?fresh:fresh.filter(card=>card.visibility!=='FRIENDS'),
-   nextCursor:hasMore&&frontier?encode(sig,at,{lastId:frontier.id,lastStamp:stamp(frontier)}):''};
+   nextCursor:next?encode(sig,at,next):''};
  }
- async function rankings(uid,p,env){if(uid)await ctx.contentPolicy(env).assertAccountActive(uid);const caps=await ctx.stage3().capabilities(env);if(!caps.mapEnabled)throw fail('排行榜需先验证 Merchant 坐标与索引。','FEATURE_NOT_READY');const kind=p.kind||'HIGH_SCORE';if(!['HIGH_SCORE','FRIENDS'].includes(kind))throw fail('榜单类型无效。');if(kind==='FRIENDS'&&!uid)throw fail('好友榜需登录。','AUTH_REQUIRED');if(!Number.isFinite(p.lat)||Math.abs(p.lat)>90||!Number.isFinite(p.lon)||Math.abs(p.lon)>180||p.coordinateSystem!=='GCJ02')throw fail('榜单中心无效。','LOCATION_REQUIRED');
-  const sig=hash([uid,kind,p.lat,p.lon]);const saved=token(p.cursor,sig);const at=saved?saved.at:Date.now();const last=await boundary(saved,env);let owners=null;
-  if(kind==='FRIENDS'){owners=new Set((await ctx.friendshipRowsFor(uid,env)).filter(r=>r.status==='ACCEPTED').map(r=>r.memberAUid===uid?r.memberBUid:r.memberAUid));}
-  let query=collection(env,'FoodCard').query().equalTo('status','APPROVED').lessThanOrEqualTo('publishedAt',new Date(at)).orderByDesc('tasteScore').orderByDesc('publishedAt').orderByAsc('id');if(last)query=query.startAfter(last);const rows=await query.limit(400).get();const cards=[],sources=[],merchants=new Map();let consumed=0;
-  for(const row of rows){consumed++;if(owners && !owners.has(row.ownerUid) || !owners && currentVisibility(row)!=='PUBLIC' || !row.merchantId || !friendsAllowed(env,row))continue;
-   if(owners){const relation=await ctx.friendshipBetween(uid,row.ownerUid,env);if(!relation || relation.status!=='ACCEPTED')continue;}
-   if(!merchants.has(row.merchantId))merchants.set(row.merchantId,await one(collection(env,'Merchant').query().equalTo('merchantId',row.merchantId)));const merchant=merchants.get(row.merchantId);if(!coordinate(merchant))continue;const meters=distance(p.lat,p.lon,merchant);if(meters>20000)continue;const card=await ctx.readCardIfAllowed(row,env,meters/1000,true,uid,false,1);if(card){cards.push(card);sources.push(row);}if(cards.length===20)break;
+ async function rankings(uid,p,env){
+  if(uid)await ctx.contentPolicy(env).assertAccountActive(uid);
+  const caps=await rankingCapability(env,await ctx.stage1().migrationReadiness(env));
+  if(!caps.enabled)throw fail(caps.reason+'，请在上线诊断中核对。','FEATURE_NOT_READY');
+  const kind=p.kind||'HIGH_SCORE';
+  if(!['HIGH_SCORE','FRIENDS'].includes(kind))throw fail('榜单类型无效。');
+  if(kind==='FRIENDS'&&!uid)throw fail('好友榜需登录。','AUTH_REQUIRED');
+  if(!Number.isFinite(p.lat)||Math.abs(p.lat)>90||!Number.isFinite(p.lon)||Math.abs(p.lon)>180||p.coordinateSystem!=='GCJ02')throw fail('榜单中心无效。','LOCATION_REQUIRED');
+  const sig=hash(['rankings-range-v3',uid,kind,p.lat,p.lon]);const saved=token(p.cursor,sig);const at=saved?saved.at:Date.now();
+  const last=await boundary(saved,env);let owners=null;
+  if(kind==='FRIENDS')owners=new Set((await ctx.friendshipRowsFor(uid,env)).filter(r=>r.status==='ACCEPTED').map(r=>r.memberAUid===uid?r.memberBUid:r.memberAUid));
+  let query=collection(env,'FoodCard').query().equalTo('status','APPROVED');
+  // Preserve the deployed mixed-direction index; ordinary ranges avoid the SDK
+  // startAfter restriction on order direction and pagination predicates.
+  if(last)query=afterTuple(query,[['tasteScore','DESC'],['publishedAt','DESC'],['id','ASC']],last);
+  query=query.orderByDesc('tasteScore').orderByDesc('publishedAt').orderByAsc('id');
+  const rows=await ctx.withReadPhase('candidates',()=>query.limit(400).get());
+  ctx.recordReadCounts({scannedCandidateCount:rows.length});
+  const cards=[],sources=[];let consumed=0;
+  for(let start=0;start<rows.length&&cards.length<20;start+=10){
+   await ctx.withReadPhase('assembly',async()=>{
+    const batch=rows.slice(start,start+10);
+    const candidates=batch.filter(row=>dateMillis(row.publishedAt)!==null&&dateMillis(row.publishedAt)<=at&&(owners?owners.has(row.ownerUid):currentVisibility(row)==='PUBLIC')&&row.merchantId&&friendsAllowed(env,row));
+    const context=await ctx.createCardReadContext(candidates,uid,env);
+    const readable=await ctx.readableCardRows(candidates,uid,env,!owners,context);
+    const merchants=await ctx.readMerchantRowsByIds(readable.map(row=>row.merchantId),env,context);
+    const qualified=readable.filter(row=>coordinate(merchants.get(row.merchantId))&&distance(p.lat,p.lon,merchants.get(row.merchantId))<=20000);
+    await ctx.preparePrimaryPhotos(context,qualified,env);
+    const allowed=new Set(qualified.map(row=>row.id));
+    for(const row of batch){
+     consumed++;
+     if(allowed.has(row.id)){
+      const meters=distance(p.lat,p.lon,merchants.get(row.merchantId));
+      const card=await ctx.readCardIfAllowed(row,env,meters/1000,true,uid,false,1,null,context);
+      if(card){cards.push(card);sources.push(row);}
+     }
+     if(cards.length===20)break;
+    }
+    ctx.recordReadCounts({consumedCandidateCount:consumed});
+   });
   }
-  const frontier=consumed?rows[consumed-1]:null;const qualified=await ctx.finalizeCardReads(cards,sources,uid,env,kind==='FRIENDS');const final=[];for(const card of qualified){const merchant=await one(collection(env,'Merchant').query().equalTo('merchantId',card.merchantId));if(coordinate(merchant)&&distance(p.lat,p.lon,merchant)<=20000)final.push(card);}return {cards:final,nextCursor:consumed<rows.length || rows.length===400?encode(sig,at,{lastId:frontier.id,lastStamp:stamp(frontier)}):'',coverage:consumed<rows.length?'PARTIAL_RESULT_LIMIT':rows.length===400?'PARTIAL_SCAN_LIMIT':'COMPLETE',scannedCandidateCount:consumed,centerSource:p.centerSource==='LOCATION'?'LOCATION':'DEFAULT',radiusMeters:20000};}
+  const final=await ctx.withReadPhase('final-check',async()=>{
+   const qualified=await ctx.finalizeCardReads(cards,sources,uid,env,kind==='FRIENDS');
+   // A separate batch bypasses assembly's merchant cache, just as authority is refreshed.
+   const merchants=await ctx.readMerchantRowsByIds(qualified.map(card=>card.merchantId),env);
+   return qualified.filter(card=>coordinate(merchants.get(card.merchantId))&&distance(p.lat,p.lon,merchants.get(card.merchantId))<=20000);
+  });
+  const frontier=consumed?rows[consumed-1]:null;
+  return {cards:final,nextCursor:frontier&&(consumed<rows.length||rows.length===400)?encode(sig,at,{lastId:frontier.id,lastStamp:stamp(frontier)}):'',coverage:consumed<rows.length?'PARTIAL_RESULT_LIMIT':rows.length===400?'PARTIAL_SCAN_LIMIT':'COMPLETE',scannedCandidateCount:rows.length,consumedCandidateCount:consumed,centerSource:p.centerSource==='LOCATION'?'LOCATION':'DEFAULT',radiusMeters:20000};
+ }
  async function publicShare(p,env){const cardId=id(p.cardId);const row=await one(collection(env,'FoodCard').query().equalTo('id',cardId));if(!row || currentVisibility(row)!=='PUBLIC' || !await ctx.contentPolicy(env).canReadCard('',row))throw fail('内容已不可访问。','CONTENT_UNAVAILABLE');
   // Explicit browser allowlist. Never serialize the DB row or an owner DTO.
   const card=await ctx.readCardIfAllowed(row,env,0,false,'',false,1);if(!card)throw fail('内容已不可访问。','CONTENT_UNAVAILABLE');

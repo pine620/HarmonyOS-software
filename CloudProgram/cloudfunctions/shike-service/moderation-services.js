@@ -1,6 +1,6 @@
 'use strict';
-const { dateMillis, readableCardState, isAccountActive, currentVisibility } = require('./content-policy');
-const { fail, hash, id, uuid, int, token, encode, flag, coordinate } = require('./stages47-common');
+const { dateMillis, readableCardState, isAccountActive, currentVisibility } = require('./shared/content-policy');
+const { fail, hash, id, uuid, int, token, encode, flag, coordinate, timestampPage } = require('./stages47-common');
 const KINDS = ['CARD','REVISION','MERCHANT','REPORT'];
 const REVIEW_FIELDS=[['productName','名称'],['brand','品牌'],['specification','规格'],['shop','店铺'],['sellingPoints','卖点'],['publicOffers','公开优惠'],['reviewText','体验'],['sourceLink','来源'],['category','原分类'],['categoryV2','分类'],['consumptionMode','消费方式'],['visibility','可见范围'],['merchantId','商家编号'],['merchantNameSnapshot','商家名称'],['merchantAddressSnapshot','商家地址'],['priceFen','原单价（分）'],['originalPriceFen','原价（分）'],['itemPriceFen','单品价格（分）'],['dineInAvgFen','人均（分）'],['orderTotalFen','订单总额（分）'],['deliveryFeeFen','配送费（分）'],['deliveryPlatformKey','配送平台'],['deliveryPlatformLabelSnapshot','平台名称'],['consumedAt','消费时间'],['tasteScore','口味评分']];
 function fieldText(row,key){let value=row&&row[key];if(value==null&&row&&['sellingPoints','publicOffers'].includes(key)){try{value=JSON.parse(row[key+'Json']||'[]');}catch(_){value=[];}}if(value==null)return '';if(key==='consumedAt'){const at=dateMillis(value);return at?new Date(at).toISOString():'';}return typeof value==='object'?JSON.stringify(value):String(value);}
@@ -18,27 +18,43 @@ function createModerationServices(ctx) {
       state: String(row.reviewState || row.verificationStatus || row.status || ''),
       reason: String(row.reviewReason || row.resolutionReason || row.reason || ''), createdAt: dateMillis(row.submittedAt) || dateMillis(row.createdAt) || 0 };
   }
-  async function capabilities(uid, env) {
+  async function capabilities(uid, env, payload={}) {
     if (uid) await ctx.contentPolicy(env).assertAccountActive(uid);
-    return { administrator: !!uid && ctx.isAdministrator(uid,env), lifecycleEnabled: flag(env,'SHIKE_LIFECYCLE_VERIFIED'), workerEnabled: flag(env,'SHIKE_MAINTENANCE_ENABLED') };
+    const result={protocolVersion:2,administrator:!!uid&&ctx.isAdministrator(uid,env),lifecycleEnabled:flag(env,'SHIKE_LIFECYCLE_VERIFIED'),workerEnabled:flag(env,'SHIKE_MAINTENANCE_ENABLED')};
+    if(result.administrator&&payload.includeDiagnostics===true){
+      const lines=['服务协议：2；分页兼容修复：repair-20261008-v4'];
+      for(const [key,label] of [['SHIKE_INDEXED_QUERY_VERIFIED','索引验证'],['SHIKE_REACTION_VERIFIED','赞踩验证'],['SHIKE_COLLECTIONS_VERIFIED','收藏合并验证'],['SHIKE_RANKINGS_VERIFIED','榜单验证'],['SHIKE_MEDIA_COVERS_VERIFIED','小图转换验证'],['SHIKE_IMAGE_READ_ENABLED','图片批量读取']])lines.push(label+'：'+(flag(env,key)?'已启用':'待验证'));
+      try{const readiness=await ctx.stage1().migrationReadiness(env);lines.push('历史卡片：'+(readiness.cardCoverageComplete?'已完成':'待回填'),'历史赞踩：'+(readiness.reactionCoverageComplete?'已完成':'待整理'));}catch(_){lines.push('迁移状态读取失败，请核对 schema 与服务版本');}
+      result.diagnostics=lines;
+    }
+    return result;
   }
   async function queue(uid,payload,env,own=false) {
     if (own) await ctx.contentPolicy(env).assertAccountActive(uid); else await ctx.assertAdmin(uid,env);
     const kind = own ? 'REPORT' : String(payload.kind || 'CARD'); if(!KINDS.includes(kind)) throw fail('审核队列无效。');
-    const signature = hash(['moderation',uid,kind,own]); const saved = token(payload.cursor,signature); const offset = saved ? int(saved.offset,0,10000000) : 0;
-    const size = 12; let query, name;
-    if(kind==='CARD'){ name='FoodCard';query=collection(env,name).query().equalTo('status','APPROVED').orderByDesc('createdAt').orderByAsc('id'); }
-    if(kind==='REVISION'){name='FoodCardRevision';query=collection(env,name).query().equalTo('status','PENDING').orderByAsc('submittedAt').orderByAsc('revisionId');}
-    if(kind==='MERCHANT'){name='Merchant';query=collection(env,name).query().equalTo('verificationStatus','USER_CONFIRMED_PENDING').orderByAsc('createdAt').orderByAsc('merchantId');}
-    if(kind==='REPORT'){name='Report';query=collection(env,name).query().equalTo(own?'reporterUid':'status',own?uid:'PENDING').orderByDesc('createdAt').orderByAsc('id');}
-    const items=[];let scanned=0,more=true;
-    while(scanned<120 && items.length<size){ const rows=await query.limit(Math.min(12,120-scanned),offset+scanned).get();if(!rows.length){more=false;break;}
-      for(const row of rows){scanned++;if(kind!=='CARD'||(row.reviewState==='PENDING_POST_REVIEW'&&row.deletedAt==null&&row.purgeAt==null))items.push(rowView(kind,row));if(items.length===size)break;}
-      if(rows.length<12&&items.length<size){more=false;break;}
+    const signature = hash(['moderation-v2',uid,kind,own]); const saved = token(payload.cursor,signature);
+    const at=saved?saved.at:Date.now(), size=12;
+    const name={CARD:'FoodCard',REVISION:'FoodCardRevision',MERCHANT:'Merchant',REPORT:'Report'}[kind];
+    const primary={CARD:'id',REVISION:'revisionId',MERCHANT:'merchantId',REPORT:'id'}[kind];
+    const stamp=kind==='REVISION'?'submittedAt':'createdAt', ascending=['REVISION','MERCHANT'].includes(kind);
+    function query(){
+      let q=collection(env,name).query();
+      if(kind==='CARD')q=q.equalTo('status','APPROVED');
+      if(kind==='REVISION')q=q.equalTo('status','PENDING');
+      if(kind==='MERCHANT')q=q.equalTo('verificationStatus','USER_CONFIRMED_PENDING');
+      if(kind==='REPORT')q=q.equalTo(own?'reporterUid':'status',own?uid:'PENDING');
+      return ascending?q.orderByAsc(stamp):q.orderByDesc(stamp);
     }
+    const items=[];let scanned=0,next=saved;
+    do {
+      const page=await timestampPage(query(),next,at,Math.min(size-items.length,120-scanned),primary,stamp,ascending,ascending);
+      for(const row of page.rows){scanned++;if(kind!=='CARD'||(row.reviewState==='PENDING_POST_REVIEW'&&row.deletedAt==null&&row.purgeAt==null))items.push(rowView(kind,row));}
+      next=page.next;
+    }while(next&&scanned<120&&items.length<size);
     if(own)await ctx.contentPolicy(env).assertAccountActive(uid);else await ctx.assertAdmin(uid,env);
-    return {items,nextCursor:more?encode(signature,saved?saved.at:Date.now(),{offset:offset+scanned}):'',scanned};
+    return {items,nextCursor:next?encode(signature,at,next):'',scanned};
   }
+
   async function detail(uid,payload,env) {
     await ctx.assertAdmin(uid,env);const kind=String(payload.kind),key=id(payload.id);if(!KINDS.includes(kind))throw fail('审核类型无效。');
     const name={CARD:'FoodCard',REVISION:'FoodCardRevision',MERCHANT:'Merchant',REPORT:'Report'}[kind],primary={CARD:'id',REVISION:'revisionId',MERCHANT:'merchantId',REPORT:'id'}[kind];
@@ -104,13 +120,25 @@ function createModerationServices(ctx) {
     }});if(!committed||!result)throw fail('审核未保存，请使用同一请求重试。','CONFLICT');return result;
   }
   async function ownReviewQueue(uid,payload,env) {
-    await ctx.contentPolicy(env).assertAccountActive(uid);const signature=hash(['ownReview',uid]);const saved=token(payload.cursor,signature),offset=saved?int(saved.offset,0,10000000):0,phase=saved&&saved.phase==='REVISION'?'REVISION':'CARD';
-    const rows=phase==='CARD'?await collection(env,'FoodCard').query().equalTo('ownerUid',uid).equalTo('status','REMOVED').orderByDesc('createdAt').limit(12,offset).get():await collection(env,'FoodCardRevision').query().equalTo('authorUid',uid).orderByDesc('submittedAt').orderByAsc('revisionId').limit(12,offset).get();
-    const items=[];
-    if(phase==='CARD')for(const row of rows){if(row.deletedAt==null&&row.reviewState==='REQUEST_CHANGE')items.push(rowView('CARD',row));}
-    else for(const row of rows){if(row.status!=='REJECTED')continue;const card=await one(collection(env,'FoodCard').query().equalTo('id',row.cardId));if(!card||card.ownerUid!==uid||!ctx.stage1().editableState(card))continue;const latest=await one(collection(env,'FoodCardRevision').query().equalTo('cardId',row.cardId).orderByDesc('submittedAt').orderByAsc('revisionId'));if(latest&&latest.revisionId===row.revisionId)items.push(rowView('REVISION',row));}
-    const next=rows.length===12?{phase,offset:offset+12}:phase==='CARD'?{phase:'REVISION',offset:0}:null;await ctx.contentPolicy(env).assertAccountActive(uid);return {items,nextCursor:next?encode(signature,saved?saved.at:Date.now(),next):''};
+    await ctx.contentPolicy(env).assertAccountActive(uid);const signature=hash(['ownReview',uid]),saved=token(payload.cursor,signature),at=saved?saved.at:Date.now();
+    const phase=saved&&saved.phase==='REVISION'?'REVISION':'CARD';
+    const query=phase==='CARD'?collection(env,'FoodCard').query().equalTo('ownerUid',uid).equalTo('status','REMOVED').orderByDesc('createdAt'):
+      collection(env,'FoodCardRevision').query().equalTo('authorUid',uid).orderByDesc('submittedAt').orderByAsc('revisionId');
+    const continuation=saved&&saved.lastStamp!==undefined?saved:null;
+    const page=await timestampPage(query,continuation,at,12,phase==='CARD'?'id':'revisionId',phase==='CARD'?'createdAt':'submittedAt',phase==='REVISION');
+    const items=[],cards=new Map(),latestByCard=new Map();
+    if(phase==='CARD')for(const row of page.rows){if(row.deletedAt==null&&row.reviewState==='REQUEST_CHANGE')items.push(rowView('CARD',row));}
+    else for(const row of page.rows){
+      if(row.status!=='REJECTED')continue;
+      if(!cards.has(row.cardId))cards.set(row.cardId,await one(collection(env,'FoodCard').query().equalTo('id',row.cardId)));
+      const card=cards.get(row.cardId);if(!card||card.ownerUid!==uid||!ctx.stage1().editableState(card))continue;
+      if(!latestByCard.has(row.cardId))latestByCard.set(row.cardId,await one(collection(env,'FoodCardRevision').query().equalTo('cardId',row.cardId).orderByDesc('submittedAt').orderByAsc('revisionId')));
+      const latest=latestByCard.get(row.cardId);if(latest&&latest.revisionId===row.revisionId)items.push(rowView('REVISION',row));
+    }
+    const next=page.next?{phase,...page.next}:phase==='CARD'?{phase:'REVISION'}:null;
+    await ctx.contentPolicy(env).assertAccountActive(uid);return {items,nextCursor:next?encode(signature,at,next):''};
   }
+
 
   return {capabilities,queue,detail,submitReport,decide,ownReviewQueue,rowView,version};
 }

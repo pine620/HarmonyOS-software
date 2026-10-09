@@ -1,3 +1,6 @@
+import { bundleManager } from '@kit.AbilityKit';
+import { ImageDescriptors } from './ImageDescriptors';
+import { ImageReadRequest } from '../model/ImageModels';
 import { cloudCommon, cloudFunction } from '@kit.CloudFoundationKit';
 import { importObject, ShikeAuth, ShikeLocation, ShikeMedia, ShikeService } from '@shike/cloud-objects';
 import type { CloudEnvelope } from '@shike/cloud-objects';
@@ -14,13 +17,19 @@ type Stage47ServiceMethod = 'getStage47Capabilities' | 'getTastePreference' | 'u
   'clearTastePreference' | 'listPersonalizedRecommendations' | 'listFoodLists' | 'createFoodList' |
   'updateFoodList' | 'deleteFoodList' | 'listFoodListItems' | 'addFoodListItem' | 'removeFoodListItem' |
   'reorderFoodListItems' | 'getPersonalFoodState' | 'updatePersonalFoodState' | 'getMealCandidates' |
-  'recordMealChoice' | 'listMealChoiceHistory' | 'createMealPoll' | 'getMealPoll' | 'addMealPollOption' |
+  'createMealPoll' | 'getMealPoll' | 'addMealPollOption' |
   'voteMealPoll' | 'closeMealPoll' | 'cancelMealPoll' | 'stopMealPollOptions' | 'getUserPage' |
   'listMerchantRankings' | 'listFormerFriendContentGrants' | 'setCardReactionV2' |
   'getCardPreviews' | 'listPersonalCollection' | 'getPersonalCollectionMigration' |
   'startPersonalCollectionMigration' | 'resumePersonalCollectionMigration' | 'setCardFavorite' | 'setCardWanted' | 'getStage89Capabilities' | 'listModerationQueue' | 'getModerationDetail' | 'decideModeration' | 'listMyReports' | 'reportMerchant' | 'listOwnReviewRequests' | 'listDeletedCards' | 'restoreDeletedCard' | 'listLifecycleJobs' | 'getLifecycleJob' | 'retryLifecycleJob' | 'confirmAuthCleanup' | 'getReviewMedia' | 'runLifecycleJob';
 
 interface ReadCloudEnvelope extends CloudEnvelope {
+  readRequestId: string;
+  readAttempt: number;
+}
+
+interface ImageFunctionEnvelope extends ImageReadRequest {
+  accessToken: string;
   readRequestId: string;
   readAttempt: number;
 }
@@ -54,6 +63,9 @@ interface ApiResponse<T> {
   operation?: string;
   stage?: string;
   functionVersion?: string;
+  buildId?: string;
+  policyHash?: string;
+  protocolVersion?: string;
   data: T;
   message: string;
 }
@@ -67,6 +79,9 @@ interface CloudObjectResponse {
   operation?: string;
   stage?: string;
   functionVersion?: string;
+  buildId?: string;
+  policyHash?: string;
+  protocolVersion?: string;
   data: object;
   message: string;
 }
@@ -94,21 +109,16 @@ function decode<T>(raw: string | object): ApiResponse<T> {
 
 /** Cloud Object calls carry the AGC token in CloudEnvelope for server verification. */
 export class CloudGateway {
+  private static appBuildId: string = 'unavailable';
   private static initialized: boolean = false;
   private static authObject: ShikeAuth | undefined = undefined;
   private static locationObject: ShikeLocation | undefined = undefined;
   private static mediaObject: ShikeMedia | undefined = undefined;
   private static serviceObject: ShikeService | undefined = undefined;
   private static mediaCircuitOpenUntilMs: number = 0;
-  private static mediaCircuitGeneration: number = 0;
 
   static isMediaServiceUnavailable(): boolean {
     return Date.now() < CloudGateway.mediaCircuitOpenUntilMs;
-  }
-
-  static retryMediaService(): void {
-    CloudGateway.mediaCircuitGeneration += 1;
-    CloudGateway.mediaCircuitOpenUntilMs = 0;
   }
 
   private static mediaOperationFor(name: string): MediaOperation | undefined {
@@ -160,17 +170,14 @@ export class CloudGateway {
         message.includes('Invalid package config') || message.includes('ERR_INVALID_PACKAGE_CONFIG'));
   }
 
-  private static openMediaCircuit(operation: MediaOperation, generation: number): MediaServiceUnavailableError {
-    if (generation === CloudGateway.mediaCircuitGeneration) {
-      const wasOpen: boolean = CloudGateway.isMediaServiceUnavailable();
-      CloudGateway.mediaCircuitOpenUntilMs = Date.now() + MEDIA_CIRCUIT_BREAK_MS;
-      if (!wasOpen) console.error('[MediaService] handler initialization failed; operation=' + operation + '.');
-    }
+  private static openMediaCircuit(operation: MediaOperation): MediaServiceUnavailableError {
+    const wasOpen: boolean = CloudGateway.isMediaServiceUnavailable();
+    CloudGateway.mediaCircuitOpenUntilMs = Date.now() + MEDIA_CIRCUIT_BREAK_MS;
+    if (!wasOpen) console.error('[MediaService] handler initialization failed; operation=' + operation + '.');
     return new MediaServiceUnavailableError();
   }
 
-  private static async invokeMedia(operation: MediaOperation, envelope: CloudEnvelope,
-    generation: number): Promise<CloudObjectResponse> {
+  private static async invokeMedia(operation: MediaOperation, envelope: CloudEnvelope): Promise<CloudObjectResponse> {
     try {
       switch (operation) {
         case 'prepare-card-photo': return await (CloudGateway.mediaObject as ShikeMedia).prepareCardPhoto(envelope);
@@ -187,7 +194,7 @@ export class CloudGateway {
           CloudGateway.cloudHandlerCode(error as Object));
       }
       if (CloudGateway.isMediaHandlerLoadError(message)) {
-        throw CloudGateway.openMediaCircuit(operation, generation);
+        throw CloudGateway.openMediaCircuit(operation);
       }
       if (message.includes('Call handler error')) {
         console.error('[MediaService] handler error; operation=' + operation + '.');
@@ -212,6 +219,7 @@ export class CloudGateway {
 
   private static initialize(): void {
     if (CloudGateway.initialized) return;
+    try { const info: bundleManager.BundleInfo = bundleManager.getBundleInfoForSelfSync(bundleManager.BundleFlag.GET_BUNDLE_INFO_DEFAULT); CloudGateway.appBuildId = info.name + ':' + info.versionName + ':' + info.versionCode; } catch (_error) { }
     cloudCommon.init({
       region: cloudCommon.CloudRegion.CHINA,
       functionOptions: { timeout: 70000 },
@@ -232,11 +240,12 @@ export class CloudGateway {
   }
 
   static hasSession(): boolean {
-    return AuthSessionStore.hasCachedSession();
+    return AuthSessionStore.owner().length > 0 || AuthSessionStore.hasCachedSession();
   }
 
   static async callPublic<T>(name: string, payload: object, options: ReadRequestOptions = {}): Promise<T> {
-    return CloudGateway.dispatch<T>(name, payload, false, options);
+    // Public read methods still carry the signed-in viewer so block rules apply.
+    return CloudGateway.dispatch<T>(name, payload, ReadScheduler.allows(name) && CloudGateway.hasSession(), options);
   }
 
   static async callAuthenticated<T>(name: string, payload: object, options: ReadRequestOptions = {}): Promise<T> {
@@ -256,6 +265,12 @@ export class CloudGateway {
       (requestId: string, attempt: number): Promise<object> => CloudGateway.execute<object>(name, payload, authenticated, requestId, attempt));
     if (options.mayContinue !== undefined && !await options.mayContinue()) throw new ReadCancelledError();
     return value as T;
+  }
+
+  private static hasPublicMediaManifest(name: string): boolean {
+    return ['get-card-detail', 'get-card-previews', 'list-personal-collection', 'list-personalized-recommendations',
+      'get-meal-candidates', 'get-user-page', 'get-friend-profile', 'list-merchant-rankings', 'search-public-cards',
+      'get-merchant-recommendations', 'list-nearby-cards', 'list-friend-rankings', 'list-my-cards', 'list-my-favorite-cards'].includes(name);
   }
 
   private static changesReadContent(name: string): boolean {
@@ -289,11 +304,10 @@ export class CloudGateway {
     }
     if (name !== 'list-personalized-recommendations' && name !== 'get-meal-candidates') return;
     const summary: ReadPageSummary = data as ReadPageSummary;
-    const ids: Array<string> = summary.cards !== undefined
-      ? summary.cards.map((card: ReadCardIdentity): string => card.id)
-      : summary.candidates === undefined ? [] : summary.candidates.map((item: ReadCandidateIdentity): string => item.card.id);
-    console.info('[ReadPage] operation=' + name + ' requestId=' + requestId + ' returnedCount=' + ids.length +
-      ' cardIds=' + ids.join(',') + ' hasMore=' + String(summary.nextCursor !== undefined && summary.nextCursor.length > 0) +
+    const returnedCount: number = summary.cards !== undefined ? summary.cards.length : (summary.candidates?.length || 0);
+    // Counts and the logical request ID are sufficient to correlate a page; never log private food choices.
+    console.info('[ReadPage] operation=' + name + ' requestId=' + requestId + ' returnedCount=' + returnedCount +
+      ' hasMore=' + String(summary.nextCursor !== undefined && summary.nextCursor.length > 0) +
       ' coverage=' + (summary.coverage || '') + ' scanned=' + (summary.scannedCandidateCount || 0) +
       ' consumed=' + (summary.consumedCandidateCount || 0) + ' fetched=' + (summary.fetchedCandidateCount || 0));
   }
@@ -304,6 +318,9 @@ export class CloudGateway {
     const mediaOperation: MediaOperation | undefined = CloudGateway.mediaOperationFor(name);
     CloudGateway.initialize();
     const session: number = AuthSessionStore.generation();
+    const mediaLifecycle: number = ReadScheduler.lifecycleRevision();
+    const mediaData: number = ReadScheduler.dataRevision();
+    const imageEpoch: number = ImageDescriptors.epoch();
     let accessToken: string = '';
     if (authenticated) {
       try { accessToken = await AuthSessionStore.getAccessToken(false); }
@@ -315,15 +332,23 @@ export class CloudGateway {
     }
     if (session !== AuthSessionStore.generation()) throw new ReadCancelledError();
     if (authenticated && accessToken.length === 0) {
-      throw new Error('登录状态已失效，请重新登录。');
+      throw new CloudBusinessError('会话需要恢复，请重新登录或重试恢复。', 'AUTH_REQUIRED');
     }
     if (mediaOperation !== undefined && CloudGateway.isMediaServiceUnavailable()) {
       throw new MediaServiceUnavailableError();
     }
     const envelope: ReadCloudEnvelope = { accessToken, payload, readRequestId, readAttempt };
-    const mediaGeneration: number = CloudGateway.mediaCircuitGeneration;
     let raw: CloudObjectResponse | undefined = undefined;
     switch (name) {
+      case 'image-read-batch': {
+        const imageRequest: ImageReadRequest = payload as ImageReadRequest;
+        const imageEnvelope: ImageFunctionEnvelope = { protocolVersion: imageRequest.protocolVersion, items: imageRequest.items,
+          accessToken, readRequestId, readAttempt };
+        const parameters: cloudFunction.FunctionParams = { name: 'shike-image', version: '$latest', data: imageEnvelope };
+        const response: cloudFunction.FunctionResult = await cloudFunction.call(parameters);
+        raw = decode<object>(response.result as string | object);
+        break;
+      }
       case 'get-card-previews':
         raw = await CloudGateway.invokeStage47('getCardPreviews', envelope); break;
       case 'list-personal-collection':
@@ -416,12 +441,6 @@ export class CloudGateway {
       case 'get-meal-candidates':
         raw = await CloudGateway.invokeStage47('getMealCandidates', envelope);
         break;
-      case 'record-meal-choice':
-        raw = await CloudGateway.invokeStage47('recordMealChoice', envelope);
-        break;
-      case 'list-meal-choice-history':
-        raw = await CloudGateway.invokeStage47('listMealChoiceHistory', envelope);
-        break;
       case 'create-meal-poll':
         raw = await CloudGateway.invokeStage47('createMealPoll', envelope);
         break;
@@ -495,14 +514,14 @@ export class CloudGateway {
         raw = await (CloudGateway.serviceObject as ShikeService).upsertProfile(envelope);
         break;
       case 'prepare-card-photo':
-        raw = await CloudGateway.invokeMedia('prepare-card-photo', envelope, mediaGeneration);
+        raw = await CloudGateway.invokeMedia('prepare-card-photo', envelope);
         break;
       case 'upload-card-photo':
-        raw = await CloudGateway.invokeMedia('upload-card-photo', envelope, mediaGeneration);
+        raw = await CloudGateway.invokeMedia('upload-card-photo', envelope);
         break;
       case 'get-public-media':
         raw = authenticated
-          ? await CloudGateway.invokeMedia('get-public-media', envelope, mediaGeneration)
+          ? await CloudGateway.invokeMedia('get-public-media', envelope)
           : await (CloudGateway.serviceObject as ShikeService).getPublicMedia(envelope);
         break;
       case 'publish-card':
@@ -717,26 +736,33 @@ export class CloudGateway {
           decoded.code === undefined ? 'not-returned' : decoded.code);
       }
       if (mediaOperation !== undefined && CloudGateway.isMediaHandlerLoadError(message)) {
-        throw CloudGateway.openMediaCircuit(mediaOperation, mediaGeneration);
+        throw CloudGateway.openMediaCircuit(mediaOperation);
       }
       if (mediaOperation !== undefined && message.includes('Call handler error')) {
         console.error('[MediaService] handler returned an error; operation=' + mediaOperation + '.');
         throw new Error('实拍图服务处理请求失败，请稍后重试。');
       }
       const code: string = decoded.code === undefined ? 'REQUEST_FAILED' : decoded.code;
+      if (session === AuthSessionStore.generation() && (['ACCOUNT_INACTIVE', 'AUTH_REQUIRED'].includes(code) || code === 'FORBIDDEN' && ['list-moderation-queue', 'get-moderation-detail', 'decide-moderation', 'list-lifecycle-jobs', 'get-lifecycle-job', 'retry-lifecycle-job', 'run-lifecycle-job'].includes(name))) {
+        AppStorage.setOrCreate('operationsRoleRevision', (AppStorage.get<number>('operationsRoleRevision') || 0) + 1);
+      }
       throw new CloudBusinessError(message, code, decoded.retryable === undefined ? code === '3007009' : decoded.retryable,
         decoded.retryAfterMs || 0, decoded.requestId || readRequestId, decoded.operation || name, decoded.stage || 'business-response');
     }
     if (session === AuthSessionStore.generation() && CloudGateway.changesReadContent(name)) ReadScheduler.contentChanged();
+    if (session === AuthSessionStore.generation() && ['set-card-visibility', 'delete-own-card', 'delete-account-data', 'block-user', 'unblock-user', 'remove-friend', 'respond-friend-request', 'decide-moderation', 'moderate-card', 'moderate-card-revision'].includes(name)) ImageDescriptors.revoke();
     if (session === AuthSessionStore.generation() && ['block-user', 'unblock-user', 'remove-friend', 'respond-friend-request'].includes(name))
       AppStorage.setOrCreate('accountContentRevision', (AppStorage.get<number>('accountContentRevision') || 0) + 1);
     if (ReadScheduler.allows(name) && session === AuthSessionStore.generation() &&
       AppStorage.get<boolean>('stage47AppActive') !== false) {
       const requestId: string = decoded.requestId || readRequestId;
       console.info('[ReadResponse] operation=' + name + ' requestId=' + requestId +
-        ' code=OK functionVersion=' + (decoded.functionVersion || 'not-returned'));
+        ' code=OK appBuildId=' + CloudGateway.appBuildId + ' functionVersion=' + (decoded.functionVersion || 'not-returned') + ' policyHash=' + (decoded.policyHash || '') + ' protocol=' + (decoded.protocolVersion || ''));
       CloudGateway.logReadPage(name, decode<object>(raw).data, requestId);
     }
+    if (imageEpoch === ImageDescriptors.epoch() && CloudGateway.hasPublicMediaManifest(name) && session === AuthSessionStore.generation() && mediaLifecycle === ReadScheduler.lifecycleRevision() && mediaData === ReadScheduler.dataRevision() &&
+      AppStorage.get<boolean>('stage47AppActive') !== false && ReadScheduler.allows(name) && name !== 'get-public-media')
+      ImageDescriptors.accept(decoded.data as Object);
     return decoded.data;
   }
 }

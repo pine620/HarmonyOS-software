@@ -2,8 +2,7 @@
 
 const crypto = require('crypto');
 
-// Identical policy is included in each independently deployed cloud-object package.
-// Keep all three copies aligned; callers inject their existing database boundary.
+// One source for every independent artifact. Authority caches are request-local.
 class PolicyDbModel {
   getFieldTypeMap() { return new Map(Object.entries(this.constructor.fieldTypes)); }
   getClassName() { return this.constructor.name; }
@@ -89,7 +88,10 @@ function accessError(message, code = 'CONTENT_ACCESS_DENIED') {
 }
 
 function dateMillis(value) {
-  const millis = value instanceof Date ? value.getTime() : value;
+  // The Cloud DB SDK preserves Long fields as decimal strings. Convert only
+  // bounded integers; Number(''), exponents and unsafe integers are not dates.
+  const millis = value instanceof Date ? value.getTime() :
+    typeof value === 'string' && /^\d{1,16}$/.test(value) ? Number(value) : value;
   return typeof millis === 'number' && Number.isSafeInteger(millis) && millis >= 0 ? millis : null;
 }
 
@@ -126,11 +128,17 @@ function relationshipId(firstUid, secondUid) {
     .digest('hex');
 }
 
+function cardContentRevision(card) { return String(dateMillis(card && card.modifiedAt) ?? dateMillis(card && card.updatedAt) ?? dateMillis(card && card.createdAt) ?? 0) + ':' + String(card && card.lifecycleGeneration || 0); }
+
 function createContentPolicy(getCollection, readOne, initialState = null) {
   // These caches belong to one policy instance within one request. They never
   // survive a request or enter Redis; every new request reads current authority.
   const profiles = new Map();
   const relationships = new Map();
+  const cards = new Map((initialState && initialState.cards || []).map(row => [String(row.id), Promise.resolve(row)]));
+  const revisions = new Map((initialState && initialState.revisions || []).map(row => [String(row.revisionId), Promise.resolve(row)]));
+  for (const id of initialState && initialState.cardIds || []) if (!cards.has(String(id))) cards.set(String(id), Promise.resolve(null));
+  for (const id of initialState && initialState.revisionIds || []) if (!revisions.has(String(id))) revisions.set(String(id), Promise.resolve(null));
   // A transaction can seed rows it has already read, avoiding a second
   // version of the same authority row within one transaction attempt.
   for (const row of initialState && initialState.profiles || []) {
@@ -138,6 +146,25 @@ function createContentPolicy(getCollection, readOne, initialState = null) {
   }
   for (const row of initialState && initialState.relationships || []) {
     if (row && row.id) relationships.set(String(row.id), Promise.resolve(row));
+  }
+
+  function seedProfiles(entries) {
+    for (const [uid, row] of entries) if (uid && !profiles.has(uid)) profiles.set(uid, Promise.resolve(row || null));
+  }
+
+  async function prepareBatch(keys, cache, name, field) {
+    const missing = [...new Set(keys)].filter((key) => !cache.has(key));
+    for (let start = 0; start < missing.length; start += 50) {
+      const batch = missing.slice(start, start + 50).filter(key => !cache.has(key));
+      if (!batch.length) continue;
+      const loading = getCollection(name).query().in(field, batch).limit(batch.length).get()
+        .then((rows) => new Map(rows.map((row) => [String(row[field] || ''), row])));
+      // Register promises before awaiting: overlapping preparations share both
+      // existing rows and confirmed absences, within this policy instance only.
+      for (const key of batch) cache.set(key, loading.then((rows) => rows.get(key) || null));
+      await Promise.all(batch.map((key) => cache.get(key)));
+    }
+    await Promise.all(keys.map((key) => cache.get(key)));
   }
 
   async function profile(uid) {
@@ -157,21 +184,29 @@ function createContentPolicy(getCollection, readOne, initialState = null) {
   async function prepareCardReads(viewerUid, cards) {
     const authors = [...new Set(cards.filter(readableCardState).map((card) => String(card.ownerUid || '')))];
     const uids = [...new Set([...authors, String(viewerUid || '')].filter(Boolean))].filter((uid) => !profiles.has(uid));
-    for (let start = 0; start < uids.length; start += 50) {
-      const batch = uids.slice(start, start + 50);
-      const rows = await getCollection('UserProfile').query().in('uid', batch).limit(batch.length).get();
-      const byUid = new Map(rows.map((row) => [String(row.uid || ''), row]));
-      for (const uid of batch) profiles.set(uid, Promise.resolve(byUid.get(uid) || null));
-    }
+    await prepareBatch(uids, profiles, 'UserProfile', 'uid');
     if (!viewerUid || !isAccountActive(await profile(viewerUid))) return;
     const ids = authors.filter((uid) => uid !== viewerUid).map((uid) => relationshipId(uid, viewerUid))
       .filter((id) => !relationships.has(id));
-    for (let start = 0; start < ids.length; start += 50) {
-      const batch = ids.slice(start, start + 50);
-      const rows = await getCollection('Friendship').query().in('id', batch).limit(batch.length).get();
-      const byId = new Map(rows.map((row) => [String(row.id || ''), row]));
-      for (const id of batch) relationships.set(id, Promise.resolve(byId.get(id) || null));
-    }
+    await prepareBatch(ids, relationships, 'Friendship', 'id');
+  }
+
+  async function prepareMediaReads(viewerUid, media) {
+    const authors = [...new Set(media.map(row => String(row.ownerUid || '')).filter(Boolean))];
+    await prepareBatch([...new Set([...authors, viewerUid].filter(Boolean))], profiles, 'UserProfile', 'uid');
+    if (viewerUid) await prepareBatch(authors.filter(uid => uid !== viewerUid).map(uid => relationshipId(uid, viewerUid)), relationships, 'Friendship', 'id');
+  }
+
+  async function readCard(id) {
+    const key = String(id || '');
+    if (!cards.has(key)) cards.set(key, readOne(getCollection('FoodCard').query().equalTo('id', key)));
+    return cards.get(key);
+  }
+
+  async function readRevision(id) {
+    const key = String(id || '');
+    if (!revisions.has(key)) revisions.set(key, readOne(getCollection('FoodCardRevision').query().equalTo('revisionId', key)));
+    return revisions.get(key);
   }
 
   async function assertAccountActive(uid, allowMissing = false) {
@@ -238,18 +273,18 @@ function createContentPolicy(getCollection, readOne, initialState = null) {
       return String(owner.coverMediaId || '') === String(media.id || '') && !!viewerUid &&
         (viewerUid === ownerUid || (relationship && relationship.status === 'ACCEPTED'));
     }
-    const card = await readOne(getCollection('FoodCard').query().equalTo('id', cardId));
+    const card = await readCard(cardId);
     return !!card && String(card.ownerUid || '') === ownerUid && await canReadCard(viewerUid, card);
   }
 
   async function canReadRevisionMedia(viewerUid, media, revisionId, administrator = false) {
     if (!viewerUid || !media || media.status !== 'APPROVED' || !isAccountActive(await profile(viewerUid))) return false;
-    if (!revisionId && media.ownerUid === viewerUid) { const own = await readOne(getCollection('FoodCard').query().equalTo('id',media.cardId)); if (own && own.ownerUid === viewerUid && own.reviewState === 'REQUEST_CHANGE' && own.deletedAt == null && own.purgeAt == null) return true; }
-    const revision = await readOne(getCollection('FoodCardRevision').query().equalTo('revisionId', String(revisionId || '')));
+    if (!revisionId && media.ownerUid === viewerUid) { const own = await readCard(media.cardId); if (own && own.ownerUid === viewerUid && own.reviewState === 'REQUEST_CHANGE' && own.deletedAt == null && own.purgeAt == null) return true; }
+    const revision = await readRevision(revisionId);
     if (!revision || !isAccountActive(await profile(revision.authorUid)) || media.ownerUid !== revision.authorUid) return false;
     const author = viewerUid === revision.authorUid;
     if (author ? !['PENDING', 'REJECTED'].includes(revision.status) : !administrator || revision.status !== 'PENDING') return false;
-    const card = await readOne(getCollection('FoodCard').query().equalTo('id', String(revision.cardId)));
+    const card = await readCard(revision.cardId);
     if (!card || card.ownerUid !== revision.authorUid || !(readableCardState(card) || card.reviewState === 'REQUEST_CHANGE' && card.deletedAt == null && card.purgeAt == null)) return false;
     let ids;
     try { ids = JSON.parse(String(revision.mediaManifestJson || '[]')); } catch (_error) { return false; }
@@ -260,14 +295,14 @@ function createContentPolicy(getCollection, readOne, initialState = null) {
   async function canReadModerationMedia(viewerUid,media,administrator=false) {
     if (!viewerUid || !media || media.status !== 'APPROVED' || !isAccountActive(await profile(viewerUid))) return false;
     if (!isAccountActive(await profile(media.ownerUid))) return false;
-    const card=await readOne(getCollection('FoodCard').query().equalTo('id',media.cardId));
+    const card=await readCard(media.cardId);
     if (!card || card.ownerUid !== media.ownerUid || card.deletedAt != null || card.purgeAt != null) return false;
     return administrator || viewerUid === card.ownerUid && card.reviewState === 'REQUEST_CHANGE';
   }
 
-  return { prepareCardReads, assertAccountActive, assertProfileReadable, isCardPubliclyVisible, canReadCard, canReadFriendCard,
+  return { prepareCardReads, prepareMediaReads, seedProfiles, assertAccountActive, assertProfileReadable, isCardPubliclyVisible, canReadCard, canReadFriendCard,
     assertCardReadable, canReadMedia, canReadRevisionMedia, canReadModerationMedia };
 }
 
 module.exports = { createContentPolicy, policyModels, isAccountActive, readableCardState,
-  currentVisibility, dateMillis, accessError };
+  currentVisibility, dateMillis, cardContentRevision, accessError };

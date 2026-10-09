@@ -1,7 +1,7 @@
 'use strict';
 
-const { dateMillis, currentVisibility } = require('./content-policy');
-const { fail, hash, id, uuid, int, token, encode, flag, friendsAllowed } = require('./stages47-common');
+const { dateMillis, currentVisibility } = require('./shared/content-policy');
+const { fail, hash, id, uuid, int, token, encode, flag, friendsAllowed, timestampPage, afterTuple } = require('./stages47-common');
 const TYPE = 'MIGRATE_PERSONAL_COLLECTION';
 const VERSION = 1;
 const BATCH = 10;
@@ -20,7 +20,7 @@ function createPersonalCollections(ctx) {
   }
   function checkpoint(job) {
     if (!job) return { phase: 'LISTS', listBoundary: null, activeList: null, itemBoundary: null,
-      stateBoundary: null, scanned: 0, createdFavorites: 0, createdWanted: 0, batches: 0 };
+      stateBoundary: null, wantedOrderVersion: 2, scanned: 0, createdFavorites: 0, createdWanted: 0, batches: 0 };
     const saved = JSON.parse(String(job.checkpointJson || '{}'));
     if (!['LISTS', 'WANTED', 'DONE'].includes(saved.phase) ||
         ['scanned', 'createdFavorites', 'createdWanted', 'batches'].some(key => !Number.isSafeInteger(saved[key]) || saved[key] < 0) ||
@@ -71,11 +71,15 @@ function createPersonalCollections(ctx) {
       const owner = await ctx.stage1().activeProfile(tx, uid, env);
       const old = await txOne(tx, env, 'MaintenanceJob', 'jobId', jobId(uid));
       if (old) return true;
+      const legacyLists = await tx.executeQuery(collection(env,'FoodList').query().equalTo('ownerUid',uid).limit(1));
+      const legacyWanted = await tx.executeQuery(collection(env,'PersonalFoodState').query().equalTo('ownerUid',uid).equalTo('state','WANT_TO_EAT').limit(1));
+      const initial = checkpoint(null);
+      if (!legacyLists.length && !legacyWanted.length) initial.phase='DONE';
       const now = ctx.logicalWriteTime(owner.updatedAt);
       upsert(tx, [model('MaintenanceJob', { jobId: jobId(uid), jobType: TYPE, entityId: uid,
-        ownerUid: uid, generation: VERSION, status: 'PENDING', runAfterAt: new Date(now),
+        ownerUid: uid, generation: VERSION, status: initial.phase==='DONE'?'DONE':'PENDING', runAfterAt: new Date(now),
         leaseUntilAt: null, leaseOwner: '', attemptCount: 0, cursor: '',
-        checkpointJson: JSON.stringify(checkpoint(null)), lastErrorCode: '',
+        checkpointJson: JSON.stringify(initial), lastErrorCode: '',
         createdAt: new Date(now), updatedAt: new Date(now) }), ctx.profileForWrite(owner, now)]);
       return true;
     }});
@@ -141,7 +145,7 @@ function createPersonalCollections(ctx) {
           if (!saved.activeList) {
             let query = collection(env, 'FoodList').query().equalTo('ownerUid', uid)
               .orderByAsc('sortOrder').orderByAsc('listId');
-            if (saved.listBoundary) query = query.startAfter(model('FoodList', saved.listBoundary));
+            if (saved.listBoundary) query = afterTuple(query,[['sortOrder','ASC'],['listId','ASC']],saved.listBoundary);
             const lists = await tx.executeQuery(query.limit(1)); directoryReads++;
             if (!lists.length) { saved.phase = 'WANTED'; break; }
             const list = lists[0];
@@ -155,7 +159,7 @@ function createPersonalCollections(ctx) {
           }
           let query = collection(env, 'FoodListItem').query().equalTo('listId', list.listId)
             .orderByAsc('sortKey').orderByAsc('cardId');
-          if (saved.itemBoundary) query = query.startAfter(model('FoodListItem', saved.itemBoundary));
+          if (saved.itemBoundary) query = afterTuple(query,[['sortKey','ASC'],['cardId','ASC']],saved.itemBoundary);
           const remaining = BATCH - consumed;
           const rows = await tx.executeQuery(query.limit(remaining));
           for (const row of rows) {
@@ -169,10 +173,13 @@ function createPersonalCollections(ctx) {
           }
         }
         if (saved.phase === 'WANTED' && consumed < BATCH) {
+          // A checkpoint made with the previous DESC tie-breaker cannot safely
+          // resume in ASC order. Rescan only WANTED once; action IDs deduplicate.
+          if (saved.wantedOrderVersion !== 2) { saved.stateBoundary = null; saved.wantedOrderVersion = 2; }
           let query = collection(env, 'PersonalFoodState').query().equalTo('ownerUid', uid)
-            .equalTo('state', 'WANT_TO_EAT').orderByDesc('updatedAt').orderByAsc('cardId');
-          if (saved.stateBoundary) query = query.startAfter(model('PersonalFoodState', {
-            ...saved.stateBoundary, updatedAt: new Date(saved.stateBoundary.updatedAt) }));
+            .equalTo('state', 'WANT_TO_EAT');
+          if (saved.stateBoundary) query = afterTuple(query,[['updatedAt','DESC'],['cardId','ASC']],{...saved.stateBoundary,updatedAt:new Date(saved.stateBoundary.updatedAt)});
+          query = query.orderByDesc('updatedAt').orderByAsc('cardId');
           const remaining = BATCH - consumed;
           const rows = await tx.executeQuery(query.limit(remaining));
           for (const row of rows) {
@@ -264,7 +271,7 @@ function createPersonalCollections(ctx) {
     ]);
     const view = statusView(job, env);
     return { viewerWanted: !!wanted, collectionReady: view.collectionReady,
-      collectionStatus: enabled(env) ? view.status : 'FEATURE_NOT_READY' };
+      collectionStatus: enabled(env) ? view.status : 'FEATURE_NOT_READY', collectionReason: !enabled(env)?'收藏服务尚未完成上线验证':view.collectionReady?'':view.status==='FAILED'?'旧收藏整理失败，可继续整理':'旧收藏尚未整理完成' };
   }
   async function assemble(uid, ids, env) {
     const byId = await ctx.readCardRowsByIds(ids, env);
@@ -275,11 +282,11 @@ function createPersonalCollections(ctx) {
     const cards = readable.map(row => ctx.previewCard(row, context, env));
     const fresh = await ctx.withReadPhase('final-check', () => ctx.finalizeCardReads(cards, readable, uid, env));
     const allowed = new Map(fresh.map(card => [card.id, card]));
-    await ctx.contentPolicy(env).assertAccountActive(uid);
+    if (uid) await ctx.contentPolicy(env).assertAccountActive(uid);
     return { items: ids.map(cardId => ({ cardId, accessible: allowed.has(cardId), card: allowed.get(cardId) || null })) };
   }
   async function previews(uid, payload, env) {
-    await ctx.contentPolicy(env).assertAccountActive(uid);
+    if (uid) await ctx.contentPolicy(env).assertAccountActive(uid);
     if (!Array.isArray(payload.cardIds) || payload.cardIds.length > BATCH) throw fail('预览每批最多 10 张。');
     const ids = [...new Set(payload.cardIds.map(value => id(value)))];
     return assemble(uid, ids, env);
@@ -291,21 +298,15 @@ function createPersonalCollections(ctx) {
     if (!migration.collectionReady) return { items: [], nextCursor: '', migration };
     const size = int(payload.pageSize === undefined ? 12 : payload.pageSize, 1, 20);
     const owner = await one(collection(env, 'UserProfile').query().equalTo('uid', uid));
-    const signature = hash([uid, kind, VERSION, Number(owner.updatedAt)]);
+    const signature = hash(['collection-page-v2',uid, kind, VERSION, Number(owner.updatedAt)]);
     const saved = token(payload.cursor, signature), at = saved ? saved.at : Date.now();
-    let query = collection(env, 'CardAction').query().equalTo('actorUid', uid).equalTo('kind', kind)
-      .lessThanOrEqualTo('createdAt', at).orderByDesc('createdAt').orderByAsc('id');
-    if (saved) {
-      const last = await one(collection(env, 'CardAction').query().equalTo('id', id(saved.lastId)));
-      if (!last || last.actorUid !== uid || last.kind !== kind) throw fail('收藏已变化，请刷新。', 'CURSOR_STALE');
-      query = query.startAfter(model('CardAction', last));
-    }
-    const rows = await query.limit(size).get();
+    const page = await timestampPage(collection(env, 'CardAction').query().equalTo('actorUid', uid).equalTo('kind', kind).orderByDesc('createdAt'), saved, at, size, 'id', 'createdAt');
+    const rows = page.rows;
     const result = await assemble(uid, rows.map(row => row.cardId), env);
     const items = result.items;
     const latestOwner = await ctx.contentPolicy(env).assertAccountActive(uid);
     if (Number(latestOwner.updatedAt) !== Number(owner.updatedAt)) throw fail('收藏已变化，请刷新。', 'CURSOR_STALE');
-    return { items, nextCursor: rows.length === size ? encode(signature, at, { lastId: rows[rows.length - 1].id }) : '', migration };
+    return { items, nextCursor: page.next ? encode(signature, at, page.next) : '', migration };
   }
   return { enabled, status, start, resume, set, flags, previews, list, assertWritable,
     assertLegacyListWritable, syncLegacyWanted };

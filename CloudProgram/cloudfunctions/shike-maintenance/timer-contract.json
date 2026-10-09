@@ -2,7 +2,9 @@
   "contractVersion": 1,
   "purpose": "AGC console timer mapping contract; not a provider trigger schema",
   "recommendedIntervalMinutes": 5,
-  "handlerPayload": { "workerToken": "COPY_SECRET_FROM_DEPLOYED_TIMER_CONFIGURATION" },
+  "handlerPayload": {
+    "workerToken": "COPY_SECRET_FROM_DEPLOYED_TIMER_CONFIGURATION"
+  },
   "alternateUserData": "JSON string containing workerToken",
   "environmentKey": "SHIKE_MAINTENANCE_TRIGGER_KEY",
   "minimumSecretLength": 32,
@@ -10,5 +12,22 @@
   "rowsPerCleanupStep": 10,
   "lifecycleVerifiedDefault": false,
   "maintenanceEnabledDefault": false,
-  "httpTrigger": false
+  "httpTrigger": false,
+  "mediaCoverBackfill": {
+    "separateTimerRequired": true,
+    "recommendedIntervalMinutes": 1,
+    "handlerPayload": {
+      "workerToken": "COPY_SECRET_FROM_DEPLOYED_TIMER_CONFIGURATION",
+      "action": "media-covers"
+    },
+    "manualResumePayload": {
+      "workerToken": "COPY_SECRET_FROM_DEPLOYED_TIMER_CONFIGURATION",
+      "action": "media-covers",
+      "retryFailed": true
+    },
+    "imagesPerInvocation": 1,
+    "consecutiveFailuresBeforePause": 3,
+    "requiredFlag": "SHIKE_MEDIA_COVERS_VERIFIED",
+    "checkpointJobId": "media-cover-backfill-v1"
+  }
 }

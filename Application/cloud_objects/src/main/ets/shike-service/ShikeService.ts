@@ -64,12 +64,6 @@ export class ShikeService implements CloudObjectLikely {
     public async getMealCandidates(input: CloudEnvelope): Promise<CloudResponse> {
         return Promise.reject(new Error('Method not implemented.'));
     }
-    public async recordMealChoice(input: CloudEnvelope): Promise<CloudResponse> {
-        return Promise.reject(new Error('Method not implemented.'));
-    }
-    public async listMealChoiceHistory(input: CloudEnvelope): Promise<CloudResponse> {
-        return Promise.reject(new Error('Method not implemented.'));
-    }
     public async createMealPoll(input: CloudEnvelope): Promise<CloudResponse> {
         return Promise.reject(new Error('Method not implemented.'));
     }

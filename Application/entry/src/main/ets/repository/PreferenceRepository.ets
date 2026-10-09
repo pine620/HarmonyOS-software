@@ -1,6 +1,6 @@
 import { AuthSessionStore } from '../service/AuthSessionStore';
 import { AuthService } from '../service/AuthService';
-import { ReadRequestOptions } from '../service/ReadScheduler';
+import { ReadRequestOptions, ReadScheduler } from '../service/ReadScheduler';
 import { AccountRequestGuard } from '../service/AccountRequestGuard';
 import { common } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
@@ -50,25 +50,27 @@ export class PreferenceRepository {
     const owner: string = AuthService.profile()?.uid || '';
     const session: number = AuthSessionStore.generation();
     const revision: number = AppStorage.get<number>('accountContentRevision') || 0;
-    const key: string = `${owner}:${session}:${revision}`;
+    const lifecycle: number = ReadScheduler.lifecycleRevision();
+    const key: string = `${owner}:${session}:${revision}:${lifecycle}`;
     if (key !== PreferenceRepository.capabilitiesKey) {
       PreferenceRepository.capabilitiesKey = key; PreferenceRepository.capabilitiesValue = undefined;
       PreferenceRepository.capabilitiesPending = undefined; PreferenceRepository.capabilitiesUntil = 0;
     }
     const cached: Stage47Capabilities | undefined = PreferenceRepository.capabilitiesValue;
-    if (cached !== undefined && Date.now() < PreferenceRepository.capabilitiesUntil) return cached;
+    if (cached !== undefined && Date.now() < PreferenceRepository.capabilitiesUntil && AppStorage.get<boolean>('stage47AppActive') !== false) return cached;
     const pending: Promise<Stage47Capabilities> | undefined = PreferenceRepository.capabilitiesPending;
     if (pending !== undefined) return pending;
     const request: EmptyRequest = {};
     const options: ReadRequestOptions = { mayContinue: async (): Promise<boolean> =>
       owner === (AuthService.profile()?.uid || '') && session === AuthSessionStore.generation() &&
-      revision === (AppStorage.get<number>('accountContentRevision') || 0) };
+      revision === (AppStorage.get<number>('accountContentRevision') || 0) && lifecycle === ReadScheduler.lifecycleRevision() &&
+      AppStorage.get<boolean>('stage47AppActive') !== false };
     const promise: Promise<Stage47Capabilities> = (CloudGateway.hasSession() ?
       AccountRequestGuard.authenticated<Stage47Capabilities>('get-stage47-capabilities', request, options) :
       AccountRequestGuard.public<Stage47Capabilities>('get-stage47-capabilities', request, options))
       .then((value: Stage47Capabilities): Stage47Capabilities => {
         if (PreferenceRepository.capabilitiesKey === key) {
-          PreferenceRepository.capabilitiesValue = value; PreferenceRepository.capabilitiesUntil = Date.now() + 60000;
+          PreferenceRepository.capabilitiesValue = value; PreferenceRepository.capabilitiesUntil = Date.now() + 15000;
         }
         return value;
       }).finally((): void => { if (PreferenceRepository.capabilitiesKey === key) PreferenceRepository.capabilitiesPending = undefined; });

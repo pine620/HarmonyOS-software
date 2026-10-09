@@ -8,7 +8,8 @@
   "dependencies": {
     "@agconnect/cloudstorage-server": "1.0.1",
     "@agconnect/common-server": "1.2.1",
-    "@hw-agconnect/cloud-server": "1.0.5"
+    "@hw-agconnect/cloud-server": "1.0.5",
+    "jpeg-js": "0.4.4"
   },
   "devDependencies": {
     "@types/node": "20.19.17",

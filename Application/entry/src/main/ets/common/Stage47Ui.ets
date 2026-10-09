@@ -1,8 +1,8 @@
 function actionBase(button: ButtonAttribute): void {
   const label: LabelStyle = { maxLines: 2, overflow: TextOverflow.Ellipsis };
   button.type(ButtonType.Normal).fontSize(14).fontWeight(FontWeight.Medium)
-    .borderRadius(12).padding({ left: 14, right: 14 })
-    .constraintSize({ minHeight: 48 }).labelStyle(label).opacity(1);
+    .borderRadius(24).padding({ left: 14, right: 14 })
+    .constraintSize({ minHeight: 48 }).labelStyle(label).opacity(1).focusable(true);
 }
 
 export class SecondaryActionStyle implements AttributeModifier<ButtonAttribute> {
@@ -58,7 +58,7 @@ export class FormInputStyle implements AttributeModifier<TextInputAttribute> {
   applyNormalAttribute(input: TextInputAttribute): void {
     input.fontSize(15).fontColor($r('app.color.ink')).placeholderColor($r('app.color.muted'))
       .caretColor($r('app.color.action_text')).backgroundColor($r('app.color.canvas'))
-      .borderRadius(12).padding({ left: 12, right: 12 });
+      .borderRadius(16).padding({ left: 12, right: 12 });
   }
 }
 
@@ -66,7 +66,7 @@ export class FormNoteStyle implements AttributeModifier<TextAreaAttribute> {
   applyNormalAttribute(input: TextAreaAttribute): void {
     input.fontSize(15).fontColor($r('app.color.ink')).placeholderColor($r('app.color.muted'))
       .caretColor($r('app.color.action_text')).backgroundColor($r('app.color.canvas'))
-      .borderRadius(12).padding(12);
+      .borderRadius(16).padding(12);
   }
 }
 
@@ -81,12 +81,19 @@ export function featureUnavailable(error: Object): boolean {
   return detail.code === 'FEATURE_NOT_READY';
 }
 
+export function invalidatesProtectedPage(error: Object): boolean {
+  if (error === null || error === undefined) return false;
+  const detail: UiErrorDetail = error as UiErrorDetail;
+  return ['FORBIDDEN', 'ACCESS_DENIED', 'AUTH_REQUIRED', 'ACCOUNT_INACTIVE', 'ACCOUNT_DELETED',
+    'CONTENT_ACCESS_DENIED', 'CONTENT_UNAVAILABLE', 'NOT_FOUND', 'FEATURE_NOT_READY', 'CURSOR_STALE', 'CONFLICT', 'STALE_VERSION'].includes(String(detail.code || ''));
+}
+
 export function stage47ErrorText(error: Object, fallback: string): string {
   if (error === null || error === undefined) return fallback;
   const detail: UiErrorDetail = error as UiErrorDetail;
   const message: string = error instanceof Error ? error.message :
     typeof detail.message === 'string' ? detail.message : '';
-  if (detail.code === 'FEATURE_NOT_READY') return '此功能暂未开放，请稍后再试。';
+  if (detail.code === 'FEATURE_NOT_READY') return message.length > 0 ? message : '此功能尚未完成上线验证。';
   if (detail.code === 3007009 || detail.code === '3007009' || message.includes('3007009') ||
     message.toLowerCase().includes('too many requests') || message.toLowerCase().includes('system is too busy')) {
     return '服务繁忙，请稍后再试。';

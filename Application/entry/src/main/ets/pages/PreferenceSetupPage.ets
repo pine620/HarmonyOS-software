@@ -26,24 +26,49 @@ export struct PreferenceSetupPage {
   private async save(): Promise<void> { const generation: number = this.generation; if (this.busy) return; this.busy = true; try { const p: TastePreference = copyPreference(this.value); p.budgetMinFen = parseYuanInputToFen(this.minimum); p.budgetMaxFen = parseYuanInputToFen(this.maximum); const saved: TastePreference = await this.repo.save(this.context(), p); if (generation !== this.generation) return; this.value = saved; this.finish(); } catch (error) { if (generation !== this.generation) return; this.message = stage47ErrorText(error as Object, '保存失败。'); } finally { if (generation === this.generation) this.busy = false; } }
   private finish(): void { const profile = AuthService.profile(); this.repo.markSeen(this.context(), profile === undefined ? 'guest' : profile.uid); this.onDone(); }
   private async clear(field: 'ALL' | 'LIKED' | 'LESS' | 'MODE' | 'BUDGET'): Promise<void> { const generation: number = this.generation; if (this.busy) return; this.busy = true; try { const request: PreferenceClearRequest = { field, version: this.value.version }; const saved: TastePreference = await this.repo.clear(this.context(), request); if (generation !== this.generation) return; this.value = saved; this.minimum = formatFenInput(this.value.budgetMinFen); this.maximum = formatFenInput(this.value.budgetMaxFen); this.message = '已清除所选偏好。'; } catch (error) { if (generation !== this.generation) return; this.message = stage47ErrorText(error as Object, '清除失败。'); } finally { if (generation === this.generation) this.busy = false; } }
-  @Builder private categories(less: boolean) { Flex({ wrap: FlexWrap.Wrap }) { ForEach(CATEGORY_V2_OPTIONS, (option: CategoryV2Option): void => { Button(option.label).height(48).margin(4).enabled(!this.busy).onClick((): void => this.select(option.key, less)).attributeModifier(new ChoiceActionStyle((less ? this.value.lessCategories : this.value.likedCategories).includes(option.key))); }, (option: CategoryV2Option): string => option.key); } }
-  build() { Scroll() { Column({ space: 14 }) {
-    Text('主动口味偏好').fontSize(24).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'))
-    Text('可以跳过。只使用你主动设置的四项；点赞、收藏、吃过和浏览不会改变长期偏好。游客设置保存在本机，登录后使用账号设置。').fontSize(14).fontColor($r('app.color.muted'))
-    Row() { Text('喜欢的分类').layoutWeight(1); Button('清除此项').height(48).onClick((): void => { void this.clear('LIKED'); }).attributeModifier(new QuietActionStyle()); }
-    this.categories(false)
-    Row() { Text('少推荐的分类').layoutWeight(1); Button('清除此项').height(48).onClick((): void => { void this.clear('LESS'); }).attributeModifier(new QuietActionStyle()); }
-    this.categories(true)
-    Text('常用消费方式').fontSize(18)
-    Row({ space: 8 }) { ForEach(['ANY', 'DELIVERY', 'DINE_IN'], (mode: string): void => { Button(mode === 'ANY' ? '不限' : mode === 'DELIVERY' ? '外卖' : '到店').height(48).onClick((): void => { const p: TastePreference = copyPreference(this.value); p.preferredMode = mode as PreferredMode; this.value = p; }).attributeModifier(new ChoiceActionStyle(this.value.preferredMode === mode)); }); }
-    Button('清除消费方式').height(48).onClick((): void => { void this.clear('MODE'); }).attributeModifier(new QuietActionStyle())
-    Text('常用预算（元，可留空）').fontSize(18)
-    TextInput({ text: this.minimum, placeholder: '预算下限' }).attributeModifier(new FormInputStyle()).height(48).onChange((s: string): void => { this.minimum = s; })
-    TextInput({ text: this.maximum, placeholder: '预算上限' }).attributeModifier(new FormInputStyle()).height(48).onChange((s: string): void => { this.maximum = s; })
-    Button('清除预算').height(48).onClick((): void => { void this.clear('BUDGET'); }).attributeModifier(new QuietActionStyle())
-    Text(this.message).fontSize(13).lineHeight(20).fontColor($r('app.color.danger'))
-    Button(this.busy ? '保存中…' : '保存设置').height(48).enabled(!this.busy).onClick((): void => { void this.save(); }).attributeModifier(new PrimaryActionStyle()).width('100%')
-    Button('全部清除').height(48).onClick((): void => { void this.clear('ALL'); }).attributeModifier(new DangerActionStyle())
-    Button('跳过 / 返回').height(48).onClick((): void => this.finish()).attributeModifier(new QuietActionStyle())
-  }.width('100%').padding(16).backgroundColor($r('app.color.surface')).borderRadius(18).border({ width: 1, color: $r('app.color.line') }).alignItems(HorizontalAlign.Start) }.width('100%').height('100%').align(Alignment.TopStart).padding(14).backgroundColor($r('app.color.canvas')).onVisibleAreaChange([0, 1], (_visible: boolean, ratio: number): void => this.onVisibilityChanged(ratio > 0)) }
+  @Builder private categories(less: boolean) { Flex({ wrap: FlexWrap.Wrap }) { ForEach(CATEGORY_V2_OPTIONS, (option: CategoryV2Option): void => { Button(option.label).constraintSize({ minHeight: 48 }).margin(4).enabled(!this.busy).onClick((): void => this.select(option.key, less)).attributeModifier(new ChoiceActionStyle((less ? this.value.lessCategories : this.value.likedCategories).includes(option.key))); }, (option: CategoryV2Option): string => option.key); } }
+  build() {
+    Scroll() {
+      Column({ space: 16 }) {
+        Column({ space: 8 }) {
+          Text('吃得合口味').fontSize(26).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'))
+          Text('告诉食刻你喜欢什么').fontSize(15).fontColor($r('app.color.action_text'))
+          Text('随时可改，也可以跳过。只按你主动填写的分类、方式和预算推荐。').fontSize(13).lineHeight(20).fontColor($r('app.color.muted'))
+        }.width('100%').alignItems(HorizontalAlign.Start).padding(20).backgroundColor($r('app.color.accent_soft')).borderRadius(24)
+        Column({ space: 8 }) {
+          Row() { Text('喜欢的口味').fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1); Button('清除').enabled(!this.busy).attributeModifier(new QuietActionStyle()).onClick((): void => { void this.clear('LIKED'); }); }.width('100%')
+          Text('多选几种，让推荐更对胃口').fontSize(13).fontColor($r('app.color.muted'))
+          this.categories(false)
+        }.width('100%').alignItems(HorizontalAlign.Start).padding(16).backgroundColor($r('app.color.surface')).borderRadius(24)
+        Column({ space: 8 }) {
+          Row() { Text('少推荐一些').fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1); Button('清除').enabled(!this.busy).attributeModifier(new QuietActionStyle()).onClick((): void => { void this.clear('LESS'); }); }.width('100%')
+          Text('只是少推荐，之后仍能主动查找').fontSize(13).fontColor($r('app.color.muted'))
+          this.categories(true)
+        }.width('100%').alignItems(HorizontalAlign.Start).padding(16).backgroundColor($r('app.color.surface')).borderRadius(24)
+        Column({ space: 10 }) {
+          Row() { Text('平时怎么吃').fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1); Button('清除').enabled(!this.busy).attributeModifier(new QuietActionStyle()).onClick((): void => { void this.clear('MODE'); }); }.width('100%')
+          Row({ space: 8 }) {
+            ForEach(['ANY', 'DELIVERY', 'DINE_IN'], (mode: string): void => {
+              Button(mode === 'ANY' ? '都可以' : mode === 'DELIVERY' ? '点外卖' : '去店里').layoutWeight(1).enabled(!this.busy)
+                .attributeModifier(new ChoiceActionStyle(this.value.preferredMode === mode)).onClick((): void => { const p: TastePreference = copyPreference(this.value); p.preferredMode = mode as PreferredMode; this.value = p; });
+            }, (mode: string): string => mode)
+          }.width('100%')
+          Row() { Text('常用预算').fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1); Button('清除').enabled(!this.busy).attributeModifier(new QuietActionStyle()).onClick((): void => { void this.clear('BUDGET'); }); }.width('100%')
+          Row({ space: 8 }) {
+            TextInput({ text: this.minimum, placeholder: '最低 / 元' }).layoutWeight(1).height(48).enabled(!this.busy).attributeModifier(new FormInputStyle()).onChange((value: string): void => { this.minimum = value; })
+            Text('—').fontColor($r('app.color.muted'))
+            TextInput({ text: this.maximum, placeholder: '最高 / 元' }).layoutWeight(1).height(48).enabled(!this.busy).attributeModifier(new FormInputStyle()).onChange((value: string): void => { this.maximum = value; })
+          }.width('100%')
+          Text('留空不限预算；游客设置保存在本机，登录后使用账号设置。').fontSize(12).lineHeight(18).fontColor($r('app.color.muted'))
+        }.width('100%').alignItems(HorizontalAlign.Start).padding(16).backgroundColor($r('app.color.surface')).borderRadius(24)
+        if (this.message.length > 0) { Text(this.message).fontSize(13).lineHeight(20).fontColor($r('app.color.danger')).width('100%') }
+        Button(this.busy ? '正在保存…' : '保存我的偏好').enabled(!this.busy).width('100%').attributeModifier(new PrimaryActionStyle()).onClick((): void => { void this.save(); })
+        Row({ space: 12 }) {
+          Button('全部清除').enabled(!this.busy).layoutWeight(1).attributeModifier(new DangerActionStyle()).onClick((): void => { void this.clear('ALL'); })
+          Button('跳过 / 返回').enabled(!this.busy).layoutWeight(1).attributeModifier(new QuietActionStyle()).onClick((): void => this.finish())
+        }.width('100%')
+      }.width('100%').padding(16).alignItems(HorizontalAlign.Start)
+    }.width('100%').height('100%').align(Alignment.TopStart).backgroundColor($r('app.color.canvas'))
+      .onVisibleAreaChange([0, 1], (_visible: boolean, ratio: number): void => this.onVisibilityChanged(ratio > 0))
+  }
 }

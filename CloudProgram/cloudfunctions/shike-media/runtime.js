@@ -1,11 +1,12 @@
 'use strict';
-const { errorCode, requestId, READ_OPT_VERSION } = require('./read-errors');
+const { errorCode, requestId, READ_OPT_VERSION, shouldReadMetrics } = require('./shared/read-errors');
 
 const crypto = require('crypto');
+const { originalSha256, mediaVariant, sameMediaSource, verifyMediaBytes } = require('./shared/media-descriptor');
 const { AsyncLocalStorage } = require('async_hooks');
 const fs = require('fs/promises');
 const { cloud } = require('@hw-agconnect/cloud-server');
-const { createContentPolicy, policyModels, accessError } = require('./content-policy');
+const { createContentPolicy, policyModels, accessError } = require('./shared/content-policy');
 const { AGCClient, CredentialParser } = require('@agconnect/common-server');
 const { AGCCloudStorage } = require('@agconnect/cloudstorage-server');
 
@@ -23,14 +24,7 @@ class CloudDbModel {
   getEncryptedFieldList() { return []; }
 }
 
-class CardMedia extends CloudDbModel {}
-CardMedia.fieldTypes = Object.freeze({
-  id: 'String', cardId: 'String', ownerUid: 'String', storageUid: 'String',
-  objectKey: 'String', sha256: 'String', preparedSha256: 'String', mimeType: 'String', byteSize: 'Integer',
-  width: 'Integer', height: 'Integer', status: 'String', createdAt: 'Long'
-});
-CardMedia.primaryKeys = Object.freeze(['id']);
-CardMedia.indexes = Object.freeze(['cardId', 'cardId,createdAt', 'ownerUid,createdAt']);
+const { CardMedia } = require('./shared/image-models');
 
 class IdentityBinding extends CloudDbModel {}
 IdentityBinding.fieldTypes = Object.freeze({
@@ -40,7 +34,12 @@ IdentityBinding.fieldTypes = Object.freeze({
 IdentityBinding.primaryKeys = Object.freeze(['id']);
 IdentityBinding.indexes = Object.freeze({"provider_providerUid": ["provider", "providerUid"], "canonicalUid": ["canonicalUid"], "canonicalUid_id": ["canonicalUid", "id"]});
 
-const OBJECT_TYPES = Object.freeze({ ...policyModels, CardMedia, IdentityBinding });
+class MaintenanceJob extends CloudDbModel {}
+MaintenanceJob.fieldTypes = Object.freeze({"jobId": "String", "jobType": "String", "entityId": "String", "ownerUid": "String", "generation": "Long", "status": "String", "runAfterAt": "Date", "leaseUntilAt": "Date", "leaseOwner": "String", "attemptCount": "Integer", "cursor": "String", "checkpointJson": "Text", "lastErrorCode": "String", "createdAt": "Date", "updatedAt": "Date", "authCredentialCiphertext": "Text", "authProviderUid": "String"});
+MaintenanceJob.primaryKeys = Object.freeze(['jobId']);
+MaintenanceJob.indexes = Object.freeze(["status,runAfterAt,jobId", "status,leaseUntilAt,jobId", "ownerUid,jobType,jobId", "entityId,jobType,generation", "status,jobType,runAfterAt,jobId", "status,jobType,leaseUntilAt,jobId"]);
+
+const OBJECT_TYPES = Object.freeze({ ...policyModels, CardMedia, IdentityBinding, MaintenanceJob });
 
 function required(env, name) {
   const value = String((env || {})[name] || '').trim();
@@ -60,7 +59,7 @@ function storageBucket(env) {
 
 function validKey(value) {
   const key = String(value || '').trim();
-  if (!/^public\/approved\/[^/]+\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jpg$/i.test(key)
+  if (!/^public\/approved\/[^/]+\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:\.cover-v1)?\.jpg$/i.test(key)
     && !/^private\/pending\/[^/]+\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jpg$/i.test(key)) {
     throw new Error('拒绝访问未知的云存储路径。');
   }
@@ -87,6 +86,7 @@ function measuredQuery(target, name, metrics) {
     if (property === 'get') return async (...args) => {
       const started = Date.now();
       metrics.queryGetCount += 1;
+      metrics.inFlightQueries += 1;
       metrics.byObject[name] = (metrics.byObject[name] || 0) + 1;
       try {
         const rows = await object.get(...args);
@@ -94,9 +94,16 @@ function measuredQuery(target, name, metrics) {
         return rows;
       } catch (error) {
         metrics.queryFailures += 1;
-        if (errorCode(error) === '3007009') metrics.busyErrors += 1;
+        const code = errorCode(error);
+        metrics.byObjectFailures[name] = (metrics.byObjectFailures[name] || 0) + 1;
+        if (code === '3007009') {
+          metrics.busyErrors += 1;
+          metrics.byObjectBusy[name] = (metrics.byObjectBusy[name] || 0) + 1;
+        }
+        metrics.lastQueryFailure = { collection: name, code };
+        try { if (error && typeof error === 'object' && !error.readCollection) error.readCollection = name; } catch (_) { }
         throw error;
-      } finally { metrics.dbMs += Date.now() - started; }
+      } finally { metrics.dbMs += Date.now() - started; metrics.inFlightQueries -= 1; }
     };
     const value = Reflect.get(object, property, object);
     if (property === 'constructor') return value;
@@ -110,21 +117,47 @@ function measuredQuery(target, name, metrics) {
 }
 
 async function withReadMetrics(operation, env, action, id) {
-  const flag = env && env.SHIKE_READ_METRICS_ENABLED !== undefined
-    ? env.SHIKE_READ_METRICS_ENABLED : process.env.SHIKE_READ_METRICS_ENABLED;
-  if (String(flag || '').trim().toLowerCase() !== 'true') return action();
-  const metrics = { queryGetCount: 0, queriedRows: 0, queryFailures: 0, busyErrors: 0, dbMs: 0, byObject: {} };
+  if (!shouldReadMetrics(env, id)) return action();
+  const counter = () => ({ calls: 0, failures: 0, ms: 0, successfulBytes: 0 });
+  const metrics = { queryGetCount: 0, queriedRows: 0, queryFailures: 0, busyErrors: 0, dbMs: 0, inFlightQueries: 0, inFlightDependencies: 0,
+    byObject: {}, byObjectFailures: {}, byObjectBusy: {}, lastQueryFailure: null, action: '',
+    dependencies: { authVerify: counter() },
+    storage: { download: counter(), upload: counter(), metadata: counter(), exists: counter(), copy: counter(), delete: counter() } };
   return readMetricsScope.run(metrics, async () => {
     const started = Date.now();
-    let outcome = 'error';
+    let outcome = 'error', code = '', failureCollection = '';
     try { const result = await action(); outcome = 'success'; return result; }
+    catch (error) {
+      code = errorCode(error);
+      const name = error && error.readCollection;
+      failureCollection = typeof name === 'string' && Object.prototype.hasOwnProperty.call(OBJECT_TYPES, name) ? name : '';
+      throw error;
+    }
     finally {
-      // Query.get calls only: excludes transactions, Storage and auth SDK requests.
-      console.info(`read.metrics operation=${operation} requestId=${id || 'not-provided'} functionVersion=${READ_OPT_VERSION} outcome=${outcome} queryGetCount=${metrics.queryGetCount} ` +
+      // SDK call counts and successful payload bytes are not HTTP attempts or billable totals.
+      console.info(`read.metrics metricsVersion=o0-20261008-v1 boundary=media operation=${operation} action=${metrics.action || 'none'} requestId=${id || 'not-provided'} functionVersion=${READ_OPT_VERSION} outcome=${outcome} code=${code || 'OK'} failureCollection=${failureCollection || 'none'} queryGetCount=${metrics.queryGetCount} ` +
         `queriedRows=${metrics.queriedRows} queryFailures=${metrics.queryFailures} busyErrors=${metrics.busyErrors} ` +
-        `dbMs=${metrics.dbMs} totalMs=${Date.now() - started} byObject=${JSON.stringify(metrics.byObject)}`);
+        `dbMs=${metrics.dbMs} totalMs=${Date.now() - started} metricsComplete=${metrics.inFlightQueries === 0 && metrics.inFlightDependencies === 0} pendingQueryGetCount=${metrics.inFlightQueries} pendingDependencyCallCount=${metrics.inFlightDependencies} queryScope=wrapped-query-get dependencyScope=logical-sdk-calls ` +
+        `byObject=${JSON.stringify(metrics.byObject)} byObjectFailures=${JSON.stringify(metrics.byObjectFailures)} ` +
+        `byObjectBusy=${JSON.stringify(metrics.byObjectBusy)} lastQueryFailure=${JSON.stringify(metrics.lastQueryFailure)} ` +
+        `dependencies=${JSON.stringify(metrics.dependencies)} storage=${JSON.stringify(metrics.storage)}`);
     }
   });
+}
+
+async function measuredCall(category, method, action, byteSize = 0) {
+  const metrics = readMetricsScope.getStore();
+  if (!metrics) return action();
+  const counter = metrics[category][method];
+  const started = Date.now();
+  counter.calls += 1;
+  metrics.inFlightDependencies += 1;
+  try {
+    const result = await action();
+    counter.successfulBytes += Buffer.isBuffer(result) ? result.length : byteSize;
+    return result;
+  } catch (error) { counter.failures += 1; throw error; }
+  finally { counter.ms += Date.now() - started; metrics.inFlightDependencies -= 1; }
 }
 
 async function one(query) {
@@ -140,22 +173,23 @@ function identityBindingId(provider, providerUid) {
   return crypto.createHash('sha256').update(`shike-identity:${String(provider)}:${String(providerUid)}`).digest('hex');
 }
 
-async function verifiedIdentity(accessToken, env, readOnly = false) {
-  if (!accessToken || String(accessToken).length > 8192) throw new Error('未登录或登录状态已失效。');
+async function verifiedIdentity(accessToken, env, readOnly = false, policy = contentPolicy(env)) {
+  if (!accessToken || String(accessToken).length > 8192) throw accessError('未登录或登录状态已失效。','AUTH_REQUIRED');
   let providerUid = '';
   try {
-    const verified = await cloud.auth().verifyAccessToken({ accessToken: String(accessToken), checkRevoked: true });
+    const verified = await measuredCall('dependencies', 'authVerify', () => cloud.auth().verifyAccessToken({ accessToken: String(accessToken), checkRevoked: true }));
     providerUid = String(verified.getSub() || '');
   } catch (_error) {
-    throw new Error('登录凭证无效或已撤销，请重新登录。');
+    throw accessError('登录凭证无效或已撤销，请重新登录。','AUTH_REQUIRED');
   }
   if (!providerUid) throw new Error('AGC 访问凭证未包含用户标识。');
   const bindings = collection(env, 'IdentityBinding');
   const id = identityBindingId('AGC', providerUid);
   const binding = await one(bindings.query().equalTo('id', id));
   if (binding && String(binding.status || 'ACTIVE') !== 'ACTIVE') throw accessError('账号身份已停用。', 'ACCOUNT_INACTIVE');
+  if (binding && !String(binding.canonicalUid || '').trim()) throw accessError('账号身份绑定无效。', 'INVALID_STATE');
   const canonicalUid = binding ? String(binding.canonicalUid || providerUid) : providerUid;
-  await contentPolicy(env).assertAccountActive(canonicalUid, true);
+  await policy.assertAccountActive(canonicalUid, true);
   if (!binding && !readOnly) {
     const now = Date.now();
     await bindings.upsert({
@@ -222,13 +256,14 @@ function bytesFromBase64(value, expectedSha256) {
 }
 
 function readFileBytes(file) {
-  return new Promise((resolve, reject) => {
+  return measuredCall('storage', 'download', () => new Promise((resolve, reject) => {
     const chunks = [];
+    let total = 0;
     const stream = file.createReadStream();
-    stream.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    stream.on('data', (chunk) => { const bytes=Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk);total+=bytes.length;if(total>MAX_PHOTO_BYTES){stream.destroy();reject(new Error('Media exceeds byte budget'));return;}chunks.push(bytes); });
     stream.on('end', () => resolve(Buffer.concat(chunks)));
     stream.on('error', reject);
-  });
+  }));
 }
 
 async function writeApproved(payload, env) {
@@ -240,70 +275,54 @@ async function writeApproved(payload, env) {
   const temporaryPath = `/tmp/shike-media-${crypto.randomUUID()}.jpg`;
   try {
     await fs.writeFile(temporaryPath, bytes);
-    const uploadResult = await storageBucket(env).upload(temporaryPath, {
+    const uploadResult = await measuredCall('storage', 'upload', () => storageBucket(env).upload(temporaryPath, {
       destination: key,
       sha256
-    });
+    }), bytes.length);
     const uploadedFile = Array.isArray(uploadResult) ? uploadResult[0] : storageBucket(env).file(key);
-    await uploadedFile.setMetadata({
+    await measuredCall('storage', 'metadata', () => uploadedFile.setMetadata({
       contentType: 'image/jpeg',
       cacheControl: 'no-store',
       customMetadata: { sha256 }
-    });
+    }));
   } finally {
     try { await fs.unlink(temporaryPath); } catch (_error) { }
   }
   return { byteSize: bytes.length };
 }
 
+
 async function readApproved(payload, env) {
   const key = validKey(payload && payload.key);
-  if (!key.startsWith('public/approved/')) throw new Error('媒体读取路径无效。');
-  const mediaId = mediaIdFromApprovedObjectKey(key);
-  const media = mediaId && await one(collection(env, 'CardMedia').query().equalTo('id', mediaId));
-  if (!media || approvedObjectKey(String(media.storageUid || media.ownerUid), mediaId) !== key ||
-      !await contentPolicy(env).canReadMedia(String(payload && payload.viewerUid || ''), media)) {
-    throw accessError('图片不存在或当前不可访问。');
-  }
-  const bytes = await readFileBytes(storageBucket(env).file(key));
-  if (bytes.length === 0 || bytes.length > MAX_PHOTO_BYTES) throw new Error('图片内容无效或超过允许大小。');
-  const current = await one(collection(env, 'CardMedia').query().equalTo('id', mediaId));
-  if (!current || current.cardId !== media.cardId || current.ownerUid !== media.ownerUid ||
-      approvedObjectKey(String(current.storageUid || current.ownerUid), mediaId) !== key ||
-      !await contentPolicy(env).canReadMedia(String(payload && payload.viewerUid || ''), current)) {
-    throw accessError('图片已不可访问。');
-  }
-  return { mimeType: String(media.mimeType || 'image/jpeg'), dataBase64: bytes.toString('base64'), byteSize: bytes.length };
+  return require('./shared/image-reader').readLegacy({ ...payload, key, mediaId: mediaIdFromApprovedObjectKey(key) }, env);
+}
+async function buildCover(media,env,sourceBytes){
+ if(String(env.SHIKE_MEDIA_COVERS_VERIFIED)!=='true')return false;
+ try{mediaVariant(media,'COVER_480');return true;}catch(_){}
+ if(!['APPROVED','PENDING_UPLOAD'].includes(media.status))return false;
+ const expectedSha256=originalSha256(media);
+ const key=approvedObjectKey(String(media.storageUid||media.ownerUid),media.id),coverKey=key.slice(0,-4)+'.cover-v1.jpg';
+ const bytes=sourceBytes||await readFileBytes(storageBucket(env).file(key));
+ const sourceSha256=verifyMediaBytes(bytes,{byteSize:Number(media.byteSize),sha256:expectedSha256});
+ const result=await require('./cover-converter').convert(bytes),cover=Buffer.from(result.bytes);
+ const sha256=crypto.createHash('sha256').update(cover).digest('hex');
+ await writeApproved({key:coverKey,sha256,dataBase64:cover.toString('base64')},env);
+ const target=collection(env,'CardMedia');let saved=false;
+ const committed=await target.runTransaction({apply:async tx=>{
+   const rows=await tx.executeQuery(target.query().equalTo('id',media.id).limit(1)),current=rows[0];
+   if(!sameMediaSource(current,media))return false;
+   tx.executeUpsert([Object.assign(new CardMedia(),current,{coverSha256:sha256,coverByteSize:cover.length,coverWidth:result.width,coverHeight:result.height,coverSourceSha256:sourceSha256,coverRecipeVersion:1})]);saved=true;return true;
+ }});
+ if(!committed||!saved){await remove({keys:[coverKey]},env);return false;}return true;
 }
 
 async function readRevision(payload, env) {
-  // This method is reachable only through a verified service HMAC envelope.
-  // Administrator is asserted by shike-service; current DB ownership/status is
-  // independently checked again here before Storage returns bytes.
   const key = validKey(payload && payload.key);
-  if (!key.startsWith('public/approved/')) throw new Error('媒体读取路径无效。');
-  const id = mediaIdFromApprovedObjectKey(key);
-  const media = id && await one(collection(env, 'CardMedia').query().equalTo('id', id));
-  if (!media || approvedObjectKey(String(media.storageUid || media.ownerUid), id) !== key ||
-      !await contentPolicy(env).canReadRevisionMedia(String(payload.viewerUid || ''), media,
-        String(payload.revisionId || ''), payload.administrator === true)) throw accessError('编辑图片不可访问。');
-  const bytes = await readFileBytes(storageBucket(env).file(key));
-  if (bytes.length === 0 || bytes.length > MAX_PHOTO_BYTES) throw new Error('图片内容无效或超过允许大小。');
-  const fresh = await one(collection(env, 'CardMedia').query().equalTo('id', id));
-  if (!fresh || fresh.cardId !== media.cardId || approvedObjectKey(String(fresh.storageUid || fresh.ownerUid), id) !== key ||
-      !await contentPolicy(env).canReadRevisionMedia(String(payload.viewerUid || ''), fresh, String(payload.revisionId || ''), payload.administrator === true)) throw accessError('编辑图片已失效。');
-  return { dataBase64: bytes.toString('base64'), byteSize: bytes.length };
+  return require('./shared/image-reader').readLegacy({ ...payload, key, mediaId: mediaIdFromApprovedObjectKey(key), mode: 'REVISION' }, env);
 }
-
-async function readModeration(payload,env) {
-  const key=validKey(payload.key),mediaId=mediaIdFromApprovedObjectKey(key);
-  const media=await one(collection(env,'CardMedia').query().equalTo('id',mediaId));
-  if(!media || approvedObjectKey(String(media.storageUid||media.ownerUid),mediaId)!==key || !await contentPolicy(env).canReadModerationMedia(String(payload.viewerUid||''),media,payload.administrator===true))throw accessError('审核图片不可访问。');
-  const bytes=await readFileBytes(storageBucket(env).file(key));
-  const fresh=await one(collection(env,'CardMedia').query().equalTo('id',mediaId));
-  if(!fresh || fresh.cardId!==media.cardId || approvedObjectKey(String(fresh.storageUid||fresh.ownerUid),mediaId)!==key || !await contentPolicy(env).canReadModerationMedia(String(payload.viewerUid||''),fresh,payload.administrator===true))throw accessError('审核图片已失效。');
-  if(!bytes.length || bytes.length>MAX_PHOTO_BYTES)throw new Error('审核图片大小无效。');
-  return {dataBase64:bytes.toString('base64'),byteSize:bytes.length};
+async function readModeration(payload, env) {
+  const key = validKey(payload && payload.key);
+  return require('./shared/image-reader').readLegacy({ ...payload, key, mediaId: mediaIdFromApprovedObjectKey(key), mode: 'REVIEW' }, env);
 }
 
 async function promote(payload, env) {
@@ -313,20 +332,21 @@ async function promote(payload, env) {
   const bucket = storageBucket(env);
   const pending = bucket.file(pendingKey);
   const approved = bucket.file(approvedKey);
-  const pendingExists = await pending.exists();
-  const approvedExists = await approved.exists();
+  const pendingExists = await measuredCall('storage', 'exists', () => pending.exists());
+  const approvedExists = await measuredCall('storage', 'exists', () => approved.exists());
   if (!pendingExists && !approvedExists) throw new Error('实拍图尚未成功上传，请重新选择并上传后再保存。');
-  if (pendingExists && !approvedExists) await pending.copy(approved);
-  if (pendingExists) await pending.delete();
+  if (pendingExists && !approvedExists) await measuredCall('storage', 'copy', () => pending.copy(approved));
+  if (pendingExists) await measuredCall('storage', 'delete', () => pending.delete());
   return { exists: true };
 }
 
 async function remove(payload, env) {
-  const keys = Array.isArray(payload && payload.keys) ? payload.keys : [];
+  const originals = Array.isArray(payload && payload.keys) ? payload.keys : [];
+  const keys = [...new Set(originals.flatMap(key => /^public\/approved\/[^/]+\/[0-9a-f-]{36}\.jpg$/i.test(key) ? [key, key.slice(0,-4)+'.cover-v1.jpg'] : [key]))];
   for (const candidate of keys) {
     const key = validKey(candidate);
     const file = storageBucket(env).file(key);
-    if (await file.exists()) await file.delete();
+    if (await measuredCall('storage', 'exists', () => file.exists())) await measuredCall('storage', 'delete', () => file.delete());
   }
   return { deleted: keys.length };
 }
@@ -390,21 +410,49 @@ async function uploadCardPhoto(input, env) {
   }
   const objectKey = approvedObjectKey(String(media.storageUid || identity.providerUid), mediaId);
   await writeApproved({ key: objectKey, dataBase64: payload.dataBase64, sha256 }, env);
+  await buildCover(media, env, bytes);
   return { success: true };
 }
 
 async function getPublicMedia(input, env) {
-  const identity = await verifiedIdentity(input && input.accessToken, env, true);
+  if (!input || !input.accessToken) throw accessError('请先恢复登录状态。', 'AUTH_REQUIRED');
   const payload = input && input.payload || {};
-  const bucketName = String(payload.bucketName || '').trim();
-  const objectKey = String(payload.cloudPath || '').trim();
-  if (bucketName !== required(env, 'SHIKE_STORAGE_BUCKET')) throw new Error('图片所属云存储实例无效。');
-  const response = await readApproved({ key: objectKey, viewerUid: identity.canonicalUid }, env);
-  return response;
+  if (String(payload.bucketName || '').trim() !== required(env, 'SHIKE_STORAGE_BUCKET')) throw new Error('图片所属存储实例无效。');
+  const key = validKey(payload.cloudPath);
+  return require('./shared/image-reader').readLegacy({ ...payload, key, mediaId: mediaIdFromApprovedObjectKey(key), readRequestId: input.readRequestId }, env, input.accessToken || '');
+}
+
+async function runCoverBackfill(env,retryFailed=false){
+ if(String(env.SHIKE_MEDIA_COVERS_VERIFIED)!=='true')return {status:'NOT_READY',reason:'SHIKE_MEDIA_COVERS_VERIFIED'};
+ const jobs=collection(env,'MaintenanceJob'),jobId='media-cover-backfill-v1',lease=crypto.randomUUID(),now=Date.now();let job;
+ const locked=await jobs.runTransaction({apply:async tx=>{
+  const rows=await tx.executeQuery(jobs.query().equalTo('jobId',jobId).limit(1)),old=rows[0];
+  if(old&&(old.status==='DONE'||old.status==='FAILED'&&!retryFailed||Number(new Date(old.leaseUntilAt))>now))return false;
+  job=Object.assign(new MaintenanceJob(),old||{jobId,jobType:'MEDIA_COVER_BACKFILL',entityId:'COVER_480',generation:1,createdAt:new Date(now),checkpointJson:'{"processed":0,"errors":0}',attemptCount:0},
+    {status:'RUNNING',runAfterAt:new Date(now),leaseOwner:lease,leaseUntilAt:new Date(now+90000),updatedAt:new Date(now),attemptCount:Number(old&&old.attemptCount||0)+1});
+  tx.executeUpsert([job]);return true;
+ }});if(!locked||!job)return {status:'BUSY_OR_DONE'};
+ let checkpoint=JSON.parse(job.checkpointJson);if(retryFailed)checkpoint.consecutiveErrors=0;
+ let last=checkpoint.last||null,next=last,status='PENDING',error='';
+ try{
+  const media=collection(env,'CardMedia');let query=media.query().orderByAsc('id');
+  if(last){const boundary=Object.assign(new CardMedia(),{id:last});query=query.startAfter(boundary);}
+  const rows=await query.limit(1).get();
+  if(!rows.length)status='DONE';
+  else {const row=rows[0];if(row.status==='APPROVED'&&!await buildCover(row,env))throw new Error('COVER_NOT_COMMITTED');next=row.id;checkpoint.processed++;checkpoint.consecutiveErrors=0;}
+ }catch(e){checkpoint.errors++;checkpoint.consecutiveErrors=Number(checkpoint.consecutiveErrors||0)+1;error=require('./shared/read-errors').errorCode(e);status=error==='3007009'?'PENDING':checkpoint.consecutiveErrors>=3?'FAILED':'PENDING';if(error==='3007009')checkpoint.consecutiveErrors=0;}
+ checkpoint.last=next;
+ await jobs.runTransaction({apply:async tx=>{
+  const rows=await tx.executeQuery(jobs.query().equalTo('jobId',jobId).limit(1)),current=rows[0];if(!current||current.leaseOwner!==lease)return false;
+  tx.executeUpsert([Object.assign(new MaintenanceJob(),current,{status,lastErrorCode:error,checkpointJson:JSON.stringify(checkpoint),leaseOwner:'',leaseUntilAt:new Date(0),runAfterAt:new Date(Date.now()+60000),updatedAt:new Date()})]);return true;
+ }});
+ return {status,processed:checkpoint.processed,errors:checkpoint.errors,lastErrorCode:error};
 }
 
 async function execute(input, env) {
   const request = verifySignedInput(input, env);
+  const metrics = readMetricsScope.getStore();
+  if (metrics && ['write-approved', 'read-approved', 'read-revision', 'read-moderation', 'promote', 'remove'].includes(request.action)) metrics.action = request.action;
   switch (request.action) {
     case 'write-approved': return writeApproved(request.payload, env);
     case 'read-approved': return readApproved(request.payload, env);
@@ -417,12 +465,16 @@ async function execute(input, env) {
 }
 
 function safeLogError(error) {
-  return error instanceof Error ? error.message.replace(/(accessToken|authorization|signature|body)=[^\s,]+/ig, '$1=[REDACTED]') : 'unknown error';
+  const message = error instanceof Error ? error.message.replace(/(accessToken|authorization|signature|body)=[^\s,]+/ig, '$1=[REDACTED]') : 'unknown error';
+  const checks = ['NOT_BINARY', 'BYTE_BUDGET', 'SIZE_MISMATCH', 'JPEG_MARKERS', 'SHA256_MISMATCH'];
+  return error && checks.includes(error.integrityCheck) ? message + ' integrityCheck=' + error.integrityCheck : message;
 }
 
 module.exports = {
   execute: (input, env) => withReadMetrics('execute', env, () => execute(input, env), requestId(input)),
-  prepareCardPhoto, uploadCardPhoto,
+  prepareCardPhoto: (input, env) => withReadMetrics('prepare-card-photo', env, () => prepareCardPhoto(input, env), requestId(input)),
+  uploadCardPhoto: (input, env) => withReadMetrics('upload-card-photo', env, () => uploadCardPhoto(input, env), requestId(input)),
   getPublicMedia: (input, env) => withReadMetrics('get-public-media', env, () => getPublicMedia(input, env), requestId(input)),
+  runCoverBackfill,
   safeLogError
 };

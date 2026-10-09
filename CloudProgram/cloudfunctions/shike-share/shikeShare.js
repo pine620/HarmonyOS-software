@@ -1,7 +1,7 @@
 'use strict';
 const crypto = require('crypto');
 // The packaging script rebases this import into the standalone HTTP artifact.
-const {readShareCard, readShareMedia} = require('../shike-service/runtime');
+const {readShareCard, readShareMedia} = require('./service/runtime');
 const buckets = new Map();
 let concurrent = 0;
 function header(headers, name) { const key = Object.keys(headers || {}).find(k => k.toLowerCase() === name); return key ? String(headers[key]) : ''; }

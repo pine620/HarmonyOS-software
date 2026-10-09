@@ -1,5 +1,5 @@
 import { util } from '@kit.ArkTS';
-import { PrimaryActionStyle, QuietActionStyle, SecondaryActionStyle, stage47ErrorText } from '../common/Stage47Ui';
+import { PrimaryActionStyle, QuietActionStyle, SecondaryActionStyle, stage47ErrorText, invalidatesProtectedPage } from '../common/Stage47Ui';
 import { operationsDate } from '../common/OperationsUi';
 import { DeletedCardRow, DeletedCardsPageResult, RestoreDeletedRequest } from '../model/OperationsModels';
 import { OperationsRepository } from '../repository/OperationsRepository';
@@ -25,8 +25,8 @@ export struct DeletedCardsPage {
     try { const result: DeletedCardsPageResult = await this.repo.deleted(more ? this.cursor : '', this.guard.options(ticket));
       if (!this.guard.valid(ticket)) return; this.source.merge(result.items, (row: DeletedCardRow): string => row.cardId, more);
       this.count = this.source.totalCount(); this.cursor = result.nextCursor;
-      this.message = !result.lifecycleEnabled ? '恢复功能尚未开放。' : this.count === 0 ? '暂无删除记录。' : '';
-    } catch (error) { if (this.guard.valid(ticket)) { this.source.replace([]); this.count = 0; this.cursor = ''; this.message = stage47ErrorText(error as Object, '读取失败。'); } }
+      this.message = !result.lifecycleEnabled ? '恢复功能尚未开放。' : this.count === 0 ? this.cursor.length > 0 ? '本批没有删除记录，可继续加载。' : '暂无删除记录。' : '';
+    } catch (error) { if (this.guard.valid(ticket)) { if (!more || invalidatesProtectedPage(error as Object)) { this.source.replace([]); this.count = 0; this.cursor = ''; } this.message = stage47ErrorText(error as Object, '读取失败。'); } }
     finally { if (this.guard.valid(ticket)) this.busy = false; }
   }
   private async restore(row: DeletedCardRow): Promise<void> {

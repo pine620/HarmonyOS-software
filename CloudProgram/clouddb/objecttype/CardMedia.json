@@ -76,27 +76,66 @@
       "fieldType": "Long",
       "notNull": true,
       "defaultValue": 0
+    },
+    {
+      "fieldName": "coverSha256",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "coverByteSize",
+      "fieldType": "Integer"
+    },
+    {
+      "fieldName": "coverWidth",
+      "fieldType": "Integer"
+    },
+    {
+      "fieldName": "coverHeight",
+      "fieldType": "Integer"
+    },
+    {
+      "fieldName": "coverSourceSha256",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "coverRecipeVersion",
+      "fieldType": "Integer"
     }
   ],
   "indexes": [
     {
       "indexName": "cardId",
       "indexList": [
-        {"fieldName": "cardId", "sortType": "ASC"}
+        {
+          "fieldName": "cardId",
+          "sortType": "ASC"
+        }
       ]
     },
     {
       "indexName": "cardId_createdAt",
       "indexList": [
-        {"fieldName": "cardId", "sortType": "ASC"},
-        {"fieldName": "createdAt", "sortType": "ASC"}
+        {
+          "fieldName": "cardId",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "createdAt",
+          "sortType": "ASC"
+        }
       ]
     },
     {
       "indexName": "ownerUid_createdAt",
       "indexList": [
-        {"fieldName": "ownerUid", "sortType": "ASC"},
-        {"fieldName": "createdAt", "sortType": "DESC"}
+        {
+          "fieldName": "ownerUid",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "createdAt",
+          "sortType": "DESC"
+        }
       ]
     }
   ],
@@ -115,7 +154,11 @@
     },
     {
       "role": "Administrator",
-      "rights": ["Read", "Upsert", "Delete"]
+      "rights": [
+        "Read",
+        "Upsert",
+        "Delete"
+      ]
     }
   ]
 }

@@ -1,8 +1,10 @@
-import { CardPhoto, MaintenanceJobRecord } from './CloudContracts';
+import { CardPhoto, MaintenanceJobRecord, MigrationCheckpoint } from './CloudContracts';
+export type HistoricalMigrationType = 'BACKFILL_CARD' | 'MIGRATE_REACTION';
 export type ModerationKind = 'CARD' | 'REVISION' | 'MERCHANT' | 'REPORT';
 export type ModerationAction = 'APPROVE' | 'REQUEST_CHANGE' | 'TAKE_DOWN' | 'NO_ISSUE';
 export type ModerationScope = 'ADMIN' | 'REPORTS' | 'CORRECTIONS';
-export interface OperationsCapabilities { administrator: boolean; lifecycleEnabled: boolean; workerEnabled: boolean; }
+export interface OperationsCapabilities { administrator: boolean; lifecycleEnabled: boolean; workerEnabled: boolean; protocolVersion?: number; diagnostics?: Array<string>; }
+export interface OperationsCapabilitiesRequest { includeDiagnostics: boolean; }
 export interface CursorRequest { cursor: string; }
 export interface ModerationQueueRequest { kind: ModerationKind; cursor: string; }
 export interface ModerationRow { id: string; kind: ModerationKind; targetId: string; title: string; state: string; reason: string; createdAt: number; version: number; }
@@ -16,7 +18,13 @@ export interface ReportContentRequest { targetId: string; reason: string; }
 export interface DeletedCardRow { cardId: string; title: string; deletedAt: number; purgeAt: number; version: number; canRestore: boolean; }
 export interface DeletedCardsPageResult { items: Array<DeletedCardRow>; nextCursor: string; lifecycleEnabled: boolean; }
 export interface RestoreDeletedRequest { cardId: string; expectedVersion: number; requestId: string; }
-export interface LifecycleJobSummary extends MaintenanceJobRecord { phase: string; processed: number; authActionRequired: boolean; }
+export interface LifecycleJobSummary extends MaintenanceJobRecord {
+  phase: string; processed: number; authActionRequired: boolean;
+  migration?: MigrationCheckpoint;
+  processingDeadlineAt?: number; manualActionDueAt?: number; lastProgressAt?: number;
+  noProgressRuns?: number; stalled?: boolean; overdue?: boolean;
+  errorCategory?: 'NONE' | 'RETRYABLE' | 'MANUAL' | 'PERMANENT';
+}
 export interface LifecycleJobsRequest { status: string; cursor: string; }
 export interface LifecycleJobsPageResult { items: Array<LifecycleJobSummary>; nextCursor: string; }
 export interface LifecycleJobRequest { jobId: string; identityCursor?: string; }

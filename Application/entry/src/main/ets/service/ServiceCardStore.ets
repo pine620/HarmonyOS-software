@@ -6,6 +6,8 @@ import util from '@ohos.util';
 import { FoodCard } from '../model/CloudContracts';
 import { cardPriceText } from '../model/CardPrice';
 import { foodCardCategoryLabel } from '../components/FoodCover';
+import { ImageDescriptors } from './ImageDescriptors';
+import { ImageDescriptor } from '../model/ImageModels';
 import { ServiceCardCoverCache } from './ServiceCardCoverCache';
 
 const STORE_OPTIONS: preferences.Options = { name: 'shike_service_card' };
@@ -19,6 +21,8 @@ const LOCATION_TEXT_KEY: string = 'location_text';
 const CATEGORY_TEXT_KEY: string = 'category_text';
 const PHOTO_PATH_KEY: string = 'photo_path';
 const PHOTO_BUCKET_KEY: string = 'photo_bucket';
+const PHOTO_VERSION_KEY: string = 'photo_version';
+const COVER_VERSION_KEY: string = 'cover_version';
 const COVER_FILE_KEY: string = 'cover_file';
 const COVER_CARD_ID_KEY: string = 'cover_card_id';
 const COVER_PHOTO_PATH_KEY: string = 'cover_photo_path';
@@ -77,6 +81,16 @@ export class ServiceCardStore {
   private static initialBindings: Map<string, ServiceCardBindingLease> =
     new Map<string, ServiceCardBindingLease>();
 
+  static revokePublished(context: common.Context, mediaId: string = ''): void {
+    const store: preferences.Preferences = storeFor(context);
+    const photoPath: string = stringValue(store.getSync(PHOTO_PATH_KEY, ''), '');
+    if (mediaId.length > 0 && !photoPath.endsWith('/' + mediaId + '.jpg')) return;
+    ServiceCardStore.publicationGeneration++;
+    for (const key of [CARD_ID_KEY, PRODUCT_NAME_KEY, SCORE_TEXT_KEY, PRICE_TEXT_KEY, LOCATION_TEXT_KEY, CATEGORY_TEXT_KEY, PHOTO_PATH_KEY, PHOTO_BUCKET_KEY, COVER_FILE_KEY, COVER_CARD_ID_KEY, COVER_PHOTO_PATH_KEY, COVER_PHOTO_BUCKET_KEY, PHOTO_VERSION_KEY, COVER_VERSION_KEY]) store.putSync(key, '');
+    store.flushSync(); ServiceCardStore.releaseInitialBindings(); ServiceCardCoverCache.prune(context, '');
+    void ServiceCardStore.updateAllForms(context).catch((): void => {});
+  }
+
   static read(context: common.Context, snapshot?: preferences.Preferences): ServiceCardBindingData {
     const store: preferences.Preferences = snapshot === undefined ? storeFor(context) : snapshot;
     const data: ServiceCardBindingData = new ServiceCardBindingData();
@@ -108,6 +122,7 @@ export class ServiceCardStore {
     const path: string = stringValue(store.getSync(COVER_FILE_KEY, ''), '');
     if (data.formDimension !== 3 || data.cardId.length === 0 || data.coverCardId !== data.cardId ||
       data.coverPhotoPath !== data.photoPath || data.coverPhotoBucket !== data.photoBucket ||
+      stringValue(store.getSync(PHOTO_VERSION_KEY, ''), '').length === 0 || store.getSync(PHOTO_VERSION_KEY, '') !== store.getSync(COVER_VERSION_KEY, '') ||
       !ServiceCardCoverCache.isUsable(context, path)) return lease;
     try {
       lease.file = fileIo.openSync(path, fileIo.OpenMode.READ_ONLY);
@@ -225,9 +240,16 @@ export class ServiceCardStore {
     }
   }
 
+  private static coverVersion(card: FoodCard): string {
+    const id: string = card.photos?.[0]?.id || card.photoPath.split('/').pop()?.replace('.jpg', '') || '';
+    const permit: ImageDescriptor | undefined = ImageDescriptors.read(id, 'PUBLIC', 'COVER_480');
+    return permit === undefined ? '' : permit.variant + ':' + permit.sha256;
+  }
+
   private static writeRecommendation(context: common.Context, card: FoodCard): boolean {
     const store: preferences.Preferences = storeFor(context);
-    const id: string = card.id.trim();
+    const id: string = card.id.trim(); const version: string = ServiceCardStore.coverVersion(card);
+    store.putSync(PHOTO_VERSION_KEY, version);
     store.putSync(CARD_ID_KEY, id);
     store.putSync(PRODUCT_NAME_KEY, card.productName.trim().slice(0, 36) || '附近值得一试');
     store.putSync(SCORE_TEXT_KEY, `${card.tasteScore}/10 好味评分`);
@@ -237,11 +259,12 @@ export class ServiceCardStore {
     store.putSync(PHOTO_PATH_KEY, card.photoPath.trim());
     store.putSync(PHOTO_BUCKET_KEY, card.photoBucket.trim());
     const oldPath: string = stringValue(store.getSync(COVER_FILE_KEY, ''), '');
-    const reusable: boolean = stringValue(store.getSync(COVER_CARD_ID_KEY, ''), '') === id &&
+    const reusable: boolean = version.length > 0 && store.getSync(COVER_VERSION_KEY, '') === version && stringValue(store.getSync(COVER_CARD_ID_KEY, ''), '') === id &&
       stringValue(store.getSync(COVER_PHOTO_PATH_KEY, ''), '') === card.photoPath.trim() &&
       stringValue(store.getSync(COVER_PHOTO_BUCKET_KEY, ''), '') === card.photoBucket.trim() &&
       ServiceCardCoverCache.isUsable(context, oldPath);
     if (!reusable) {
+      store.putSync(COVER_VERSION_KEY, '');
       store.putSync(COVER_FILE_KEY, '');
       store.putSync(COVER_CARD_ID_KEY, '');
       store.putSync(COVER_PHOTO_PATH_KEY, '');
@@ -253,7 +276,7 @@ export class ServiceCardStore {
   }
 
   static async publishRecommendation(context: common.Context, card: FoodCard): Promise<void> {
-    if (card.status !== 'APPROVED' || card.id.trim().length === 0) return;
+    if (card.visibility === 'FRIENDS' || card.status !== 'APPROVED' || card.id.trim().length === 0) return;
     const generation: number = ++ServiceCardStore.publicationGeneration;
     // Finish all preference operations before an await can invalidate this process's cache.
     const reusable: boolean = ServiceCardStore.writeRecommendation(context, card);
@@ -286,6 +309,11 @@ export class ServiceCardStore {
     if (stringValue(current.getSync(CARD_ID_KEY, ''), '') !== card.id.trim() ||
       stringValue(current.getSync(PHOTO_PATH_KEY, ''), '') !== card.photoPath.trim() ||
       stringValue(current.getSync(PHOTO_BUCKET_KEY, ''), '') !== card.photoBucket.trim()) return false;
+    const version: string = ServiceCardStore.coverVersion(card);
+    const expected: string = stringValue(current.getSync(PHOTO_VERSION_KEY, ''), '');
+    if (version.length === 0 || expected.length > 0 && expected !== version) return false;
+    current.putSync(PHOTO_VERSION_KEY, version);
+    current.putSync(COVER_VERSION_KEY, version);
     current.putSync(COVER_FILE_KEY, path);
     current.putSync(COVER_CARD_ID_KEY, card.id.trim());
     current.putSync(COVER_PHOTO_PATH_KEY, card.photoPath.trim());

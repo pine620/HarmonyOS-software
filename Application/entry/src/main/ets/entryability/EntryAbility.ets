@@ -10,7 +10,9 @@ import {
   ENTRY_ROUTE_PARAMETER, ENTRY_TAB_PARAMETER
 } from '../service/ContinuationState';
 import { PushNotificationService } from '../service/PushNotificationService';
-import { NearbyPreloadService } from '../service/NearbyPreloadService';
+import { ImageDescriptors } from '../service/ImageDescriptors';
+import { ServiceCardStore } from '../service/ServiceCardStore';
+import { ImageRepository } from '../service/ImageRepository';
 import { ServiceCardRemoteSyncService } from '../service/ServiceCardRemoteSyncService';
 
 export default class EntryAbility extends UIAbility {
@@ -20,6 +22,7 @@ export default class EntryAbility extends UIAbility {
   };
 
   onCreate(want: Want, _launchParam: AbilityConstant.LaunchParam): void {
+    ImageDescriptors.onRevoked = (mediaId: string): void => { try { ServiceCardStore.revokePublished(this.context, mediaId); } catch (_error) { } };
     if (!AppStorage.has('pendingSharedCardId')) AppStorage.setOrCreate('pendingSharedCardId', '');
     AppStorage.setOrCreate('stage47AppActive', true);
     if (!AppStorage.has('socialForegroundRevision')) AppStorage.setOrCreate('socialForegroundRevision', 0);
@@ -37,16 +40,14 @@ export default class EntryAbility extends UIAbility {
     this.captureSystemEntry(want);
   }
 
-  onBackground(): void { AppStorage.setOrCreate('stage47AppActive', false); ReadScheduler.invalidateQueued(); void DraftStore.flushActive().catch((_error: Object): void => {}); }
+  onBackground(): void { AppStorage.setOrCreate('stage47AppActive', false); ReadScheduler.invalidateQueued(); ImageRepository.revokePermissions(); void DraftStore.flushActive().catch((_error: Object): void => {}); }
 
   onForeground(): void {
     AppStorage.setOrCreate('stage47AppActive', true);
-    const context = this.context as common.UIAbilityContext;
     const revision: number = AppStorage.get<number>('socialForegroundRevision') || 0;
     AppStorage.setOrCreate('socialForegroundRevision', revision + 1);
     const notificationRevision: number = AppStorage.get<number>('notificationForegroundRevision') || 0;
     AppStorage.setOrCreate('notificationForegroundRevision', notificationRevision + 1);
-    void NearbyPreloadService.warmIfEligible(context);
   }
 
   onWindowStageRestore(windowStage: window.WindowStage): void {

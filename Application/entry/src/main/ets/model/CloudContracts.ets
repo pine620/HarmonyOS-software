@@ -7,7 +7,7 @@ export type FoodVisibility = 'PUBLIC' | 'FRIENDS';
 export type CardReviewState = 'LEGACY_APPROVED' | 'PENDING_POST_REVIEW' | 'APPROVED' | 'TAKEN_DOWN' | 'REQUEST_CHANGE';
 export type CardReactionType = 'LIKE' | 'DISLIKE';
 export type CardRevisionStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'WITHDRAWN';
-export type MaintenanceJobType = 'PURGE_GROUP' | 'MODERATION_AUDIT' | 'PURGE_CARD' | 'DELETE_ACCOUNT' | 'BACKFILL_CARD' | 'MIGRATE_REACTION' | 'PURGE_CONVERSATION' | 'MIGRATE_PERSONAL_COLLECTION' | 'MIGRATE_PERSONAL_COLLECTION_BATCH';
+export type MaintenanceJobType = 'PURGE_GROUP' | 'MODERATION_AUDIT' | 'PURGE_CARD' | 'DELETE_ACCOUNT' | 'BACKFILL_CARD' | 'MIGRATE_REACTION' | 'PURGE_CONVERSATION' | 'MIGRATE_PERSONAL_COLLECTION' | 'MIGRATE_PERSONAL_COLLECTION_BATCH' | 'MEDIA_COVER_BACKFILL';
 export type MaintenanceJobStatus = 'PENDING' | 'RUNNING' | 'RETRY_WAIT' | 'DONE' | 'CANCELLED' | 'FAILED';
 
 /** Cloud DB Date values cross the JSON boundary as millisecond numbers. */
@@ -218,6 +218,8 @@ export interface CardDetailRequest extends CardIdRequest {
 
 export interface SetCardReactionRequest extends CardIdRequest {
   reaction: CardReactionType | 'NONE';
+  requestId?: string;
+  expectedReaction?: CardReactionType | '';
 }
 
 export interface CardRevisionChanges {
@@ -367,6 +369,14 @@ export type CardActionType = 'LIKE' | 'FAVORITE';
 export type CommentReactionType = 'LIKE' | 'DISLIKE';
 
 export interface CardPhoto {
+  sha256?: string;
+  byteSize?: number;
+  coverSha256?: string;
+  coverByteSize?: number;
+  coverWidth?: number;
+  coverHeight?: number;
+  accessDenied?: boolean;
+  readAcceptedAt?: number;
   id: string;
   url: string;
   path: string;
@@ -467,10 +477,14 @@ export interface RoundedLocation {
 }
 
 export interface FoodCard {
+  contentRevision?: string;
+  mediaContentChanged?: boolean;
+  mediaAccessDenied?: boolean;
   authorUid?: string;
   viewerWanted?: boolean;
   collectionReady?: boolean;
   collectionStatus?: string;
+  collectionReason?: string;
   recommendationReasons?: Array<string>;
   id: string;
   // Optional while old deployments and historical rows retain their legacy shape.
@@ -613,12 +627,17 @@ export interface UploadPreparedPhotoRequest {
 export interface PublicMediaRequest {
   bucketName: string;
   cloudPath: string;
+  metadataOnly?: boolean;
+  variant?: string;
 }
 
 export interface PublicMediaResponse {
   mimeType: string;
   dataBase64: string;
   byteSize: number;
+  sha256?: string;
+  metadataOnly?: boolean;
+  variant?: string;
 }
 
 export interface PublishCardRequest {

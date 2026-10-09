@@ -3,7 +3,7 @@ import { fileIo } from '@kit.CoreFileKit';
 import { image } from '@kit.ImageKit';
 import util from '@ohos.util';
 import { FoodCard } from '../model/CloudContracts';
-import { PhotoUploadService } from './PhotoUploadService';
+import { ImageRepository } from './ImageRepository';
 
 const MAX_COVER_EDGE: number = 480;
 const MAX_COVER_BYTES: number = 512 * 1024;
@@ -29,9 +29,9 @@ export class ServiceCardCoverCache {
   static async prepare(context: common.Context, card: FoodCard,
     mayContinue: () => boolean): Promise<string> {
     if (!card.photoPath.startsWith('public/approved/') || card.photoBucket.trim().length === 0) return '';
-    const url: string = await PhotoUploadService.getDownloadUrl(context, card.photoBucket, card.photoPath,
-      'low', async (): Promise<boolean> => mayContinue());
-    if (!mayContinue() || !url.startsWith(`file://${context.cacheDir}/shike-approved-media-v2/`)) return '';
+    const url: string = await ImageRepository.getDownloadUrl(context, card.photoBucket, card.photoPath,
+      'low', async (): Promise<boolean> => mayContinue(), card.photos?.[0], true);
+    if (!mayContinue() || !url.startsWith(`file://${context.cacheDir}/shike-image-v1/`)) return '';
     const source: image.ImageSource = image.createImageSource(url.slice('file://'.length));
     let pixels: image.PixelMap | undefined = undefined;
     let packer: image.ImagePacker | undefined = undefined;

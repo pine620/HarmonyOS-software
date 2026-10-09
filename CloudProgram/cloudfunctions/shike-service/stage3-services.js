@@ -1,7 +1,8 @@
 'use strict';
 
 const crypto = require('crypto');
-const { accessError, dateMillis } = require('./content-policy');
+const {afterTuple}=require('./stages47-common');
+const { accessError, dateMillis } = require('./shared/content-policy');
 const MODES = ['ALL', 'DELIVERY', 'DINE_IN'];
 const SORTS = ['LATEST', 'SCORE_DESC', 'PRICE_ASC', 'PRICE_DESC'];
 const CATEGORIES = ['RICE_SET', 'NOODLES', 'HOT_POT', 'GRILL_FRIED', 'SNACK', 'FAST_WESTERN', 'BREAKFAST_BAKERY', 'DESSERT', 'DRINK', 'PACKAGED', 'OTHER'];
@@ -66,22 +67,35 @@ function inRegion(row, bounds) {
     row.longitudeE6 >= bounds.west * 1e6 && row.longitudeE6 <= bounds.east * 1e6;
 }
 
+
 function createStage3Services(ctx) {
   const { collection, one, models, contentPolicy, readableCardRows, readCardIfAllowed } = ctx;
-  async function capabilities(env) {
-    const searchFlag = enabled(env, 'SHIKE_STAGE3_SEARCH_VERIFIED');
-    const mapFlag = enabled(env, 'SHIKE_STAGE3_MAP_VERIFIED');
-    if (!searchFlag && !mapFlag) return { searchEnabled: false, mapEnabled: false, searchReason: 'VALIDATION_REQUIRED', mapReason: 'VALIDATION_REQUIRED' };
-    const ready = await ctx.stage1().migrationReadiness(env);
-    let mapReady = mapFlag && ready.indexedQueryReady && setting(env, 'SHIKE_STAGE3_MAP_COORDINATE_SYSTEM') === 'GCJ02';
-    if (mapReady) {
-      // Never claim viewport completeness while indexed reliable coordinates mix systems.
-      const mixed = await one(collection(env, 'Merchant').query().equalTo('mapVisible', true).equalTo('coordinateSystem', 'WGS84'));
-      if (mixed) mapReady = false;
-    }
-    return { searchEnabled: searchFlag && ready.indexedQueryReady, mapEnabled: !!mapReady,
-      searchReason: !searchFlag ? 'VALIDATION_REQUIRED' : !ready.indexedQueryReady ? 'HISTORY_OR_INDEX_REQUIRED' : '',
-      mapReason: !mapFlag ? 'VALIDATION_REQUIRED' : !ready.indexedQueryReady ? 'HISTORY_OR_INDEX_REQUIRED' : !mapReady ? 'COORDINATE_REQUIRED' : '' };
+  function recordCapabilities(result, facts) {
+    ctx.recordReadReadiness('search', result.searchEnabled, result.searchReason, facts);
+    ctx.recordReadReadiness('map', result.mapEnabled, result.mapReason, facts);
+    return result;
+  }
+  async function capabilities(env, readiness = null) {
+    return ctx.withReadPhase('capabilities', async () => {
+      const searchFlag = enabled(env, 'SHIKE_STAGE3_SEARCH_VERIFIED');
+      const mapFlag = enabled(env, 'SHIKE_STAGE3_MAP_VERIFIED');
+      const facts = { searchVerified: searchFlag, mapVerified: mapFlag };
+      if (!searchFlag && !mapFlag) return recordCapabilities({ searchEnabled: false, mapEnabled: false, searchReason: 'VALIDATION_REQUIRED', mapReason: 'VALIDATION_REQUIRED' }, facts);
+      const ready = readiness || await ctx.stage1().migrationReadiness(env);
+      Object.assign(facts, { cardCoverageComplete: ready.cardCoverageComplete, reactionCoverageComplete: ready.reactionCoverageComplete,
+        indexedQueryReady: ready.indexedQueryReady, indexVerified: String(env.SHIKE_INDEXED_QUERY_VERIFIED || process.env.SHIKE_INDEXED_QUERY_VERIFIED || '') === 'true',
+        mapCoordinateConfigured: setting(env, 'SHIKE_STAGE3_MAP_COORDINATE_SYSTEM') === 'GCJ02' });
+      let mapReady = mapFlag && ready.indexedQueryReady && setting(env, 'SHIKE_STAGE3_MAP_COORDINATE_SYSTEM') === 'GCJ02';
+      if (mapReady) {
+        // Never claim viewport completeness while indexed reliable coordinates mix systems.
+        const mixed = await one(collection(env, 'Merchant').query().equalTo('mapVisible', true).equalTo('coordinateSystem', 'WGS84'));
+        Object.assign(facts, { mixedCoordinateDetected: !!mixed });
+        if (mixed) mapReady = false;
+      }
+      return recordCapabilities({ searchEnabled: searchFlag && ready.indexedQueryReady, mapEnabled: !!mapReady,
+        searchReason: !searchFlag ? 'VALIDATION_REQUIRED' : !ready.indexedQueryReady ? 'HISTORY_OR_INDEX_REQUIRED' : '',
+        mapReason: !mapFlag ? 'VALIDATION_REQUIRED' : !ready.indexedQueryReady ? 'HISTORY_OR_INDEX_REQUIRED' : !mapReady ? 'COORDINATE_REQUIRED' : '' }, facts);
+    });
   }
   async function requireGate(env, kind, uid) {
     if (uid) await contentPolicy(env).assertAccountActive(uid);
@@ -94,7 +108,7 @@ function createStage3Services(ctx) {
     const limit = integer(payload.limit, 100, 200);
     const configured = Number(setting(env, 'SHIKE_STAGE3_MAP_SCAN_BUDGET') || 1000);
     const budget = Number.isSafeInteger(configured) && configured > 0 ? Math.min(configured, 1000) : 1000;
-    const signature = digest({ kind: 'map', uid, bounds, selectedMode });
+    const signature = digest({ kind: 'map-range-v2', uid, bounds, selectedMode });
     const saved = cursorRead(payload.cursor, signature); const at = saved ? saved.at : Date.now();
     let boundary = null;
     if (saved) {
@@ -109,7 +123,7 @@ function createStage3Services(ctx) {
       let query = collection(env, 'Merchant').query().equalTo('mapVisible', true)
         .greaterThanOrEqualTo('latitudeE6', Math.ceil(bounds.south * 1e6)).lessThanOrEqualTo('latitudeE6', Math.floor(bounds.north * 1e6))
         .orderByAsc('latitudeE6').orderByAsc('merchantId');
-      if (boundary) query = query.startAfter(Object.assign(new models.Merchant(), boundary));
+      if (boundary) query = afterTuple(query,[['latitudeE6','ASC'],['merchantId','ASC']],boundary);
       const rows = await query.limit(batchLimit).get(); fetched += rows.length;
       if (!rows.length) { exhausted = true; break; }
       let consumed = 0;
@@ -179,7 +193,7 @@ function createStage3Services(ctx) {
     const spec = querySpec(payload, env, merchantId);
     if (spec.scope === 'VIEWPORT') await requireGate(env, 'map', uid);
     const pageSize = integer(payload.pageSize, 20, 30);
-    const signature = digest({ kind: 'cards', uid, spec });
+    const signature = digest({ kind: 'cards-range-v2', uid, spec });
     const saved = cursorRead(payload.cursor, signature); const at = saved ? saved.at : Date.now();
     const categories = spec.categories.length ? spec.categories : [''];
     let phase = saved ? saved.phase : 'known';
@@ -212,9 +226,16 @@ function createStage3Services(ctx) {
         const count = Math.min(10, Math.floor((budget - fetched) / pendingHeads));
         if (count < 1) { stopped = true; break; }
         let q = sortedQuery(spec, stream.category, phase, at, env);
-        if (stream.last) q = q.startAfter(Object.assign(new models.FoodCard(), stream.last));
+        if (stream.last) {
+          const order = spec.sort.startsWith('PRICE_') && phase !== 'unknown' ? [['queryPriceFen',spec.sort === 'PRICE_ASC' ? 'ASC':'DESC']] : spec.sort === 'SCORE_DESC' ? [['tasteScore','DESC']] : [];
+          q = afterTuple(q,order.concat([['publishedAt','DESC'],['id','ASC']]),stream.last);
+        }
         const rows = await q.limit(count).get(); fetched += rows.length;
         stream.buffer = rows;
+        stream.readContext = await ctx.createCardReadContext(rows,uid,env);
+        const readable = await readableCardRows(rows,uid,env,true,stream.readContext);
+        stream.readableIds = new Set(readable.map(row=>row.id));
+        await ctx.preparePrimaryPhotos(stream.readContext,readable,env);
         // Only persist exhaustion after all fetched rows have been consumed.
         stream.endOfQuery = rows.length < count;
         if (!rows.length) stream.exhausted = true;
@@ -244,17 +265,10 @@ function createStage3Services(ctx) {
         const merchant = merchantCache.get(row.merchantId);
         if (!merchantEligible(merchant, spec.mode) || !inRegion(merchant, spec.viewport)) continue;
       }
-      const readable = await readableCardRows([row], uid, env, true);
-      if (!readable.length) continue;
-      // Re-read immediately before hydration; never reuse a cached authorization.
-      const fresh = await one(collection(env, 'FoodCard').query().equalTo('id', row.id));
-      if (!fresh || digest(cardStamp(fresh)) !== digest(cardStamp(row)) || !await contentPolicy(env).isCardPubliclyVisible(fresh)) continue;
-      if (spec.scope === 'VIEWPORT') {
-        const currentMerchant = await one(collection(env, 'Merchant').query().equalTo('merchantId', fresh.merchantId));
-        merchantReads += currentMerchant ? 1 : 0;
-        if (!merchantEligible(currentMerchant, spec.mode) || !inRegion(currentMerchant, spec.viewport)) continue;
-      }
-      const card = await readCardIfAllowed(fresh, env, 0, true, uid, false, 1);
+      if (!stream.readableIds.has(row.id)) continue;
+      // Reuse the buffer's author/media reads while retaining the full list
+      // contract (score, review, offers and avatar). Recheck before responding.
+      const card = await ctx.readCardIfAllowed(row,env,0,true,uid,false,1,null,stream.readContext);
       if (card) { cards.push(card); seen.add(card.id); }
     }
     // Reconfirm the whole bounded response after hydration/scanning, including rows collected early in this call.
@@ -282,11 +296,12 @@ function createStage3Services(ctx) {
       const merchant = finalMerchants.get(latest.merchantId);
       return merchantEligible(merchant, spec.mode) && inRegion(merchant, spec.viewport);
     });
+    const verifiedCards = await ctx.finalizeCardReads(visibleCards,[...finalById.values()],uid,env);
     // Exhaustion may be known exactly at pageSize; otherwise one harmless empty continuation is allowed.
     if (streams.every((s) => s.exhausted && !s.buffer.length) && (phase === 'unknown' || !spec.sort.startsWith('PRICE_') || spec.min !== null || spec.max !== null)) complete = true;
-    return { cards: visibleCards, nextCursor: complete ? '' : cursorWrite(signature, at, { phase, streams: streams.map((s) => ({ last: s.last ? cardStamp(s.last) : null, exhausted: !!s.exhausted && !s.buffer.length })) }),
+    return { cards: verifiedCards, nextCursor: complete ? '' : cursorWrite(signature, at, { phase, streams: streams.map((s) => ({ last: s.last ? cardStamp(s.last) : null, exhausted: !!s.exhausted && !s.buffer.length })) }),
       coverage: complete ? 'COMPLETE' : stopped ? 'PARTIAL_SCAN_LIMIT' : 'PARTIAL_RESULT_LIMIT',
-      scannedCandidateCount: consumed, fetchedCandidateCount: fetched, merchantReadCount: merchantReads, returnedCount: visibleCards.length, scope: spec.scope };
+      scannedCandidateCount: consumed, fetchedCandidateCount: fetched, merchantReadCount: merchantReads, returnedCount: verifiedCards.length, scope: spec.scope };
   }
   async function getMerchantRecommendations(uid, payload, env) {
     await requireGate(env, 'map', uid);

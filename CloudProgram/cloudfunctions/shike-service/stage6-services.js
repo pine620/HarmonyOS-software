@@ -1,6 +1,6 @@
 'use strict';
 const crypto=require('crypto');
-const {dateMillis,currentVisibility,isAccountActive}=require('./content-policy');
+const {dateMillis,currentVisibility,isAccountActive}=require('./shared/content-policy');
 const {fail,hash,id,uuid,int,version,token,encode,score,coordinate,distance,friendsAllowed}=require('./stages47-common');
 function createStage6Services(ctx){
  const {collection,one,models}=ctx;const model=(n,r)=>Object.assign(new models[n](),r);
@@ -9,8 +9,9 @@ function createStage6Services(ctx){
   const excluded=p.excludedCardIds||[];
   if(!Array.isArray(excluded)||excluded.length>1000||excluded.some(x=>typeof x!=='string'||x.length>128))throw fail('会话排除集合无效。');
   const limit=1000;
+  const [wanted,favorites,items,ownedLists]=await ctx.withReadPhase('candidates',async()=>{
   const migration=await ctx.collections().status(uid,env);
-  const [wanted,favorites,items,ownedLists]=migration.collectionReady?await Promise.all([
+  return migration.collectionReady?await Promise.all([
    collection(env,'CardAction').query().equalTo('actorUid',uid).equalTo('kind','WANT_TO_EAT').orderByDesc('createdAt').orderByAsc('id').limit(limit).get(),
    collection(env,'CardAction').query().equalTo('actorUid',uid).equalTo('kind','FAVORITE').orderByDesc('createdAt').orderByAsc('id').limit(limit).get(),
    Promise.resolve([]),Promise.resolve([])
@@ -20,6 +21,8 @@ function createStage6Services(ctx){
    collection(env,'FoodListItem').query().equalTo('ownerUid',uid).orderByAsc('cardId').orderByAsc('listId').limit(limit).get(),
    collection(env,'FoodList').query().equalTo('ownerUid',uid).orderByAsc('sortOrder').orderByAsc('listId').limit(limit).get()
   ]);
+  });
+  ctx.recordReadCounts({sourceReferenceCount:wanted.length+favorites.length+items.length});
   const activeLists=new Set(ownedLists.filter(list=>list.deletedAt==null).map(list=>list.listId));
   const seen=new Set(excluded),pool=new Map(),sourceIds=new Set();
   function entry(cardId){
@@ -33,6 +36,7 @@ function createStage6Services(ctx){
   for(const row of favorites){const item=entry(row.cardId);if(item)item.favorite=true;}
   for(const row of items){if(!activeLists.has(row.listId))continue;const item=entry(row.cardId);if(item&&!item.listIds.includes(row.listId))item.listIds.push(row.listId);}
   const shuffled=[...pool.values()];
+  ctx.recordReadCounts({candidatePoolCount:shuffled.length});
   for(let i=shuffled.length-1;i>0;i--){const j=crypto.randomInt(i+1);[shuffled[i],shuffled[j]]=[shuffled[j],shuffled[i]];}
   let output=[];const sources=new Map(),fetchedIds=new Set();let scanned=0;
   // Personal references need no public-search qualification or preference ranking.
@@ -42,6 +46,7 @@ function createStage6Services(ctx){
     while(scanned<shuffled.length&&scanned<60&&output.length<3){
      const batch=shuffled.slice(scanned,scanned+Math.min(10,60-scanned));
      for(const item of batch)fetchedIds.add(item.cardId);
+     ctx.recordReadCounts({fetchedCandidateCount:fetchedIds.size,scannedCandidateCount:scanned});
      const byId=await ctx.readCardRowsByIds(batch.map(item=>item.cardId),env);
      const rows=batch.map(item=>byId.get(item.cardId)).filter(row=>row&&friendsAllowed(env,row));
      const context=await ctx.createCardReadContext(rows,uid,env);
@@ -54,6 +59,7 @@ function createStage6Services(ctx){
       const reasons=[];if(item.wanted)reasons.push('来自我的想吃');if(item.favorite)reasons.push('来自我的收藏');if(item.listIds.length)reasons.push('来自待整理收藏');
       output.push({card,reasons,distanceMeters:null});sources.set(card.id,row);
      }
+     ctx.recordReadCounts({scannedCandidateCount:scanned});
     }
    });
    const fresh=await ctx.withReadPhase('final-check',()=>ctx.finalizeCardReads(output.map(item=>item.card),[...sources.values()],uid,env));
@@ -101,10 +107,19 @@ function createStage6Services(ctx){
   const readable=await ctx.finalizeCardReads(final.map(x=>x.card),sources,uid,env);const candidates=final.filter(x=>readable.some(c=>c.id===x.card.id));
   return {candidates,coverage:'BOUNDED',scannedCandidateCount:scanned,insufficient:candidates.length<3,sessionExhausted:candidates.length===0};
  }
- async function record(uid,p,env){const historyId=hash([uid,'choice',uuid(p.requestId)]);const cardId=id(p.cardId);let result;
-  const committed=await collection(env,'MealChoiceHistory').runTransaction({apply:async tx=>{const owner=await ctx.stage1().activeProfile(tx,uid,env);const old=await ctx.stage1().txOne(tx,env,'MealChoiceHistory','historyId',historyId);if(old){if(old.cardId!==cardId)throw fail('请求已用于其它选餐。','CONFLICT');result={historyId,cardId,selectedAt:dateMillis(old.selectedAt)};return true;}const card=await ctx.stage1().txOne(tx,env,'FoodCard','id',cardId);await ctx.transactionPolicy(tx,env,[owner]).assertCardReadable(uid,card);const now=ctx.logicalWriteTime(owner.updatedAt);ctx.stage1().upsertRows(tx,[model('MealChoiceHistory',{historyId,uid,cardId,merchantId:card.merchantId||'',consumptionMode:card.consumptionMode||'UNSPECIFIED',selectedAt:new Date(now)}),ctx.profileForWrite(owner,now)]);result={historyId,cardId,selectedAt:now};return true;}});if(!committed)throw fail('选餐未记录。','CONFLICT');return result;}
- async function history(uid,p,env){await ctx.contentPolicy(env).assertAccountActive(uid);const sig=hash([uid,'history']);const saved=token(p.cursor,sig);const offset=saved?int(saved.offset,0,10000000):0;const rows=await collection(env,'MealChoiceHistory').query().equalTo('uid',uid).lessThanOrEqualTo('selectedAt',new Date(saved?saved.at:Date.now())).orderByDesc('selectedAt').orderByAsc('historyId').limit(30,offset).get();const items=[],sources=[];for(const row of rows){const source=await one(collection(env,'FoodCard').query().equalTo('id',row.cardId));const card=source&&friendsAllowed(env,source)?await ctx.readCardIfAllowed(source,env,0,true,uid,false,1):null;if(card)sources.push(source);items.push({historyId:row.historyId,cardId:row.cardId,merchantId:row.merchantId,consumptionMode:row.consumptionMode,selectedAt:dateMillis(row.selectedAt),card});}const fresh=await ctx.finalizeCardReads(items.filter(x=>x.card).map(x=>x.card),sources,uid,env);for(const item of items)item.card=fresh.find(c=>c.id===item.cardId)||null;return {items,nextCursor:rows.length===30?encode(sig,saved?saved.at:Date.now(),{offset:offset+rows.length}):''};}
- async function groupSnapshot(tx,uid,groupId,env){const group=await ctx.stage1().txOne(tx,env,'GroupConversation','id',id(groupId));const members=await tx.executeQuery(collection(env,'GroupMember').query().equalTo('groupId',groupId).limit(21));if(!group || members.length>20 || !members.some(m=>m.memberUid===uid))throw fail('你已不在此群。','FORBIDDEN');const profiles=[];for(const m of members){const profile=await ctx.stage1().txOne(tx,env,'UserProfile','uid',m.memberUid);if(isAccountActive(profile))profiles.push(profile);}if(!profiles.some(r=>r.uid===uid))throw fail('账号不可用。','ACCOUNT_INACTIVE');const activeMembers=members.filter(m=>profiles.some(r=>r.uid===m.memberUid));if(!profiles.some(r=>r.uid===group.ownerUid))throw fail('群主不可用。','FORBIDDEN');return {group,members:activeMembers,profiles};}
+ async function groupSnapshot(tx,uid,groupId,env){
+  const group=await ctx.stage1().txOne(tx,env,'GroupConversation','id',id(groupId));
+  const members=await tx.executeQuery(collection(env,'GroupMember').query().equalTo('groupId',groupId).limit(21));
+  if(!group||members.length>20||!members.some(member=>member.memberUid===uid))throw fail('你已不在此群。','FORBIDDEN');
+  const uids=[...new Set(members.map(member=>member.memberUid))];
+  // Keep membership and account state inside the same transaction, replacing
+  // one profile lookup per member with a bounded primary-key batch.
+  const rows=await tx.executeQuery(collection(env,'UserProfile').query().in('uid',uids).limit(uids.length));
+  const profiles=rows.filter(isAccountActive),active=new Set(profiles.map(profile=>profile.uid));
+  if(!active.has(uid))throw fail('账号不可用。','ACCOUNT_INACTIVE');
+  if(!active.has(group.ownerUid))throw fail('群主不可用。','FORBIDDEN');
+  return {group,members:members.filter(member=>active.has(member.memberUid)),profiles};
+ }
  async function validatedOptions(tx,poll,snapshot,env){const options=await tx.executeQuery(collection(env,'MealPollOption').query().equalTo('pollId',poll.pollId).orderByAsc('optionId').limit(13));const votes=await tx.executeQuery(collection(env,'MealPollVote').query().equalTo('pollId',poll.pollId).limit(21));if(options.length>12||votes.length>20)throw fail('投票超过事务预算。','TRANSACTION_LIMIT');const policy=ctx.transactionPolicy(tx,env,snapshot.profiles);const details=new Map();const invalid=[];
   for(const option of options){let accessible=option.status==='ACTIVE';let row=null;
    if(accessible && poll.mode==='CARD'){row=await ctx.stage1().txOne(tx,env,'FoodCard','id',option.cardId);accessible=!!row && friendsAllowed(env,row) && (poll.consumptionMode==='ANY'||row.consumptionMode===poll.consumptionMode);if(accessible)for(const member of snapshot.members){if(!await policy.canReadCard(member.memberUid,row)){accessible=false;break;}}}
@@ -148,6 +163,6 @@ function createStage6Services(ctx){
   const myVote=(poll.status==='OPEN'?liveVotes:valid.votes).find(v=>v.voterUid===uid);return {poll:{pollId:poll.pollId,groupId:poll.groupId,creatorUid:poll.creatorUid,title:poll.title,mode:poll.mode,visibilityMode:poll.visibilityMode,consumptionMode:poll.consumptionMode,status:poll.status,deadlineAt:dateMillis(poll.deadlineAt),acceptingOptions:poll.acceptingOptions,closeOutcome:poll.closeOutcome||'',closeReason:poll.closeReason||'',winnerOptionId:poll.winnerOptionId||'',winnerResolvedAt:dateMillis(poll.winnerResolvedAt),version:Number(poll.version),serverTime:Date.now()},options,myVote:myVote?myVote.optionId:''};
  }
  const getPoll=(uid,p,env)=>mutatePoll(uid,p,env,'GET');
- return {candidates,record,history,createPoll,getPoll,mutatePoll};
+ return {candidates,createPoll,getPoll,mutatePoll};
 }
 module.exports={createStage6Services};

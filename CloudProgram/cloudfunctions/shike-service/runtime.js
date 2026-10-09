@@ -1,9 +1,10 @@
 'use strict';
 
 const crypto = require('crypto');
+const { mediaVariant } = require('./shared/media-descriptor');
 const { AsyncLocalStorage } = require('async_hooks');
 const { cloud } = require('@hw-agconnect/cloud-server');
-const { createContentPolicy, isAccountActive, readableCardState, currentVisibility, dateMillis, accessError } = require('./content-policy');
+const { createContentPolicy, isAccountActive, readableCardState, currentVisibility, dateMillis, accessError } = require('./shared/content-policy');
 
 const MAX_DISTANCE_KM = 20.0;
 const MAX_PAGE_SIZE = 20;
@@ -13,11 +14,23 @@ const CARD_READ_BATCH_SIZE = 10;
 const readMetricsScope = new AsyncLocalStorage();
 const readRequestScope = new AsyncLocalStorage();
 const readPhaseScope = new AsyncLocalStorage();
-const { requestId, errorCode, errorResponse, READ_OPT_VERSION } = require('./read-errors');
+const cardReadScope = new AsyncLocalStorage();
+const { withCursorContext } = require('./stages47-common');
+const { requestId, errorCode, errorResponse, readStage, READ_OPT_VERSION, shouldReadMetrics } = require('./shared/read-errors');
 function withReadPhase(phase, action) {
   return readPhaseScope.run(phase, async () => {
+    const metrics = readMetricsScope.getStore();
+    const started = Date.now();
+    if (metrics) metrics.phaseCalls[phase] = (metrics.phaseCalls[phase] || 0) + 1;
     try { return await action(); }
-    catch (error) { try { if (error && typeof error === 'object') error.readStage = phase; } catch (_) { } throw error; }
+    catch (error) {
+      // Keep the innermost failing phase when an outer phase unwinds.
+      try { if (error && typeof error === 'object' && !error.readStage) error.readStage = phase; } catch (_) { }
+      throw error;
+    } finally {
+      // Inclusive wall time per phase; nested phases must not be summed as total time.
+      if (metrics) metrics.phaseMs[phase] = (metrics.phaseMs[phase] || 0) + Date.now() - started;
+    }
   });
 }
 const NEARBY_CARD_HYDRATION_CONCURRENCY = 4;
@@ -118,24 +131,7 @@ Merchant.fieldTypes = Object.freeze({
 Merchant.primaryKeys = Object.freeze(['merchantId']);
 Merchant.indexes = Object.freeze(["provider,providerPoiId", "verificationStatus,createdAt,merchantId", "createdByUid,createdAt,merchantId", "mapVisible,latitudeE6,merchantId"]);
 
-class CardMedia extends CloudDbModel {}
-CardMedia.fieldTypes = Object.freeze({
-  id: 'String',
-  cardId: 'String',
-  ownerUid: 'String',
-  storageUid: 'String',
-  objectKey: 'String',
-  sha256: 'String',
-  preparedSha256: 'String',
-  mimeType: 'String',
-  byteSize: 'Integer',
-  width: 'Integer',
-  height: 'Integer',
-  status: 'String',
-  createdAt: 'Long'
-});
-CardMedia.primaryKeys = Object.freeze(['id']);
-CardMedia.indexes = Object.freeze(['cardId', 'cardId,createdAt', 'ownerUid,createdAt']);
+const { CardMedia } = require('./shared/image-models');
 
 class Report extends CloudDbModel {}
 Report.fieldTypes = Object.freeze({"id": "String", "reporterUid": "String", "cardId": "String", "reason": "String", "status": "String", "createdAt": "Long", "targetType": "String", "targetId": "String", "updatedAt": "Long", "resolutionAction": "String", "resolutionReason": "String", "resolvedByUid": "String", "resolvedAt": "Long"});
@@ -427,10 +423,6 @@ PersonalFoodState.fieldTypes = Object.freeze({"ownerUid": "String", "cardId": "S
 PersonalFoodState.primaryKeys = Object.freeze(["ownerUid", "cardId"]);
 PersonalFoodState.indexes = Object.freeze(["ownerUid,state,updatedAt,cardId"]);
 
-class MealChoiceHistory extends CloudDbModel {}
-MealChoiceHistory.fieldTypes = Object.freeze({"historyId": "String", "uid": "String", "cardId": "String", "merchantId": "String", "consumptionMode": "String", "selectedAt": "Date"});
-MealChoiceHistory.primaryKeys = Object.freeze(["historyId"]);
-MealChoiceHistory.indexes = Object.freeze(["uid,selectedAt,historyId"]);
 
 class MealPoll extends CloudDbModel {}
 MealPoll.fieldTypes = Object.freeze({"pollId": "String", "groupId": "String", "creatorUid": "String", "title": "String", "mode": "String", "visibilityMode": "String", "consumptionMode": "String", "status": "String", "deadlineAt": "Date", "acceptingOptions": "Boolean", "closeOutcome": "String", "closeReason": "String", "winnerOptionId": "String", "winnerResolvedAt": "Date", "resultCountsJson": "Text", "createdAt": "Date", "updatedAt": "Date", "version": "Long", "requestPayloadHash": "String"});
@@ -449,7 +441,7 @@ MealPollVote.indexes = Object.freeze(["pollId,optionId,voterUid", "voterUid"]);
 
 const OBJECT_TYPES = Object.freeze({
   UserProfile, FoodCard, CardMedia, Report, CardAction, CardComment, CommentReaction,
-  TastePreference, FoodList, FoodListItem, PersonalFoodState, MealChoiceHistory, MealPoll, MealPollOption, MealPollVote,
+  TastePreference, FoodList, FoodListItem, PersonalFoodState, MealPoll, MealPollOption, MealPollVote,
   Friendship, FriendReport, Conversation, ChatMessage, GroupConversation, GroupMember, GroupMessage,
   NotificationEvent, PushRegistration, WidgetRegistration,
   IdentityBinding, AuthMigrationTicket,
@@ -1085,7 +1077,9 @@ function safeLogError(error) {
     .replace(/https?:\/\/\S+/gi, '[url]')
     .replace(/(?:Bearer\s+)?[A-Za-z0-9_\-+/=]{48,}/g, '[credential]')
     .slice(0, 300);
-  return `${name}${code}: ${redacted}`;
+  const checks = ['NOT_BINARY', 'BYTE_BUDGET', 'SIZE_MISMATCH', 'JPEG_MARKERS', 'SHA256_MISMATCH'];
+  const integrity = error && checks.includes(error.integrityCheck) ? ` integrityCheck=${error.integrityCheck}` : '';
+  return `${name}${code}: ${redacted}${integrity}`;
 }
 
 function parseBody(event) {
@@ -1098,6 +1092,7 @@ function parseBody(event) {
   return {
     accessToken: typeof candidate.accessToken === 'string' ? candidate.accessToken : '',
     readRequestId: candidate.readRequestId,
+    readAttempt: candidate.readAttempt === 2 ? 2 : 1,
     payload: candidate.payload && typeof candidate.payload === 'object' ? candidate.payload : {}
   };
 }
@@ -1111,6 +1106,8 @@ function collection(env, name) {
   if (!metrics) return target;
   return new Proxy(target, { get(object, property) {
     if (property === 'query') return (...args) => measuredQuery(object.query(...args), name, metrics);
+    // Count transaction invocations, leaving the SDK transaction and callback intact.
+    if (property === 'runTransaction') return (...args) => measuredDependency('transaction', () => object.runTransaction(...args));
     const value = Reflect.get(object, property, object);
     if (property === 'constructor') return value;
     return typeof value === 'function' ? value.bind(object) : value;
@@ -1122,8 +1119,9 @@ function measuredQuery(target, name, metrics) {
     if (property === 'get') return async (...args) => {
       const started = Date.now();
       metrics.queryGetCount += 1;
+      metrics.inFlightQueries += 1;
       metrics.byObject[name] = (metrics.byObject[name] || 0) + 1;
-      const phase = readPhaseScope.getStore() || 'candidate-and-identity';
+      const phase = readPhaseScope.getStore() || 'cloud-operation';
       metrics.byPhase[phase] = (metrics.byPhase[phase] || 0) + 1;
       try {
         const rows = await object.get(...args);
@@ -1131,9 +1129,23 @@ function measuredQuery(target, name, metrics) {
         return rows;
       } catch (error) {
         metrics.queryFailures += 1;
-        if (errorCode(error) === '3007009') metrics.busyErrors += 1;
+        const code = errorCode(error);
+        metrics.byObjectFailures[name] = (metrics.byObjectFailures[name] || 0) + 1;
+        metrics.byPhaseFailures[phase] = (metrics.byPhaseFailures[phase] || 0) + 1;
+        if (code === '3007009') {
+          metrics.busyErrors += 1;
+          metrics.byObjectBusy[name] = (metrics.byObjectBusy[name] || 0) + 1;
+          metrics.byPhaseBusy[phase] = (metrics.byPhaseBusy[phase] || 0) + 1;
+        }
+        metrics.lastQueryFailure = { stage: phase, collection: name, code };
+        try {
+          if (error && typeof error === 'object') {
+            if (!error.readStage) error.readStage = phase;
+            if (!error.readCollection) error.readCollection = name;
+          }
+        } catch (_) { }
         throw error;
-      } finally { metrics.dbMs += Date.now() - started; }
+      } finally { metrics.dbMs += Date.now() - started; metrics.inFlightQueries -= 1; }
     };
     const value = Reflect.get(object, property, object);
     if (property === 'constructor') return value;
@@ -1146,25 +1158,78 @@ function measuredQuery(target, name, metrics) {
   return proxy;
 }
 
+async function measuredDependency(kind, action) {
+  const metrics = readMetricsScope.getStore();
+  if (!metrics) return action();
+  const counter = metrics.dependencies[kind];
+  const started = Date.now();
+  counter.calls += 1;
+  metrics.inFlightDependencies += 1;
+  try {
+    const result = await action();
+    if (kind === 'transaction' && result === false) counter.notCommitted += 1;
+    return result;
+  } catch (error) {
+    counter.failures += 1;
+    throw error;
+  } finally { counter.ms += Date.now() - started; metrics.inFlightDependencies -= 1; }
+}
+
+function recordReadCounts(values) {
+  const metrics = readMetricsScope.getStore();
+  if (!metrics) return;
+  for (const key of ['scannedCandidateCount', 'consumedCandidateCount', 'fetchedCandidateCount',
+    'eligibleCandidateCount', 'candidatePoolCount', 'sourceReferenceCount']) {
+    if (Number.isSafeInteger(values[key]) && values[key] >= 0) metrics.counts[key] = values[key];
+  }
+}
+
+function recordReadReadiness(feature, enabled, reason, facts = {}) {
+  const metrics = readMetricsScope.getStore();
+  if (!metrics || !['search', 'map'].includes(feature)) return;
+  const reasons = ['VALIDATION_REQUIRED', 'HISTORY_OR_INDEX_REQUIRED', 'COORDINATE_REQUIRED', ''];
+  metrics.readiness[feature] = { enabled: enabled === true, reason: reasons.includes(reason) ? reason : 'UNKNOWN' };
+  for (const key of ['searchVerified', 'mapVerified', 'cardCoverageComplete', 'reactionCoverageComplete',
+    'indexedQueryReady', 'indexVerified', 'mapCoordinateConfigured', 'mixedCoordinateDetected']) {
+    if (typeof facts[key] === 'boolean') metrics.readiness[feature][key] = facts[key];
+  }
+}
+
 async function withReadMetrics(operation, env, action, id, attempt = 1) {
-  const flag = env && env.SHIKE_READ_METRICS_ENABLED !== undefined
-    ? env.SHIKE_READ_METRICS_ENABLED : process.env.SHIKE_READ_METRICS_ENABLED;
-  if (String(flag || '').trim().toLowerCase() !== 'true') return action();
-  const metrics = { queryGetCount: 0, queriedRows: 0, queryFailures: 0, busyErrors: 0, dbMs: 0, byObject: {}, byPhase: {} };
+  if (!shouldReadMetrics(env, id)) return action();
+  const metrics = { queryGetCount: 0, queriedRows: 0, queryFailures: 0, busyErrors: 0, dbMs: 0, inFlightQueries: 0, inFlightDependencies: 0,
+    byObject: {}, byPhase: {}, byObjectFailures: {}, byPhaseFailures: {}, byObjectBusy: {}, byPhaseBusy: {},
+    phaseCalls: {}, phaseMs: {}, counts: {}, readiness: {}, lastQueryFailure: null,
+    dependencies: { authVerify: { calls: 0, failures: 0, ms: 0 },
+      transaction: { calls: 0, failures: 0, notCommitted: 0, ms: 0 }, mediaGateway: { calls: 0, failures: 0, ms: 0 } } };
   return readMetricsScope.run(metrics, async () => {
     const started = Date.now();
     let outcome = 'error';
-    let returnedCount = 0, scanned = 0, consumed = 0, fetched = 0, code = '';
-    try { const result = await action(); outcome = 'success';
-      returnedCount = result && (result.cards || result.candidates || result.items || []).length || 0;
-      scanned = result && result.scannedCandidateCount || 0; consumed = result && result.consumedCandidateCount || 0;
-      fetched = result && result.fetchedCandidateCount || 0;
-      return result; } catch (error) { code = errorCode(error); throw error; }
+    let returnedCount = 0, code = '', failureStage = '', failureCollection = '';
+    try {
+      const result = await withReadPhase('cloud-operation', action);
+      outcome = 'success';
+      const rows = result && (result.cards || result.candidates || result.items);
+      returnedCount = Array.isArray(rows) ? rows.length : 0;
+      if (result) recordReadCounts(result);
+      return result;
+    } catch (error) {
+      code = errorCode(error); failureStage = readStage(error);
+      const name = error && error.readCollection;
+      failureCollection = typeof name === 'string' && Object.prototype.hasOwnProperty.call(OBJECT_TYPES, name) ? name : '';
+      throw error;
+    }
     finally {
-      // Query.get calls only: excludes transactions, Storage and auth SDK requests.
-      console.info(`read.metrics operation=${operation} requestId=${id || 'not-provided'} attempt=${attempt} functionVersion=${READ_OPT_VERSION} outcome=${outcome} code=${code || 'OK'} returnedCount=${returnedCount} scanned=${scanned} consumed=${consumed} fetched=${fetched} queryGetCount=${metrics.queryGetCount} ` +
+      // Logical SDK calls only: transaction internals, Storage bytes and SDK retries are not measured.
+      console.info(`read.metrics metricsVersion=o0-20261008-v1 operation=${operation} requestId=${id || 'not-provided'} attempt=${attempt} functionVersion=${READ_OPT_VERSION} outcome=${outcome} code=${code || 'OK'} failureStage=${failureStage || 'none'} failureCollection=${failureCollection || 'none'} returnedCount=${returnedCount} scanned=${metrics.counts.scannedCandidateCount || 0} consumed=${metrics.counts.consumedCandidateCount || 0} fetched=${metrics.counts.fetchedCandidateCount || 0} queryGetCount=${metrics.queryGetCount} ` +
         `queriedRows=${metrics.queriedRows} queryFailures=${metrics.queryFailures} busyErrors=${metrics.busyErrors} ` +
-        `dbMs=${metrics.dbMs} totalMs=${Date.now() - started} byObject=${JSON.stringify(metrics.byObject)} byPhase=${JSON.stringify(metrics.byPhase)}`);
+        `dbMs=${metrics.dbMs} totalMs=${Date.now() - started} metricsComplete=${metrics.inFlightQueries === 0 && metrics.inFlightDependencies === 0} pendingQueryGetCount=${metrics.inFlightQueries} pendingDependencyCallCount=${metrics.inFlightDependencies} queryScope=wrapped-query-get dependencyScope=logical-sdk-calls ` +
+        `byObject=${JSON.stringify(metrics.byObject)} byPhase=${JSON.stringify(metrics.byPhase)} ` +
+        `byObjectFailures=${JSON.stringify(metrics.byObjectFailures)} byPhaseFailures=${JSON.stringify(metrics.byPhaseFailures)} ` +
+        `byObjectBusy=${JSON.stringify(metrics.byObjectBusy)} byPhaseBusy=${JSON.stringify(metrics.byPhaseBusy)} ` +
+        `phaseCalls=${JSON.stringify(metrics.phaseCalls)} phaseMs=${JSON.stringify(metrics.phaseMs)} ` +
+        `counts=${JSON.stringify(metrics.counts)} dependencies=${JSON.stringify(metrics.dependencies)} ` +
+        `readiness=${JSON.stringify(metrics.readiness)} lastQueryFailure=${JSON.stringify(metrics.lastQueryFailure)}`);
     }
   });
 }
@@ -1250,7 +1315,8 @@ function transactionPolicy(transaction, env, profiles = [], relationships = []) 
 
 async function readableCardRows(rows, viewerUid, env, publicOnly = false, readContext = null) {
   const candidates = publicOnly ? rows.filter((row) => currentVisibility(row) === 'PUBLIC') : rows;
-  const policy = readContext ? readContext.policy : contentPolicy(env);
+  const context = readContext || await createCardReadContext(candidates, viewerUid, env);
+  const policy = context.policy;
   await policy.prepareCardReads(viewerUid, candidates);
   const readable = [];
   for (const row of candidates) {
@@ -1303,6 +1369,7 @@ async function scanCardPage(queryFactory, viewerUid, env, offset, pageSize, publ
 
 function cardContractFields(row) {
   const output = {
+    contentRevision: require('./shared/content-policy').cardContentRevision(row),
     schemaVersion: Number(row.schemaVersion || 0),
     consumptionMode: ['DELIVERY', 'DINE_IN'].includes(row.consumptionMode) ? row.consumptionMode : 'UNSPECIFIED',
     visibility: currentVisibility(row),
@@ -1375,10 +1442,10 @@ async function verifiedAgcUid(accessToken) {
     throw new Error('未登录或登录状态已失效。');
   }
   try {
-    const verified = await cloud.auth().verifyAccessToken({
+    const verified = await measuredDependency('authVerify', () => cloud.auth().verifyAccessToken({
       accessToken: String(accessToken),
       checkRevoked: true
-    });
+    }));
     const uid = String(verified.getSub() || '');
     if (!uid) throw new Error('AGC 访问凭证未包含用户标识。');
     return uid;
@@ -1389,13 +1456,24 @@ async function verifiedAgcUid(accessToken) {
 }
 
 async function verifiedIdentity(accessToken, env, readOnly = false) {
-  const providerUid = await verifiedAgcUid(accessToken);
-  const binding = await identityBinding('AGC', providerUid, env);
-  if (binding && String(binding.status || 'ACTIVE') !== 'ACTIVE') throw accessError('账号身份已停用。', 'ACCOUNT_INACTIVE');
-  const canonicalUid = binding ? String(binding.canonicalUid || providerUid) : providerUid;
-  await contentPolicy(env).assertAccountActive(canonicalUid, true);
-  if (!readOnly) await ensureIdentityBinding('AGC', providerUid, canonicalUid, env);
-  return { providerUid, canonicalUid };
+  return withReadPhase('authentication', async () => {
+    const providerUid = await verifiedAgcUid(accessToken);
+    const binding = await identityBinding('AGC', providerUid, env);
+    if (binding && String(binding.status || 'ACTIVE') !== 'ACTIVE') throw accessError('账号身份已停用。', 'ACCOUNT_INACTIVE');
+    if (binding && !String(binding.canonicalUid || '').trim()) throw accessError('账号身份绑定无效。', 'INVALID_STATE');
+    const canonicalUid = binding ? String(binding.canonicalUid || providerUid) : providerUid;
+    const profile = await contentPolicy(env).assertAccountActive(canonicalUid, true);
+    const scope = cardReadScope.getStore();
+    if (scope && readOnly) {
+      let seeds = scope.get('verified-profiles');
+      if (!seeds) { seeds = new Map(); scope.set('verified-profiles', seeds); }
+      seeds.set(canonicalUid, profile);
+    }
+    // The binding above is already validated. Ordinary mutations must not
+    // re-query and rewrite an unchanged identity on every button press.
+    if (!readOnly && !binding) await ensureIdentityBinding('AGC', providerUid, canonicalUid, env);
+    return { providerUid, canonicalUid };
+  });
 }
 
 async function verifiedUid(accessToken, env, readOnly = false) {
@@ -1606,6 +1684,7 @@ function geohash(latitude, longitude, precision = 6) {
  * though both Cloud Objects are reached through the same AGC gateway.
  */
 async function callMedia(action, payload, env) {
+  return measuredDependency('mediaGateway', async () => {
   const body = JSON.stringify({ action, issuedAt: Date.now(), nonce: crypto.randomUUID(), payload });
   const signature = crypto.createHmac('sha256', required(env, 'SHIKE_MEDIA_INTERNAL_KEY')).update(body).digest('hex');
   const result = await cloud.function().call({
@@ -1626,6 +1705,7 @@ async function callMedia(action, payload, env) {
     throw failure;
   }
   return value.data;
+  });
 }
 
 /**
@@ -1669,41 +1749,16 @@ function mediaIdFromApprovedObjectKey(objectKey) {
  * The object itself is never exposed as a direct Storage URL, so read access
  * stays independent of the device's local login implementation.
  */
-async function getPublicMedia(uid, payload, env) {
-  const bucketName = String(payload && payload.bucketName || '').trim();
-  const objectKey = String(payload && payload.cloudPath || '').trim();
-  if (bucketName !== required(env, 'SHIKE_STORAGE_BUCKET')) throw new Error('图片所属云存储实例无效。');
-  const mediaId = mediaIdFromApprovedObjectKey(objectKey);
-  if (!mediaId) throw new Error('图片路径无效。');
-  const media = await one(collection(env, 'CardMedia').query().equalTo('id', mediaId));
-  if (!media || media.status !== 'APPROVED' || approvedObjectKeyForMedia(media) !== objectKey ||
-      !await contentPolicy(env).canReadMedia(uid, media)) throw accessError('图片不存在或当前不可访问。');
-  const response = await callMedia('read-approved', { key: objectKey, viewerUid: uid }, env);
-  const bytes = Buffer.from(String(response.dataBase64 || ''), 'base64');
-  if (bytes.length === 0 || bytes.length > MAX_PHOTO_BYTES || bytes.length !== Number(response.byteSize || 0)) {
-    throw new Error('图片内容无效或超过允许大小。');
-  }
-  const current = await one(collection(env, 'CardMedia').query().equalTo('id', mediaId));
-  if (!current || current.cardId !== media.cardId || current.ownerUid !== media.ownerUid ||
-      approvedObjectKeyForMedia(current) !== objectKey || !await contentPolicy(env).canReadMedia(uid, current)) {
-    throw accessError('图片已不可访问。');
-  }
-  return { mimeType: String(media.mimeType || 'image/jpeg'), dataBase64: bytes.toString('base64'), byteSize: bytes.length };
-}
 
+
+async function getPublicMedia(uid, payload, env) {
+  if (String(payload.bucketName || '').trim() !== required(env, 'SHIKE_STORAGE_BUCKET')) throw new Error('图片所属存储实例无效。');
+  const key = String(payload.cloudPath || ''), mediaId = mediaIdFromApprovedObjectKey(key);
+  if (!mediaId) throw new Error('图片路径无效。');
+  return require('./shared/image-reader').readLegacy({ ...payload, key, mediaId, viewerUid: uid }, env);
+}
 async function getRevisionMedia(uid, payload, env) {
-  const media = await one(collection(env, 'CardMedia').query().equalTo('id', String(payload.mediaId || '')));
-  await contentPolicy(env).assertAccountActive(uid);
-  const administrator = isAdministrator(uid, env);
-  const revisionId = String(payload.revisionId || '');
-  if (!await contentPolicy(env).canReadRevisionMedia(uid, media, revisionId, administrator)) throw accessError('编辑图片不可访问。');
-  const response = await callMedia('read-revision', { key: approvedObjectKeyForMedia(media), viewerUid: uid, revisionId, administrator }, env);
-  const fresh = await one(collection(env, 'CardMedia').query().equalTo('id', media.id));
-  if (!fresh || fresh.cardId !== media.cardId || approvedObjectKeyForMedia(fresh) !== approvedObjectKeyForMedia(media) ||
-      !await contentPolicy(env).canReadRevisionMedia(uid, fresh, revisionId, isAdministrator(uid, env))) throw accessError('编辑图片已失效。');
-  const bytes = Buffer.from(String(response.dataBase64 || ''), 'base64');
-  if (!bytes.length || bytes.length > MAX_PHOTO_BYTES || bytes.length !== Number(response.byteSize || 0)) throw new Error('编辑图片返回无效。');
-  return { mimeType: String(media.mimeType || 'image/jpeg'), dataBase64: bytes.toString('base64'), byteSize: bytes.length };
+  return require('./shared/image-reader').readLegacy({ ...payload, viewerUid: uid, mode: 'REVISION', variant: 'ORIGINAL' }, env);
 }
 
 async function promotePendingMedia(media, env) {
@@ -2226,7 +2281,7 @@ async function publicPhotos(row, env, includePhoto, maxPhotoCount = MAX_CARD_PHO
   if (metrics && !usePrimary) metrics.mediaDbQueries += 1;
   let medias = usePrimary ? [primary] : await collection(env, 'CardMedia').query().equalTo('cardId', String(row.id || ''))
     .orderByAsc('createdAt').limit(photoLimit).get();
-  if (medias.length === 0 && row.mediaId) {
+  if (medias.length === 0 && row.mediaId && !(readContext && readContext.primaryMedia.has(String(row.mediaId)))) {
     if (metrics) metrics.mediaDbQueries += 1;
     const legacy = await one(collection(env, 'CardMedia').query().equalTo('id', String(row.mediaId)));
     medias = legacy ? [legacy] : [];
@@ -2252,29 +2307,68 @@ async function publicPhotos(row, env, includePhoto, maxPhotoCount = MAX_CARD_PHO
 }
 
 async function createCardReadContext(rows, viewerUid, env, metrics = null) {
-  const profiles = new Map();
-  const uids = [...new Set([...rows.map((row) => String(row.ownerUid || '')), String(viewerUid || '')].filter(Boolean))];
-  for (let start = 0; start < uids.length; start += CARD_READ_BATCH_SIZE) {
-    const batch = uids.slice(start, start + CARD_READ_BATCH_SIZE);
-    if (metrics) metrics.profileDbQueries += 1;
-    const records = await collection(env, 'UserProfile').query().in('uid', batch).limit(batch.length).get();
-    for (const uid of batch) profiles.set(uid, null);
-    for (const record of records) profiles.set(String(record.uid), record);
+  const scope = cardReadScope.getStore();
+  const key = String(env.SHIKE_DB_ZONE || process.env.SHIKE_DB_ZONE || 'shike') + ':' + String(viewerUid || '');
+  let context = scope && scope.get(key);
+  if (!context) {
+    context = { policy: contentPolicy(env), profiles: new Map(), profileRequests: new Map(),
+      primaryMedia: new Map(), mediaRequests: new Map(), merchantRequests: new Map() };
+    if (scope) scope.set(key, context);
+    const seeds = scope && scope.get('verified-profiles');
+    if (seeds) for (const [uid, profile] of seeds) {
+      context.profiles.set(uid, profile); context.profileRequests.set(uid, Promise.resolve(profile));
+    }
   }
-  const policy = createContentPolicy((name) => collection(env, name), one,
-    { profiles: [...profiles.values()].filter(Boolean) });
-  await policy.prepareCardReads(viewerUid, rows);
-  return { policy, profiles, primaryMedia: new Map() };
+  const profiles = context.profiles;
+  const uids = [...new Set([...rows.map((row) => String(row.ownerUid || '')), String(viewerUid || '')].filter(Boolean))];
+  const missing = uids.filter(uid => !context.profileRequests.has(uid));
+  for (let start = 0; start < missing.length; start += SOCIAL_PROFILE_QUERY_BATCH_SIZE) {
+    const batch = missing.slice(start, start + SOCIAL_PROFILE_QUERY_BATCH_SIZE).filter(uid => !context.profileRequests.has(uid));
+    if (!batch.length) continue;
+    if (metrics) metrics.profileDbQueries += 1;
+    const loading = collection(env, 'UserProfile').query().in('uid', batch).limit(batch.length).get()
+      .then(records => new Map(records.map(record => [String(record.uid), record])));
+    for (const uid of batch) context.profileRequests.set(uid, loading.then(records => {
+      const row = records.get(uid) || null; profiles.set(uid, row); return row;
+    }));
+    await Promise.all(batch.map(uid => context.profileRequests.get(uid)));
+  }
+  await Promise.all(uids.map(uid => context.profileRequests.get(uid)));
+  context.policy.seedProfiles(profiles.entries());
+  await context.policy.prepareCardReads(viewerUid, rows);
+  return context;
 }
 
 async function preparePrimaryPhotos(readContext, rows, env, metrics = null) {
   const ids = [...new Set(rows.map((row) => String(row.mediaId || '')).filter(Boolean))];
-  for (let start = 0; start < ids.length; start += CARD_READ_BATCH_SIZE) {
-    const batch = ids.slice(start, start + CARD_READ_BATCH_SIZE);
+  const missing = ids.filter(id => !readContext.mediaRequests.has(id));
+  for (let start = 0; start < missing.length; start += CARD_READ_BATCH_SIZE) {
+    const batch = missing.slice(start, start + CARD_READ_BATCH_SIZE).filter(id => !readContext.mediaRequests.has(id));
+    if (!batch.length) continue;
     if (metrics) metrics.mediaDbQueries += 1;
-    const records = await collection(env, 'CardMedia').query().in('id', batch).limit(batch.length).get();
-    for (const record of records) readContext.primaryMedia.set(String(record.id), record);
+    const loading = collection(env, 'CardMedia').query().in('id', batch).limit(batch.length).get()
+      .then(records => new Map(records.map(record => [String(record.id), record])));
+    for (const id of batch) readContext.mediaRequests.set(id, loading.then(records => {
+      const row = records.get(id) || null; readContext.primaryMedia.set(id, row); return row;
+    }));
+    await Promise.all(batch.map(id => readContext.mediaRequests.get(id)));
   }
+  await Promise.all(ids.map(id => readContext.mediaRequests.get(id)));
+}
+
+async function readMerchantRowsByIds(ids, env, readContext = null) {
+  const requests = readContext ? readContext.merchantRequests : new Map();
+  const unique = [...new Set(ids.filter(Boolean).map(String))];
+  const missing = unique.filter(id => !requests.has(id));
+  for (let start = 0; start < missing.length; start += CARD_READ_BATCH_SIZE) {
+    const batch = missing.slice(start, start + CARD_READ_BATCH_SIZE).filter(id => !requests.has(id));
+    if (!batch.length) continue;
+    const loading = collection(env, 'Merchant').query().in('merchantId', batch).limit(batch.length).get()
+      .then(rows => new Map(rows.map(row => [String(row.merchantId), row])));
+    for (const id of batch) requests.set(id, loading.then(rows => rows.get(id) || null));
+    await Promise.all(batch.map(id => requests.get(id)));
+  }
+  return new Map(await Promise.all(unique.map(async id => [id, await requests.get(id)])));
 }
 
 async function finalizeCardReads(cards, sourceRows, viewerUid, env, friendsOnly = false) {
@@ -2321,7 +2415,14 @@ async function finalizeCardReads(cards, sourceRows, viewerUid, env, friendsOnly 
           String(media.cardId || '') === String(row.id) && approvedObjectKeyForMedia(media) === photo.path;
       } catch (_error) { return false; }
     });
-    if (photosCurrent) result.push(card);
+    if (photosCurrent) {
+      for(const photo of card.photos||[]){
+        const media=currentMedia.get(String(photo.id)),original=mediaVariant(media);
+        Object.assign(photo,{sha256:original.sha256,byteSize:original.byteSize});
+        try{const cover=mediaVariant(media,'COVER_480');Object.assign(photo,{coverSha256:cover.sha256,coverByteSize:cover.byteSize,coverWidth:cover.width,coverHeight:cover.height});}catch(_){}
+      }
+      result.push(card);
+    }
   }
   return result;
 }
@@ -4445,12 +4546,12 @@ const stage2 = require('./stage2-services').createStage2Services({
 });
 
 const stage3 = require('./stage3-services').createStage3Services({
-  collection, one, models: OBJECT_TYPES, contentPolicy, readableCardRows, readCardIfAllowed, stage1: () => stage1
+  collection, one, models: OBJECT_TYPES, contentPolicy, readableCardRows, readCardIfAllowed, finalizeCardReads, createCardReadContext, preparePrimaryPhotos, previewCard, withReadPhase, recordReadReadiness, stage1: () => stage1
 });
 
 
 const stages47Context = { collection, one, models: OBJECT_TYPES, contentPolicy, transactionPolicy, readableCardRows,
-  readCardIfAllowed, finalizeCardReads, createCardReadContext, preparePrimaryPhotos, readCardRowsByIds, withReadPhase,
+  readCardIfAllowed, finalizeCardReads, createCardReadContext, preparePrimaryPhotos, readCardRowsByIds, readMerchantRowsByIds, withReadPhase, recordReadCounts,
   profileForWrite, logicalWriteTime, actionId, friendshipRowsFor, friendshipBetween,
   encryptPrivateText, decryptPrivateText, profileResponse, previewCard, collections: () => personalCollections,
   stage1: () => stage1, stage2: () => stage2,
@@ -4473,19 +4574,12 @@ const stage8Context = { ...stages47Context, assertAdmin, isAdministrator, public
 };
 const moderation = require('./moderation-services').createModerationServices(stage8Context);
 const lifecycle = require('./lifecycle-services').createLifecycleServices(stage8Context);
-async function getReviewMedia(uid,payload,env) {
-  await contentPolicy(env).assertAccountActive(uid);
-  const media=await one(collection(env,'CardMedia').query().equalTo('id',String(payload.mediaId||'')));
-  const administrator=isAdministrator(uid,env);
-  if(!await contentPolicy(env).canReadModerationMedia(uid,media,administrator))throw accessError('审核图片不可访问。');
-  const response=await callMedia('read-moderation',{key:approvedObjectKeyForMedia(media),viewerUid:uid,administrator},env);
-  const fresh=await one(collection(env,'CardMedia').query().equalTo('id',String(payload.mediaId||'')));
-  if(!fresh||fresh.cardId!==media.cardId||!await contentPolicy(env).canReadModerationMedia(uid,fresh,administrator))throw accessError('审核图片已失效。');
-  return {mimeType:'image/jpeg',dataBase64:response.dataBase64,byteSize:response.byteSize};
+async function getReviewMedia(uid, payload, env) {
+  return require('./shared/image-reader').readLegacy({ ...payload, viewerUid: uid, mode: 'REVIEW', variant: 'ORIGINAL' }, env);
 }
 
 const operations = {
-  'get-stage89-capabilities': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return moderation.capabilities(uid,env); },
+  'get-stage89-capabilities': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return moderation.capabilities(uid,env,payload); },
   'list-moderation-queue': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return moderation.queue(uid,payload,env); },
   'get-moderation-detail': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return moderation.detail(uid,payload,env); },
   'decide-moderation': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return moderation.decide(uid,payload,env); },
@@ -4501,7 +4595,7 @@ const operations = {
   'get-review-media': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return getReviewMedia(uid,payload,env); },
   'run-lifecycle-job': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); await assertAdmin(uid,env); const result=await lifecycle.process(String(payload.jobId||''),env); return {success:true,...result}; },
 
-  'get-card-previews': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env, true); return personalCollections.previews(uid,payload,env); },
+  'get-card-previews': async ({ accessToken, payload }, env) => { const uid = accessToken ? await verifiedUid(accessToken, env, true) : ''; return personalCollections.previews(uid,payload,env); },
   'list-personal-collection': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env, true); return personalCollections.list(uid,payload,env); },
   'get-personal-collection-migration': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env, true); return personalCollections.status(uid,env); },
   'start-personal-collection-migration': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return personalCollections.start(uid,env); },
@@ -4524,8 +4618,6 @@ const operations = {
   'get-personal-food-state': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env, true); return stage5.personal(uid,payload,env); },
   'update-personal-food-state': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage5.updatePersonal(uid,payload,env); },
   'get-meal-candidates': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env, true); return stage6.candidates(uid,payload,env); },
-  'record-meal-choice': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage6.record(uid,payload,env); },
-  'list-meal-choice-history': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env, true); return stage6.history(uid,payload,env); },
   'create-meal-poll': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage6.createPoll(uid,payload,env); },
   'get-meal-poll': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage6.getPoll(uid,payload,env); },
   'add-meal-poll-option': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage6.mutatePoll(uid,payload,env,'ADD'); },
@@ -4562,7 +4654,7 @@ const operations = {
   'moderate-card-revision': async ({ accessToken, payload }, env) => stage1.decideRevision(await verifiedUid(accessToken, env), payload, env),
   'start-migration-job': async ({ accessToken, payload }, env) => stage1.startMigration(await verifiedUid(accessToken, env), payload, env),
   'process-migration-job': async ({ accessToken, payload }, env) => stage1.processMigration(await verifiedUid(accessToken, env), payload, env),
-  'get-migration-status': async ({ accessToken }, env) => stage1.migrationStatus(await verifiedUid(accessToken, env), env),
+  'get-migration-status': async ({ accessToken }, env) => stage1.migrationStatus(await verifiedUid(accessToken, env, true), env),
   'list-maintenance-jobs': async ({ accessToken, payload }, env) => stage1.listJobs(await verifiedUid(accessToken, env), payload, env),
   'get-maintenance-job': async ({ accessToken, payload }, env) => stage1.getJob(await verifiedUid(accessToken, env), payload, env),
   'retry-maintenance-job': async ({ accessToken, payload }, env) => stage1.retryJob(await verifiedUid(accessToken, env), payload, env),
@@ -4593,8 +4685,8 @@ const operations = {
   },
   'upload-card-photo': async ({ accessToken, payload }, env) =>
     uploadCardPhoto(await verifiedUid(accessToken, env), payload, env),
-  'get-public-media': async ({ accessToken, payload }, env) =>
-    getPublicMedia(accessToken ? await verifiedUid(accessToken, env, true) : '', payload, env),
+  'get-public-media': async ({ accessToken, payload, readRequestId }, env) =>
+    getPublicMedia(accessToken ? await verifiedUid(accessToken, env, true) : '', { ...payload, readRequestId }, env),
   'publish-card': async ({ accessToken, payload }, env) => publishCard(await verifiedUid(accessToken, env), payload, env),
   'list-nearby-cards': async ({ accessToken, payload }, env) => payload.scope === 'all'
     ? listPublicRecommendations(payload, env, accessToken ? await verifiedUid(accessToken, env, true) : '') : listNearby(await verifiedUid(accessToken, env, true), payload, env),
@@ -4676,10 +4768,10 @@ function createHandler(operation) {
       const input = parseBody(event);
       const env = context && context.env ? context.env : {};
       id = requestId(input);
-      const data = await readRequestScope.run(id, () => withReadMetrics(operation, env, () => operations[operation](input, env), id));
-      return callback({ ok: true, data, message: '', requestId: id, operation, functionVersion: READ_OPT_VERSION });
+      const data = await withCursorContext(env, () => cardReadScope.run(new Map(), () => readRequestScope.run(id, () => withReadMetrics(operation, env, () => operations[operation](input, env), id, input.readAttempt))));
+      return callback({ ok: true, data, message: '', requestId: id, operation, functionVersion: READ_OPT_VERSION, ...require('./shared/release-info').buildInfo });
     } catch (error) {
-      logger.error(`${operation} requestId=${id} code=${errorCode(error)} stage=cloud-operation failed: ${safeLogError(error)}`);
+      logger.error(`${operation} requestId=${id} code=${errorCode(error)} stage=${readStage(error)} failed: ${safeLogError(error)}`);
       return callback(errorResponse(error, operation, id));
     }
   };
@@ -4689,12 +4781,21 @@ async function executeOperation(operation, input, env = process.env) {
   if (!operations[operation]) throw new Error(`未知操作 ${operation}`);
   const safeInput = input && typeof input === 'object' ? input : {};
   const id = requestId(safeInput);
-  return readRequestScope.run(id, () => withReadMetrics(operation, env || {}, () => operations[operation]({
+  return withCursorContext(env, () => cardReadScope.run(new Map(), () => readRequestScope.run(id, () => withReadMetrics(operation, env || {}, () => operations[operation]({
     accessToken: typeof safeInput.accessToken === 'string' ? safeInput.accessToken : '',
     payload: safeInput.payload && typeof safeInput.payload === 'object' ? safeInput.payload : {}
-  }, env || {}), id, safeInput.readAttempt === 2 ? 2 : 1));
+  }, env || {}), id, safeInput.readAttempt === 2 ? 2 : 1))));
 }
 
-module.exports = { runMaintenance: env => lifecycle.tick(env || process.env), createHandler, executeOperation, safeLogError, haversineKm, geohash,
-  readShareCard: (payload, env) => stage7.publicShare(payload, env),
-  readShareMedia: (payload, env) => stage7.publicShareMedia(payload, env) };
+module.exports = { runMaintenance: env => {
+  const source = env || process.env, id = crypto.randomUUID();
+  return readRequestScope.run(id, () => withReadMetrics('maintenance-tick', source, () => lifecycle.tick(source), id));
+}, createHandler, executeOperation, safeLogError, haversineKm, geohash,
+  readShareCard: (payload, env) => {
+    const source = env || process.env, id = crypto.randomUUID();
+    return readRequestScope.run(id, () => withReadMetrics('share-card', source, () => stage7.publicShare(payload, source), id));
+  },
+  readShareMedia: (payload, env) => {
+    const source = env || process.env, id = crypto.randomUUID();
+    return readRequestScope.run(id, () => withReadMetrics('share-media', source, () => stage7.publicShareMedia(payload, source), id));
+  } };

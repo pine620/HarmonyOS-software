@@ -1,14 +1,44 @@
-import { EmptyRequest } from '../model/CloudContracts';
-import { CursorRequest, OperationsCapabilities, ModerationKind, ModerationScope, ModerationQueueRequest, ModerationQueuePage,
+import { EmptyRequest, MigrationJobResponse, MigrationStatusResponse, StartMigrationJobRequest } from '../model/CloudContracts';
+import { CursorRequest, OperationsCapabilities, OperationsCapabilitiesRequest, ModerationKind, ModerationScope, ModerationQueueRequest, ModerationQueuePage,
   ModerationDetailRequest, ModerationDetail, ModerationDecisionRequest, OperationsResult, ReportContentRequest,
   DeletedCardsPageResult, RestoreDeletedRequest, LifecycleJobsRequest, LifecycleJobsPageResult, LifecycleJobRequest,
-  LifecycleJobDetail, RetryLifecycleRequest } from '../model/OperationsModels';
+  LifecycleJobDetail, RetryLifecycleRequest, HistoricalMigrationType } from '../model/OperationsModels';
 import { AccountRequestGuard } from '../service/AccountRequestGuard';
-import { ReadRequestOptions } from '../service/ReadScheduler';
+import { ReadRequestOptions, ReadScheduler } from '../service/ReadScheduler';
+import { AuthSessionStore } from '../service/AuthSessionStore';
 export class OperationsRepository {
+  private static hint: OperationsCapabilities | undefined = undefined;
+  private static hintKey: string = '';
+  private static hintUntil: number = 0;
+  private static key(): string { return AuthSessionStore.owner() + ':' + AuthSessionStore.generation() + ':' +
+    ReadScheduler.lifecycleRevision() + ':' + (AppStorage.get<number>('accountContentRevision') || 0) + ':' +
+    (AppStorage.get<number>('operationsRoleRevision') || 0); }
   async capabilities(options: ReadRequestOptions = {}): Promise<OperationsCapabilities> {
+    const key: string = OperationsRepository.key();
+    const cached: OperationsCapabilities | undefined = OperationsRepository.hint;
+    if (cached !== undefined && key === OperationsRepository.hintKey &&
+      Date.now() < OperationsRepository.hintUntil && AppStorage.get<boolean>('stage47AppActive') !== false &&
+      (options.mayContinue === undefined || await options.mayContinue()) && key === OperationsRepository.key()) return cached;
     const request: EmptyRequest = {};
+    const value: OperationsCapabilities = await AccountRequestGuard.authenticated<OperationsCapabilities>('get-stage89-capabilities', request, options);
+    // Only negative role hints are reused. Administrator entry always requires a
+    // fresh capability response; every restricted operation authorizes server-side.
+    if (!value.administrator && key === OperationsRepository.key()) {
+      OperationsRepository.hint = value; OperationsRepository.hintKey = key; OperationsRepository.hintUntil = Date.now() + 15000;
+    } else { OperationsRepository.hint = undefined; OperationsRepository.hintUntil = 0; }
+    return value;
+  }
+  async diagnostics(options: ReadRequestOptions): Promise<OperationsCapabilities> {
+    const request: OperationsCapabilitiesRequest = { includeDiagnostics: true };
     return AccountRequestGuard.authenticated<OperationsCapabilities>('get-stage89-capabilities', request, options);
+  }
+  async migrationStatus(options: ReadRequestOptions): Promise<MigrationStatusResponse> {
+    const request: EmptyRequest = {};
+    return AccountRequestGuard.authenticated<MigrationStatusResponse>('get-migration-status', request, options);
+  }
+  async startMigration(jobType: HistoricalMigrationType): Promise<MigrationJobResponse> {
+    const request: StartMigrationJobRequest = { jobType };
+    return AccountRequestGuard.authenticated<MigrationJobResponse>('start-migration-job', request);
   }
   async queue(scope: ModerationScope, kind: ModerationKind, cursor: string, options: ReadRequestOptions): Promise<ModerationQueuePage> {
     const request: ModerationQueueRequest = { kind, cursor };

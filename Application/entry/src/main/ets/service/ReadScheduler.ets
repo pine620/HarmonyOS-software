@@ -19,6 +19,10 @@ class ReadJob {
   dataVersion: number;
   priority: ReadPriority;
   attempt: number = 0;
+  notBefore: number = 0;
+  createdAt: number = Date.now();
+  firstStartedAt: number = 0;
+  mergedCount: number = 0;
   guards: Array<() => Promise<boolean>> = [];
   unguarded: boolean = false;
   action: (requestId: string, attempt: number) => Promise<object>;
@@ -55,6 +59,8 @@ export class ReadScheduler {
   private static inFlight: Map<string, Promise<object>> = new Map<string, Promise<object>>();
   private static jobs: Map<string, ReadJob> = new Map<string, ReadJob>();
   private static active: number = 0;
+  private static imageActive: number = 0;
+  private static nextStartAt: number = 0;
   private static lifecycle: number = 0;
   private static dataVersion: number = 0;
   private static busyUntil: number = 0;
@@ -62,19 +68,17 @@ export class ReadScheduler {
   private static recovering: boolean = false;
   private static successCount: number = 0;
   private static timer: number | undefined = undefined;
-  private static readonly operations: Set<string> = new Set<string>([
-    'get-stage89-capabilities', 'list-moderation-queue', 'get-moderation-detail', 'list-my-reports', 'list-own-review-requests', 'list-deleted-cards', 'list-lifecycle-jobs', 'get-lifecycle-job', 'get-review-media', 'get-revision-media', 'get-meal-poll',
-    'get-card-previews', 'list-personal-collection', 'get-personal-collection-migration',
-    'get-stage47-capabilities', 'get-taste-preference', 'list-personalized-recommendations',
-    'list-food-lists', 'list-food-list-items', 'get-personal-food-state', 'get-meal-candidates',
-    'list-meal-choice-history', 'get-user-page', 'list-merchant-rankings', 'list-former-friend-content-grants',
-    'get-discovery-capabilities', 'list-map-merchants', 'search-public-cards', 'get-merchant-recommendations',
-    'get-public-media', 'get-card-detail', 'list-nearby-cards', 'list-friend-rankings', 'get-friend-profile',
-    'list-notifications', 'list-conversations', 'list-group-conversations', 'get-group-chat'
-  ]);
-
-  static allows(operation: string): boolean { return ReadScheduler.operations.has(operation); }
-  static contentChanged(): void { ReadScheduler.dataVersion++; ReadScheduler.invalidateQueued(); }
+  private static imageOperation(operation: string): boolean { return ['image-read-batch', 'get-public-media', 'get-review-media', 'get-revision-media'].includes(operation); }
+  static allows(operation: string): boolean { return operation === 'image-read-batch' || /^(get-|list-|search-)/.test(operation); }
+  static dataRevision(): number { return ReadScheduler.dataVersion; }
+  static lifecycleRevision(): number { return ReadScheduler.lifecycle; }
+  static contentChanged(): void {
+    ReadScheduler.dataVersion++;
+    ReadScheduler.pending = ReadScheduler.pending.filter((job: ReadJob): boolean => {
+      if (ReadScheduler.imageOperation(job.operation)) return true;
+      job.reject(new ReadCancelledError()); return false;
+    });
+  }
 
   private static parameters(payload: object): string {
     // A replacer key array sorts fields at every object depth, retaining array order.
@@ -94,21 +98,23 @@ export class ReadScheduler {
 
   static schedule(operation: string, payload: object, authenticated: boolean, options: ReadRequestOptions,
     action: (requestId: string, attempt: number) => Promise<object>): Promise<object> {
-    const key: string = AuthSessionStore.owner() + ':' + AuthSessionStore.generation() + ':' + ReadScheduler.lifecycle + ':' + ReadScheduler.dataVersion + ':' +
+    const key: string = AuthSessionStore.owner() + ':' + AuthSessionStore.generation() + ':' + ReadScheduler.lifecycle + ':' + (ReadScheduler.imageOperation(operation) ? 0 : ReadScheduler.dataVersion) + ':' +
       (AppStorage.get<number>('accountContentRevision') || 0) + ':' +
-      (AppStorage.get<number>('preferenceRevision') || 0) + ':' + String(authenticated) + ':' + operation + ':' +
+      (ReadScheduler.imageOperation(operation) ? 0 : (AppStorage.get<number>('preferenceRevision') || 0)) + ':' + String(authenticated) + ':' + operation + ':' +
       ReadScheduler.parameters(payload);
     const existing: Promise<object> | undefined = ReadScheduler.inFlight.get(key);
     if (existing !== undefined) {
       const priority: ReadPriority = options.priority || 'metadata';
       const job: ReadJob | undefined = ReadScheduler.jobs.get(key);
       if (job !== undefined) {
+        job.mergedCount++;
         job.addGuard(options);
         if (ReadScheduler.rank(priority) < ReadScheduler.rank(job.priority)) job.priority = priority;
       }
       console.info('[ReadScheduler] operation=' + operation + ' requestId=' + (job === undefined ? '' : job.requestId) + ' event=merged');
       return existing;
     }
+    if (ReadScheduler.pending.length >= 32) return Promise.reject(new CloudBusinessError('读取队列已满，请稍后重试。', 'QUEUE_FULL'));
     const promise: Promise<object> = new Promise<object>((resolve: (value: object) => void,
       reject: (error: Error | ReadCancelledError | CloudBusinessError) => void): void => {
       const job: ReadJob = new ReadJob(key, operation, ReadScheduler.lifecycle, ReadScheduler.dataVersion, options, action, resolve, reject);
@@ -117,22 +123,34 @@ export class ReadScheduler {
       console.info('[ReadScheduler] operation=' + operation + ' requestId=' + job.requestId + ' event=queued');
     });
     ReadScheduler.inFlight.set(key, promise);
-    void promise.then((): void => ReadScheduler.remove(key, promise), (_error: Object): void => ReadScheduler.remove(key, promise));
+    void promise.then((): void => ReadScheduler.remove(key, promise), (error: Object): void => ReadScheduler.remove(key, promise, error));
     ReadScheduler.drain();
     return promise;
   }
 
-  private static remove(key: string, promise: Promise<object>): void {
+  private static remove(key: string, promise: Promise<object>, error?: Object): void {
     if (ReadScheduler.inFlight.get(key) === promise) {
+      const job: ReadJob | undefined = ReadScheduler.jobs.get(key);
+      if (job !== undefined) {
+        const outcome: string = error === undefined ? 'success' : error instanceof ReadCancelledError ? 'cancelled' : 'error';
+        const code: string = error === undefined ? 'OK' : error instanceof CloudBusinessError ? error.code :
+          error instanceof ReadCancelledError ? 'READ_CANCELLED' : 'REQUEST_FAILED';
+        const stage: string = error instanceof CloudBusinessError ? error.stage : 'none';
+        const queueMs: number = Math.max(0, (job.firstStartedAt || Date.now()) - job.createdAt);
+        console.info('[ReadScheduler] metricsVersion=o0-20261008-v1 operation=' + job.operation + ' requestId=' + job.requestId +
+          ' event=settled outcome=' + outcome + ' code=' + code + ' stage=' + stage + ' attempts=' + job.attempt +
+          ' retryCount=' + Math.max(0, job.attempt - 1) + ' mergedCount=' + job.mergedCount +
+          ' queueMs=' + queueMs + ' totalMs=' + Math.max(0, Date.now() - job.createdAt));
+      }
       ReadScheduler.inFlight.delete(key); ReadScheduler.jobs.delete(key);
     }
   }
   private static rank(priority: ReadPriority): number { return priority === 'metadata' ? 0 : priority === 'cover' ? 1 : 2; }
   private static current(job: ReadJob): boolean {
     return job.session === AuthSessionStore.generation() && job.lifecycle === ReadScheduler.lifecycle &&
-      job.dataVersion === ReadScheduler.dataVersion &&
+      (ReadScheduler.imageOperation(job.operation) || job.dataVersion === ReadScheduler.dataVersion) &&
       job.contentRevision === (AppStorage.get<number>('accountContentRevision') || 0) &&
-      job.preferenceRevision === (AppStorage.get<number>('preferenceRevision') || 0) &&
+      (ReadScheduler.imageOperation(job.operation) || job.preferenceRevision === (AppStorage.get<number>('preferenceRevision') || 0)) &&
       AppStorage.get<boolean>('stage47AppActive') !== false;
   }
   static invalidateQueued(): void {
@@ -145,26 +163,40 @@ export class ReadScheduler {
     if (ReadScheduler.timer !== undefined) return;
     ReadScheduler.timer = setTimeout((): void => {
       ReadScheduler.timer = undefined; ReadScheduler.drain();
-    }, Math.max(1, delay));
+    }, Math.min(60000, Math.max(1, delay)));
+  }
+  static subscriptionsChanged(): void { void ReadScheduler.pruneUnused(); }
+  private static async pruneUnused(): Promise<void> {
+    for (const job of ReadScheduler.pending.slice()) if (!ReadScheduler.current(job) || !await job.needed()) {
+      if (!ReadScheduler.pending.includes(job)) continue;
+      ReadScheduler.pending = ReadScheduler.pending.filter((value: ReadJob): boolean => value !== job); job.reject(new ReadCancelledError());
+    }
+    ReadScheduler.drain();
   }
   private static drain(): void {
     ReadScheduler.pending = ReadScheduler.pending.filter((job: ReadJob): boolean => {
       if (ReadScheduler.current(job)) return true;
       job.reject(new ReadCancelledError()); return false;
     });
-    const remaining: number = ReadScheduler.busyUntil - Date.now();
+    const remaining: number = Math.max(ReadScheduler.busyUntil, ReadScheduler.nextStartAt) - Date.now();
     if (remaining > 0) {
       if (ReadScheduler.pending.length > 0) ReadScheduler.resume(remaining);
       return;
     }
     const limit: number = ReadScheduler.recovering ? 1 : 2;
-    ReadScheduler.pending.sort((a: ReadJob, b: ReadJob): number => ReadScheduler.rank(a.priority) - ReadScheduler.rank(b.priority));
+    ReadScheduler.pending.sort((a: ReadJob, b: ReadJob): number => (Date.now() - a.createdAt > 10000 ? 0 : ReadScheduler.rank(a.priority)) - (Date.now() - b.createdAt > 10000 ? 0 : ReadScheduler.rank(b.priority)) || a.createdAt - b.createdAt);
     while (ReadScheduler.active < limit && ReadScheduler.pending.length > 0) {
-      const job: ReadJob | undefined = ReadScheduler.pending.shift();
+      const index: number = ReadScheduler.pending.findIndex((entry: ReadJob): boolean => entry.notBefore <= Date.now() && (!ReadScheduler.imageOperation(entry.operation) || ReadScheduler.imageActive === 0));
+      if (index < 0) { let earliest: number = Number.MAX_SAFE_INTEGER; for (const entry of ReadScheduler.pending) if (entry.notBefore > Date.now()) earliest = Math.min(earliest, entry.notBefore); if (earliest < Number.MAX_SAFE_INTEGER) ReadScheduler.resume(earliest - Date.now()); return; }
+      const job: ReadJob | undefined = ReadScheduler.pending.splice(index, 1)[0];
       if (job === undefined) return;
       if (ReadScheduler.recovering && job.priority === 'prefetch') { job.reject(new ReadCancelledError()); continue; }
       ReadScheduler.active++;
+      if (ReadScheduler.imageOperation(job.operation)) ReadScheduler.imageActive++;
+      ReadScheduler.nextStartAt = Date.now() + 500;
       void ReadScheduler.run(job);
+      if (ReadScheduler.pending.length > 0) ReadScheduler.resume(500);
+      return;
     }
   }
   private static async run(job: ReadJob): Promise<void> {
@@ -173,6 +205,7 @@ export class ReadScheduler {
       if (!ReadScheduler.current(job) || !await job.needed()) throw new ReadCancelledError();
       if (!ReadScheduler.current(job)) throw new ReadCancelledError();
       job.attempt++;
+      if (job.firstStartedAt === 0) job.firstStartedAt = Date.now();
       console.info('[ReadScheduler] operation=' + job.operation + ' requestId=' + job.requestId + ' event=started attempt=' +
         job.attempt + ' active=' + ReadScheduler.active + ' limit=' + (ReadScheduler.recovering ? 1 : 2));
       const value: object = await job.action(job.requestId, job.attempt);
@@ -189,15 +222,29 @@ export class ReadScheduler {
       job.resolve(value);
     } catch (caught) {
       const error: Error = cloudReadError(caught as Object, job.operation, job.requestId);
-      if (error instanceof CloudBusinessError && error.code === '3007009') {
+      if (error instanceof CloudBusinessError && error.code === 'AUTH_REQUIRED' && job.attempt < 2 && ReadScheduler.current(job) && AuthSessionStore.owner().length > 0) {
+        try {
+          await AuthSessionStore.getAccessToken(true);
+          if (ReadScheduler.current(job) && await job.needed()) ReadScheduler.pending.push(job);
+          else job.reject(new ReadCancelledError());
+        } catch (refreshFailure) { job.reject(cloudReadError(refreshFailure as Object, job.operation, job.requestId)); }
+      } else if (error instanceof CloudBusinessError && error.code === '3007009') {
         ReadScheduler.busyLevel++; ReadScheduler.successCount = 0; ReadScheduler.recovering = true;
         const hinted: number = Number.isFinite(error.retryAfterMs) ? Math.max(0, error.retryAfterMs) : 0;
-        const delay: number = Math.min(8000, Math.max(hinted, 2000 * Math.pow(2, Math.min(2, ReadScheduler.busyLevel - 1))) + Math.floor(Math.random() * 250));
+        const automaticWindow: number = 30000;
+        const localDelay: number = Math.min(automaticWindow, 2000 * Math.pow(2, Math.min(4, ReadScheduler.busyLevel - 1)) + Math.floor(Math.random() * 250));
+        const delay: number = Math.max(hinted, localDelay);
         ReadScheduler.busyUntil = Math.max(ReadScheduler.busyUntil, Date.now() + delay);
         console.warn('[ReadScheduler] operation=' + job.operation + ' requestId=' + job.requestId + ' code=3007009 event=cooldown delayMs=' + delay + ' limit=1');
-        if (error.retryable && job.attempt < 2 && ReadScheduler.current(job) && job.priority !== 'prefetch') {
+        if (hinted > automaticWindow) {
+          error.retryable = false;
+          error.message = '云数据库暂时繁忙，服务端要求等待 ' + Math.ceil(hinted / 1000).toString() + ' 秒后重试。';
+        }
+        if (hinted <= automaticWindow && error.retryable && job.attempt < 2 && ReadScheduler.current(job) && job.priority !== 'prefetch') {
           ReadScheduler.pending.push(job);
         } else job.reject(error);
+      } else if (error instanceof CloudBusinessError && error.retryable && ['1008210001', '503', 'NETWORK_UNAVAILABLE', 'MEDIA_TIMEOUT'].includes(error.code) && job.attempt < 2 && ReadScheduler.current(job) && job.priority !== 'prefetch') {
+        job.notBefore = Date.now() + 1000 + Math.floor(Math.random() * 250); ReadScheduler.pending.push(job);
       } else {
         console.info('[ReadScheduler] operation=' + job.operation + ' requestId=' + job.requestId +
           ' event=' + (error instanceof ReadCancelledError ? 'cancelled' : 'failed') +
@@ -205,7 +252,7 @@ export class ReadScheduler {
         job.reject(error);
       }
     } finally {
-      ReadScheduler.active--; ReadScheduler.drain();
+      ReadScheduler.active--; if (ReadScheduler.imageOperation(job.operation)) ReadScheduler.imageActive--; ReadScheduler.drain();
     }
   }
 }

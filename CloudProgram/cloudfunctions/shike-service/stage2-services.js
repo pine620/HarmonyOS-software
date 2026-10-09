@@ -1,7 +1,7 @@
 'use strict';
 
 const crypto = require('crypto');
-const { accessError, dateMillis, isAccountActive, readableCardState, currentVisibility } = require('./content-policy');
+const { accessError, dateMillis, isAccountActive, readableCardState, currentVisibility } = require('./shared/content-policy');
 const CATEGORIES = Object.freeze(['NOODLES', 'RICE_SET', 'HOT_POT', 'GRILL_FRIED', 'SNACK',
   'FAST_WESTERN', 'BREAKFAST_BAKERY', 'DESSERT', 'DRINK', 'PACKAGED', 'OTHER']);
 const LEGACY_CATEGORY = Object.freeze({ NOODLES: 'bakery', RICE_SET: 'staple', DRINK: 'drink',

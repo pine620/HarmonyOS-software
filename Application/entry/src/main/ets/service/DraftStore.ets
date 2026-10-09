@@ -2,6 +2,8 @@ import { FeaturePerformanceTrace } from './FeaturePerformanceTrace';
 import { common } from '@kit.AbilityKit';
 import { relationalStore } from '@kit.ArkData';
 import { fileIo } from '@kit.CoreFileKit';
+import util from '@ohos.util';
+import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import { DraftForm, DraftMedia, DraftRestore, LocalDraft } from '../model/DraftModels';
 import { PreparedPhoto } from './ImagePreparationService';
 const DAY: number = 86400000;
@@ -9,7 +11,8 @@ const DAY: number = 86400000;
 export class DraftStore {
   private static opening: Promise<relationalStore.RdbStore> | undefined = undefined;
   private static activeOwnerUid: string = '';
-  static activateOwner(uid: string): void { if (DraftStore.activeOwnerUid !== uid) { DraftStore.activeOwnerUid = uid; AppStorage.setOrCreate('accountContentRevision', (AppStorage.get<number>('accountContentRevision') || 0) + 1); } }
+  private static verifiedPhotos: Map<string, string> = new Map<string, string>();
+  static activateOwner(uid: string): void { if (DraftStore.activeOwnerUid !== uid) { DraftStore.verifiedPhotos.clear(); DraftStore.activeOwnerUid = uid; AppStorage.setOrCreate('accountContentRevision', (AppStorage.get<number>('accountContentRevision') || 0) + 1); } }
   private static queue: Promise<void> = Promise.resolve();
   static flushHandler: (() => Promise<void>) | undefined = undefined;
   static async flushActive(): Promise<void> { const handler: (() => Promise<void>) | undefined = DraftStore.flushHandler; if (handler !== undefined) await handler(); await DraftStore.queue; }
@@ -37,7 +40,72 @@ export class DraftStore {
   }
   private static mediaRows(rows: relationalStore.ResultSet): Array<DraftMedia> { const result: Array<DraftMedia> = []; try { while (rows.goToNextRow()) { const media: DraftMedia = { path: rows.getString(rows.getColumnIndex('local_managed_path')), sha256: rows.getString(rows.getColumnIndex('sha256')), width: rows.getLong(rows.getColumnIndex('width')), height: rows.getLong(rows.getColumnIndex('height')), byteSize: rows.getLong(rows.getColumnIndex('byte_size')), mimeType: rows.getString(rows.getColumnIndex('mime_type')) }; result.push(media); } } finally { rows.close(); } return result; }
   private static removeFolder(path: string): void { if (!fileIo.accessSync(path)) return; for (const name of fileIo.listFileSync(path)) { const child: string = path + '/' + name; const stat: fileIo.Stat = fileIo.lstatSync(child); if (stat.isDirectory()) DraftStore.removeFolder(child); else fileIo.unlinkSync(child); } fileIo.rmdirSync(path); }
-  private static cleanOrphans(context: common.Context, uid: string, drafts: Array<LocalDraft>): void { const root: string = context.filesDir + '/drafts/' + encodeURIComponent(uid); if (!fileIo.accessSync(root)) return; for (const name of fileIo.listFileSync(root)) { if (/^[A-Za-z0-9_-]{1,128}$/.test(name) && !drafts.some((draft: LocalDraft): boolean => draft.draftId === name && Date.now() - draft.updatedAt < 30 * DAY)) DraftStore.removeFolder(root + '/' + name); } }
+  private static cleanOrphans(context: common.Context, uid: string, drafts: Array<LocalDraft>): void {
+    const root: string = context.filesDir + '/drafts/' + encodeURIComponent(uid);
+    if (!fileIo.accessSync(root)) return;
+    let remaining: number = 24;
+    for (const name of fileIo.listFileSync(root).slice(0, 64)) {
+      if (remaining <= 0) break;
+      if (!/^[A-Za-z0-9_-]{1,128}$/.test(name) || drafts.some((draft: LocalDraft): boolean => draft.draftId === name)) continue;
+      const folder: string = root + '/' + name;
+      try {
+        if (!fileIo.lstatSync(folder).isDirectory()) continue;
+        for (const child of fileIo.listFileSync(folder).slice(0, remaining)) {
+          const path: string = folder + '/' + child;
+          if (!/^[0-9a-f]{64}(?:\.[0-9a-f-]+)?\.jpg(?:\.[0-9a-f-]+\.tmp)?$/.test(child) || !fileIo.lstatSync(path).isFile()) continue;
+          // Interrupted saves get a grace period. A new save never removes a
+          // still-referenced file, and orphan cleanup performs bounded work.
+          if (Date.now() - fileIo.statSync(path).mtime * 1000 < DAY) continue;
+          fileIo.unlinkSync(path); remaining--;
+        }
+        if (fileIo.listFileSync(folder).length === 0) fileIo.rmdirSync(folder);
+      } catch (_error) { }
+    }
+  }
+  private static rememberPhoto(path: string): void {
+    if (DraftStore.verifiedPhotos.size >= 64) DraftStore.verifiedPhotos.clear();
+    const stat: fileIo.Stat = fileIo.statSync(path);
+    DraftStore.verifiedPhotos.set(path, stat.size.toString() + ':' + stat.mtime.toString());
+  }
+  private static async writePhoto(path: string, photo: PreparedPhoto): Promise<string> {
+    // Verify content before reusing it; a same-size damaged file is not a hit.
+    let target: string = path;
+    if (fileIo.accessSync(path)) {
+      const stat: fileIo.Stat = fileIo.statSync(path);
+      const fingerprint: string = stat.size.toString() + ':' + stat.mtime.toString();
+      if (stat.isFile() && stat.size === photo.data.byteLength && DraftStore.verifiedPhotos.get(path) === fingerprint) return path;
+      const existing: fileIo.File = fileIo.openSync(path, fileIo.OpenMode.READ_ONLY);
+      try {
+        if (fileIo.statSync(existing.fd).size === photo.data.byteLength) {
+          const bytes: ArrayBuffer = new ArrayBuffer(photo.data.byteLength);
+          if (fileIo.readSync(existing.fd, bytes) === bytes.byteLength) {
+            const digest: cryptoFramework.Md = cryptoFramework.createMd('SHA256');
+            const blob: cryptoFramework.DataBlob = { data: new Uint8Array(bytes) };
+            await digest.update(blob);
+            const hash: Uint8Array = (await digest.digest()).data;
+            let actual: string = ''; for (const byte of hash) actual += byte.toString(16).padStart(2, '0');
+            if (actual === photo.sha256) { DraftStore.rememberPhoto(path); return path; }
+          }
+        }
+      } finally { fileIo.closeSync(existing); }
+      // Keep the old DB reference intact until its replacement commits.
+      target = path.slice(0, -4) + '.' + util.generateRandomUUID() + '.jpg';
+    }
+    const temporary: string = target + '.' + util.generateRandomUUID() + '.tmp';
+    let file: fileIo.File | undefined = undefined;
+    try {
+      file = fileIo.openSync(temporary, fileIo.OpenMode.CREATE | fileIo.OpenMode.READ_WRITE);
+      if (fileIo.writeSync(file.fd, photo.data) !== photo.data.byteLength) throw new Error('草稿图片写入不完整。');
+      fileIo.fsyncSync(file.fd); fileIo.closeSync(file); file = undefined;
+      // Rename to a fresh same-directory path, then commit its RDB reference.
+      fileIo.renameSync(temporary, target); DraftStore.rememberPhoto(target); return target;
+    } catch (error) {
+      if (file !== undefined) { try { fileIo.closeSync(file); } catch (_error) { } file = undefined; }
+      try { if (fileIo.accessSync(temporary)) fileIo.unlinkSync(temporary); } catch (_error) { }
+      throw error instanceof Error ? error : new Error('草稿图片保存失败。');
+    } finally { if (file !== undefined) fileIo.closeSync(file); }
+  }
+
   private static async removeRow(context: common.Context, store: relationalStore.RdbStore, uid: string, draftId: string): Promise<void> {
     const found: Array<LocalDraft> = DraftStore.decode(await store.querySql('SELECT * FROM drafts WHERE owner_uid = ? AND draft_id = ?', [uid, draftId])); if (found.length === 0) return;
     store.beginTransaction();
@@ -60,8 +128,7 @@ export class DraftStore {
     DraftStore.cleanOrphans(context, uid, all);
     const folder: string = DraftStore.folder(context, uid, draftId); if (!fileIo.accessSync(folder)) fileIo.mkdirSync(folder, true);
     const media: Array<DraftMedia> = [];
-    for (const photo of photos) { if (!/^[0-9a-f]{64}$/.test(photo.sha256) || photo.data.byteLength > 2097152) throw new Error('草稿图片无效。'); const path: string = folder + '/' + photo.sha256 + '.jpg';
-      const file: fileIo.File = fileIo.openSync(path, fileIo.OpenMode.CREATE | fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.TRUNC); try { fileIo.writeSync(file.fd, photo.data); } finally { fileIo.closeSync(file); }
+    for (const photo of photos) { if (!/^[0-9a-f]{64}$/.test(photo.sha256) || photo.data.byteLength < 4 || photo.data.byteLength > 2097152 || photo.byteSize !== photo.data.byteLength) throw new Error('草稿图片无效。'); const path: string = await DraftStore.writePhoto(folder + '/' + photo.sha256 + '.jpg', photo);
       const entry: DraftMedia = { path, sha256: photo.sha256, width: photo.width, height: photo.height, byteSize: photo.byteSize, mimeType: photo.mimeType }; media.push(entry);
     }
     const oldMedia: Array<DraftMedia> = DraftStore.mediaRows(await store.querySql('SELECT * FROM draft_media WHERE draft_id = ? ORDER BY sort_order', [draftId]));
@@ -72,6 +139,14 @@ export class DraftStore {
       DraftStore.assertOwner(uid); store.commit();
     } catch (error) { store.rollBack(); throw error instanceof Error ? error : new Error('草稿保存失败。'); }
     for (const item of oldMedia) if (!media.some((value: DraftMedia): boolean => value.path === item.path)) { try { if (fileIo.accessSync(item.path)) fileIo.unlinkSync(item.path); } catch (_error) {} }
+    // Retry leftovers inside a live draft also have a bounded, reference-aware sweep.
+    try { for (const name of fileIo.listFileSync(folder).slice(0, 24)) {
+      const path: string = folder + '/' + name;
+      if (/^[0-9a-f]{64}(?:\.[0-9a-f-]+)?\.jpg(?:\.[0-9a-f-]+\.tmp)?$/.test(name) &&
+        !media.some((item: DraftMedia): boolean => item.path === path) && fileIo.lstatSync(path).isFile() &&
+        Date.now() - fileIo.statSync(path).mtime * 1000 > DAY) fileIo.unlinkSync(path);
+    } } catch (_error) { }
+
   }); }
   static restore(context: common.Context, uid: string, draftId: string): Promise<DraftRestore> { return FeaturePerformanceTrace.measure<DraftRestore>('draft_restore', (): Promise<DraftRestore> => DraftStore.serialize<DraftRestore>(async (): Promise<DraftRestore> => {
     DraftStore.assertOwner(uid); const store: relationalStore.RdbStore = await DraftStore.store(context); const rows: Array<LocalDraft> = DraftStore.decode(await store.querySql('SELECT * FROM drafts WHERE owner_uid = ? AND draft_id = ?', [uid, draftId]));

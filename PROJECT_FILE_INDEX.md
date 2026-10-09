@@ -1,6 +1,6 @@
 # 项目文件索引
 
-按 2026-10-08 的现有发布文件结构整理，重点覆盖 `Application` 与 `CloudProgram`。先看下面的职责说明，完整文件清单在文末。首次运行见 [README](README.md)，后端操作见 [云端指南](CloudProgram/README.md)。
+按 2026-10-09 的现有发布文件结构整理，重点覆盖 `Application` 与 `CloudProgram`。先看下面的职责说明，完整文件清单在文末。首次运行见 [README](README.md)，后端操作见 [云端指南](CloudProgram/README.md)。
 
 路径从项目根目录起算。GitHub 仓库包含 Application 与 CloudProgram 的源码；三个不含签名的 build profile 随源码共享；本地签名、SDK 和云工程关联配置另列，不提交配置值。
 
@@ -26,7 +26,7 @@ Application/
 └── scripts/                  离线指标汇总
 CloudProgram/
 ├── cloud-config.json         本地生成的团队/项目/应用关联元数据
-├── cloudfunctions/           四个云对象与两个独立云函数
+├── cloudfunctions/           四个云对象与三个独立云函数
 ├── hosting/share/            公开分享网页与托管约定
 ├── scripts/                  云对象、分享及维护打包工具
 ├── clouddb/objecttype/       当前数据库对象定义
@@ -114,7 +114,6 @@ CloudProgram/
 | `service/LocationService.ets` | 双位置权限、单次定位、E3 舍入、行政区反查和短时定位缓存 |
 | `service/ImagePreparationService.ets` | JPEG 重编码、缩放、去 EXIF/GPS、摘要计算与头像裁剪 |
 | `service/PhotoUploadService.ets` | 鉴权媒体上传、游客/账号媒体读取、Base64 到本机文件、文件缓存与下载队列 |
-| `service/NearbyPreloadService.ets` | 公开推荐首屏/下一页复用、快照/旧数据窗口、图片预热、账号/分类与代次隔离 |
 | `service/NearbyPerformanceTrace.ets` | 附近/详情的固定指标与 trace，供人工采样 |
 | `service/FriendRankingPreloadService.ets` | 好友榜短时缓存、请求复用与关系 revision 失效 |
 | `service/CardVisitStore.ets` | 按账号保存访问历史与数量控制 |
@@ -130,7 +129,6 @@ CloudProgram/
 | `service/ModeFieldCache.ets` | 按账号／卡片保存两种模式的独立字段与 30 天期限 |
 | `service/PublishVisibilityStore.ets` | 按账号保存发布可见范围偏好 |
 | `service/SafeSourceLink.ets` | 外部来源链接校验 |
-| `service/DiscoveryCache.ets` | 按账号和查询保存短期结果，能力／账号／revision 变化时失效 |
 | `service/MapViewportStore.ets` | 本机地图浏览中心与缩放保存 |
 | `service/SearchHistoryStore.ets` | 本机成功搜索历史，去重并限制为 20 条 |
 | `model/CloudContracts.ets` | 用户、认证、卡片、媒体、位置与服务卡片主要 DTO |
@@ -161,6 +159,12 @@ CloudProgram/
 | `service/FeaturePerformanceTrace.ets` | 地图、搜索、清单、审核等固定性能 trace |
 | `service/MerchantNavigationService.ets` | 商家位置导航 |
 | `common/OperationsUi.ets`、`common/Stage47Ui.ets`、`components/PersonalPreviewTile.ets` | 管理/个人内容公共界面和预览单元 |
+
+| `model/ImageModels.ets`、`service/ImageDescriptors.ets` | 图片协议 DTO、响应描述符与会话内展示资格 |
+| `service/ImageRepository.ets`、`service/ImageReadConfig.ets` | BATCH 图片队列、合并/去重、传输选择与受控兼容 |
+| `service/ImageDiskCache.ets` | 文件摘要/长度校验、磁盘索引、预算与旧缓存迁移 |
+| `service/DiscoveryFeedState.ets` | 发现列表状态与返回复用 |
+| `service/SessionRestoreStore.ets` | 会话恢复状态 |
 
 ## Application：代理、资源与脚本
 
@@ -199,13 +203,15 @@ CloudProgram/
 
 每个目录均有 `runtime.js`（实际 JS 实现）、`function-config.json`（类型/handler/超时/鉴权）、`package.json` 与 `package-lock.json`（该对象独立依赖）、`tsconfig.json`（CommonJS 入口编译）。TS 导出负责包装响应，部署包必须带相邻 runtime 和生产依赖。media 另有 `check-deployment.mjs`供成员预检源码包/解包产物。
 
-service/media/location 各带 `content-policy.js` 与 `read-errors.js`；service 另带 `stage1-services.js` 至 `stage7-services.js`、`stages47-common.js`、`personal-collections.js`、`moderation-services.js`、`lifecycle-services.js`、`authentication-cleanup.js`。部署时必须随 runtime 同包，完整打包/已知问题见云端指南。`CloudProgram/scripts/package-cloud-object.mjs` 为部署成员准备编译入口、随包 JS 模块和独立依赖；不会自动部署 AGC。
+共享策略、错误与图片协议统一维护在 `cloudfunctions/shared/`；service 另带 `stage1-services.js` 至 `stage7-services.js`、`stages47-common.js`、`personal-collections.js`、`moderation-services.js`、`lifecycle-services.js`、`authentication-cleanup.js`。部署时必须随 runtime 同包，完整打包/已知问题见云端指南。`CloudProgram/scripts/package-cloud-object.mjs` 为部署成员准备编译入口、随包 JS 模块和独立依赖；不会自动部署 AGC。
 
 独立入口：`cloudfunctions/shike-share/shikeShare.js` 提供公开分享 HTTP，`cloudfunctions/shike-maintenance/shikeMaintenance.js` 提供受秘密校验的定时任务。`hosting/share/` 是分享页；`scripts/package-share-http.mjs`、`configure-share-hosting.mjs`、`package-maintenance.mjs` 准备部署产物，`check-release-source.mjs` 供负责人手动检查。部署约定 JSON 不表示平台已配置。
 
 环境变量名称、用途及团队配置流程见云端指南；秘密只保存在 AGC 配置或团队约定的安全渠道。
 
-## CloudProgram：三十三个当前数据库对象
+`cloudfunctions/shike-image/` 为鉴权图片事件入口，`cloudfunctions/shared/` 为唯一维护的共享模块。media 增加封面 converter/worker。`scripts/package-functions.mjs` / `function-layout.mjs` / `check-artifact.mjs` 统一准备独立部署产物；`prepare-deveco.mjs` 为 IDE 生成函数内依赖，副本不提交。`tests/*.test.cjs` 是负责人手动执行的契约测试源码。
+
+## CloudProgram：32 个当前数据库对象
 
 均位于 `CloudProgram/clouddb/objecttype/<对象名>.json`，包含字段、主键、索引和权限。
 
@@ -241,7 +247,6 @@ service/media/location 各带 `content-policy.js` 与 `read-errors.js`；service
 | FoodList | 私人清单元信息 |
 | FoodListItem | 清单条目和顺序 |
 | PersonalFoodState | 收藏/想吃等个人状态 |
-| MealChoiceHistory | 今天吃什么选择历史 |
 | MealPoll | 群投票状态与生命周期 |
 | MealPollOption | 投票候选项 |
 | MealPollVote | 成员投票与去重 |
@@ -261,7 +266,7 @@ service/media/location 各带 `content-policy.js` 与 `read-errors.js`；service
 以下按当前源码重新生成，排除依赖、构建产物、缓存、日志和本地配置。克隆 GitHub 仓库可获得下列文件；首次需补齐的两个 AGC 配置路径单独列在末尾。
 
 <details>
-<summary>Application：220 个文件</summary>
+<summary>Application：225 个文件</summary>
 
 ```text
 Application/.gitignore
@@ -313,6 +318,7 @@ Application/entry/src/main/ets/model/DiscoveryModels.ets
 Application/entry/src/main/ets/model/DraftModels.ets
 Application/entry/src/main/ets/model/FoodListModels.ets
 Application/entry/src/main/ets/model/FriendModels.ets
+Application/entry/src/main/ets/model/ImageModels.ets
 Application/entry/src/main/ets/model/MealModels.ets
 Application/entry/src/main/ets/model/MerchantModels.ets
 Application/entry/src/main/ets/model/NotificationModels.ets
@@ -375,18 +381,21 @@ Application/entry/src/main/ets/service/CloudGateway.ets
 Application/entry/src/main/ets/service/CloudReadErrors.ets
 Application/entry/src/main/ets/service/ContinuationState.ets
 Application/entry/src/main/ets/service/DeliveryPlatformConfigService.ets
-Application/entry/src/main/ets/service/DiscoveryCache.ets
+Application/entry/src/main/ets/service/DiscoveryFeedState.ets
 Application/entry/src/main/ets/service/DraftStore.ets
 Application/entry/src/main/ets/service/FeaturePerformanceTrace.ets
 Application/entry/src/main/ets/service/FriendRankingPreloadService.ets
+Application/entry/src/main/ets/service/ImageDescriptors.ets
+Application/entry/src/main/ets/service/ImageDiskCache.ets
 Application/entry/src/main/ets/service/ImagePreparationService.ets
+Application/entry/src/main/ets/service/ImageReadConfig.ets
+Application/entry/src/main/ets/service/ImageRepository.ets
 Application/entry/src/main/ets/service/LocationService.ets
 Application/entry/src/main/ets/service/MapViewportStore.ets
 Application/entry/src/main/ets/service/MerchantLocationPicker.ets
 Application/entry/src/main/ets/service/MerchantNavigationService.ets
 Application/entry/src/main/ets/service/ModeFieldCache.ets
 Application/entry/src/main/ets/service/NearbyPerformanceTrace.ets
-Application/entry/src/main/ets/service/NearbyPreloadService.ets
 Application/entry/src/main/ets/service/OperationsPageGuard.ets
 Application/entry/src/main/ets/service/PagedDataSource.ets
 Application/entry/src/main/ets/service/PersonalPreviewLoader.ets
@@ -401,6 +410,7 @@ Application/entry/src/main/ets/service/ServiceCardCoverCache.ets
 Application/entry/src/main/ets/service/ServiceCardInteraction.ets
 Application/entry/src/main/ets/service/ServiceCardRemoteSyncService.ets
 Application/entry/src/main/ets/service/ServiceCardStore.ets
+Application/entry/src/main/ets/service/SessionRestoreStore.ets
 Application/entry/src/main/ets/servicecard/ServiceCardFormAbility.ets
 Application/entry/src/main/ets/servicecard/ServiceCardPresentation.ets
 Application/entry/src/main/ets/servicecard/pages/ServiceCard.ets
@@ -489,7 +499,7 @@ Application/scripts/summarize_preload_metrics.py
 </details>
 
 <details>
-<summary>CloudProgram：97 个文件</summary>
+<summary>CloudProgram：116 个文件</summary>
 
 ```text
 CloudProgram/AppScope/resources/rawfile/schema.json
@@ -515,7 +525,6 @@ CloudProgram/clouddb/objecttype/GroupMember.json
 CloudProgram/clouddb/objecttype/GroupMessage.json
 CloudProgram/clouddb/objecttype/IdentityBinding.json
 CloudProgram/clouddb/objecttype/MaintenanceJob.json
-CloudProgram/clouddb/objecttype/MealChoiceHistory.json
 CloudProgram/clouddb/objecttype/MealPoll.json
 CloudProgram/clouddb/objecttype/MealPollOption.json
 CloudProgram/clouddb/objecttype/MealPollVote.json
@@ -528,41 +537,50 @@ CloudProgram/clouddb/objecttype/Report.json
 CloudProgram/clouddb/objecttype/TastePreference.json
 CloudProgram/clouddb/objecttype/UserProfile.json
 CloudProgram/clouddb/objecttype/WidgetRegistration.json
+CloudProgram/cloudfunctions/shared/content-policy.js
+CloudProgram/cloudfunctions/shared/image-models.js
+CloudProgram/cloudfunctions/shared/image-reader.js
+CloudProgram/cloudfunctions/shared/media-descriptor.js
+CloudProgram/cloudfunctions/shared/read-errors.js
+CloudProgram/cloudfunctions/shared/release-info.js
 CloudProgram/cloudfunctions/shike-auth/function-config.json
 CloudProgram/cloudfunctions/shike-auth/package-lock.json
 CloudProgram/cloudfunctions/shike-auth/package.json
 CloudProgram/cloudfunctions/shike-auth/runtime.js
 CloudProgram/cloudfunctions/shike-auth/shikeAuth.ts
 CloudProgram/cloudfunctions/shike-auth/tsconfig.json
-CloudProgram/cloudfunctions/shike-location/content-policy.js
+CloudProgram/cloudfunctions/shike-image/function-config.json
+CloudProgram/cloudfunctions/shike-image/image-request.js
+CloudProgram/cloudfunctions/shike-image/package-lock.json
+CloudProgram/cloudfunctions/shike-image/package.json
+CloudProgram/cloudfunctions/shike-image/shikeImage.js
 CloudProgram/cloudfunctions/shike-location/function-config.json
 CloudProgram/cloudfunctions/shike-location/package-lock.json
 CloudProgram/cloudfunctions/shike-location/package.json
-CloudProgram/cloudfunctions/shike-location/read-errors.js
 CloudProgram/cloudfunctions/shike-location/runtime.js
 CloudProgram/cloudfunctions/shike-location/shikeLocation.ts
 CloudProgram/cloudfunctions/shike-location/tsconfig.json
 CloudProgram/cloudfunctions/shike-maintenance/function-config.json
+CloudProgram/cloudfunctions/shike-maintenance/package-lock.json
+CloudProgram/cloudfunctions/shike-maintenance/package.json
 CloudProgram/cloudfunctions/shike-maintenance/shikeMaintenance.js
 CloudProgram/cloudfunctions/shike-maintenance/timer-contract.json
 CloudProgram/cloudfunctions/shike-media/check-deployment.mjs
-CloudProgram/cloudfunctions/shike-media/content-policy.js
+CloudProgram/cloudfunctions/shike-media/cover-converter.js
+CloudProgram/cloudfunctions/shike-media/cover-worker.js
 CloudProgram/cloudfunctions/shike-media/function-config.json
 CloudProgram/cloudfunctions/shike-media/package-lock.json
 CloudProgram/cloudfunctions/shike-media/package.json
-CloudProgram/cloudfunctions/shike-media/read-errors.js
 CloudProgram/cloudfunctions/shike-media/runtime.js
 CloudProgram/cloudfunctions/shike-media/shikeMedia.ts
 CloudProgram/cloudfunctions/shike-media/tsconfig.json
 CloudProgram/cloudfunctions/shike-service/authentication-cleanup.js
-CloudProgram/cloudfunctions/shike-service/content-policy.js
 CloudProgram/cloudfunctions/shike-service/function-config.json
 CloudProgram/cloudfunctions/shike-service/lifecycle-services.js
 CloudProgram/cloudfunctions/shike-service/moderation-services.js
 CloudProgram/cloudfunctions/shike-service/package-lock.json
 CloudProgram/cloudfunctions/shike-service/package.json
 CloudProgram/cloudfunctions/shike-service/personal-collections.js
-CloudProgram/cloudfunctions/shike-service/read-errors.js
 CloudProgram/cloudfunctions/shike-service/runtime.js
 CloudProgram/cloudfunctions/shike-service/shikeService.ts
 CloudProgram/cloudfunctions/shike-service/stage1-services.js
@@ -576,7 +594,10 @@ CloudProgram/cloudfunctions/shike-service/stages47-common.js
 CloudProgram/cloudfunctions/shike-service/tsconfig.json
 CloudProgram/cloudfunctions/shike-share/function-config.json
 CloudProgram/cloudfunctions/shike-share/gateway-contract.json
+CloudProgram/cloudfunctions/shike-share/package-lock.json
+CloudProgram/cloudfunctions/shike-share/package.json
 CloudProgram/cloudfunctions/shike-share/shikeShare.js
+CloudProgram/env-templates/shike-image.env.example.json
 CloudProgram/hosting/share/app.js
 CloudProgram/hosting/share/config.json
 CloudProgram/hosting/share/hosting-contract.json
@@ -584,11 +605,19 @@ CloudProgram/hosting/share/index.html
 CloudProgram/hosting/share/style.css
 CloudProgram/package-lock.json
 CloudProgram/package.json
+CloudProgram/scripts/check-artifact.mjs
 CloudProgram/scripts/check-release-source.mjs
 CloudProgram/scripts/configure-share-hosting.mjs
+CloudProgram/scripts/function-layout.mjs
 CloudProgram/scripts/package-cloud-object.mjs
+CloudProgram/scripts/package-functions.mjs
 CloudProgram/scripts/package-maintenance.mjs
 CloudProgram/scripts/package-share-http.mjs
+CloudProgram/scripts/prepare-deveco.mjs
+CloudProgram/tests/image-handler-contracts.test.cjs
+CloudProgram/tests/image-read-contracts.test.cjs
+CloudProgram/tests/optimization-contracts.test.cjs
+CloudProgram/tests/repair-contracts.test.cjs
 ```
 
 </details>

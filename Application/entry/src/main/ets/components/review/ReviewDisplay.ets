@@ -1,3 +1,5 @@
+import { common } from '@kit.AbilityKit';
+import { ImageRepository } from '../../service/ImageRepository';
 export type EvidenceTone = 'verified' | 'assisted' | 'pending';
 
 export interface ReviewCardViewData {
@@ -130,12 +132,22 @@ export struct EvidenceBadge {
 
 @Component
 export struct ReviewCard {
-  @Prop data: ReviewCardViewData = emptyReviewCardViewData();
+  @Prop @Watch('onDataChanged') data: ReviewCardViewData = emptyReviewCardViewData();
   @Prop featured: boolean = false;
   @Prop coverScale: number = 1;
   onOpen: (id: string) => void = (_id: string): void => {};
+  @State nativeCoverFailed: string = '';
+  onCoverFailed: () => void = (): void => {};
   onCoverDecoded: (id: string, url: string) => void = (_id: string, _url: string): void => {};
 
+  private onDataChanged(): void {
+    if (this.data.coverUrl.length === 0 || this.data.coverLoading || this.data.coverUrl !== this.nativeCoverFailed) this.nativeCoverFailed = '';
+  }
+
+  private decodeSize(): ImageSourceSize {
+    const size: ImageSourceSize = { width: 180 * this.coverScale, height: this.photoHeight() };
+    return size;
+  }
   private photoHeight(): number {
     return Math.round((this.featured ? 224 : 142) * this.coverScale);
   }
@@ -181,12 +193,18 @@ export struct ReviewCard {
   build() {
     Column({ space: 10 }) {
       Stack({ alignContent: Alignment.BottomStart }) {
-        if (this.data.coverUrl.length > 0) {
+        if (this.data.coverUrl.length > 0 && this.nativeCoverFailed !== this.data.coverUrl) {
           Image(this.data.coverUrl)
             .width('100%')
             .height(this.photoHeight())
-            .objectFit(ImageFit.Cover)
-            .borderRadius(16)
+            .objectFit(ImageFit.Contain)
+            .autoResize(true).syncLoad(false).sourceSize(this.decodeSize())
+            .borderRadius(18)
+            .onError((): void => {
+              this.nativeCoverFailed = this.data.coverUrl;
+              void ImageRepository.reportDecodeFailureByUrl(this.getUIContext().getHostContext() as common.Context, this.data.coverUrl).catch((): void => {});
+              this.onCoverFailed();
+            })
             .onComplete((event): void => {
               if (event !== undefined && event.loadingStatus === 1) {
                 this.onCoverDecoded(this.data.id, this.data.coverUrl);

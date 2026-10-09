@@ -1,6 +1,6 @@
-import { ChoiceActionStyle, QuietActionStyle, SecondaryActionStyle, stage47ErrorText } from '../common/Stage47Ui';
+import { ChoiceActionStyle, QuietActionStyle, SecondaryActionStyle, stage47ErrorText, invalidatesProtectedPage } from '../common/Stage47Ui';
 import { moderationKindLabel, operationsDate, operationsStateLabel } from '../common/OperationsUi';
-import { ModerationKind, ModerationScope, ModerationRow, ModerationQueuePage, ModerationDetailRequest } from '../model/OperationsModels';
+import { OperationsCapabilities, ModerationKind, ModerationScope, ModerationRow, ModerationQueuePage, ModerationDetailRequest } from '../model/OperationsModels';
 import { CardIdRequest } from '../model/CloudContracts';
 import { OperationsRepository } from '../repository/OperationsRepository';
 import { OperationsPageGuard, OperationsTicket } from '../service/OperationsPageGuard';
@@ -12,6 +12,8 @@ export struct ModerationCenterPage {
   @StorageLink('stage47AppActive') @Watch('onEnvironmentChanged') appActive: boolean = true;
   @StorageLink('authSessionRevision') @Watch('onEnvironmentChanged') sessionRevision: number = 0;
   @StorageLink('accountContentRevision') @Watch('onEnvironmentChanged') contentRevision: number = 0;
+  @State diagnostics: Array<string> = [];
+  @State diagnosticBusy: boolean = false;
   @State kind: ModerationKind = 'CARD';
   @State busy: boolean = false;
   @State message: string = '';
@@ -23,7 +25,7 @@ export struct ModerationCenterPage {
   private repo: OperationsRepository = new OperationsRepository();
   private source: PagedDataSource<ModerationRow> = new PagedDataSource<ModerationRow>();
   private title(): string { return this.scope === 'ADMIN' ? '审核中心' : this.scope === 'REPORTS' ? '我的举报' : '待修改内容'; }
-  private clear(): void { this.guard.close(); this.message = ''; this.source.replace([]); this.count = 0; this.cursor = ''; this.permitted = false; this.busy = false; }
+  private clear(): void { this.guard.close(); this.message = ''; this.source.replace([]); this.count = 0; this.cursor = ''; this.permitted = false; this.busy = false; this.diagnostics = []; this.diagnosticBusy = false; }
   private shown(): void { this.visible = true; this.clear(); if (this.appActive) { this.guard.open(); void this.load(false); } }
   private hidden(): void { this.visible = false; this.clear(); }
   aboutToDisappear(): void { this.hidden(); }
@@ -39,8 +41,18 @@ export struct ModerationCenterPage {
       this.permitted = true; this.source.merge(result.items, (row: ModerationRow): string => row.kind + ':' + row.id, more);
       this.count = this.source.totalCount(); this.cursor = result.nextCursor;
       this.message = result.items.length === 0 && result.nextCursor.length > 0 ? '本批没有匹配内容，可继续加载。' : this.count === 0 ? '暂无内容。' : '';
-    } catch (error) { if (this.guard.valid(ticket)) { this.source.replace([]); this.count = 0; this.cursor = ''; this.permitted = false; this.message = stage47ErrorText(error as Object, '读取失败，请重试。'); } }
+    } catch (error) { if (this.guard.valid(ticket)) { if (!more || invalidatesProtectedPage(error as Object)) { this.source.replace([]); this.count = 0; this.cursor = ''; this.permitted = false; } this.message = stage47ErrorText(error as Object, '读取失败，请重试。'); } }
     finally { if (this.guard.valid(ticket)) this.busy = false; }
+  }
+  private async inspectReadiness(): Promise<void> {
+    if (this.diagnosticBusy || this.scope !== 'ADMIN') return;
+    const ticket: OperationsTicket = this.guard.ticket(); this.diagnosticBusy = true;
+    try {
+      const caps: OperationsCapabilities = await this.repo.diagnostics(this.guard.options(ticket));
+      if (!this.guard.valid(ticket)) return;
+      this.diagnostics = caps.administrator ? caps.diagnostics || ['服务版本较旧，请更新后查看上线状态。'] : [];
+    } catch (error) { if (this.guard.valid(ticket)) this.message = stage47ErrorText(error as Object, '诊断暂不可用。'); }
+    finally { if (this.guard.valid(ticket)) this.diagnosticBusy = false; }
   }
   private open(row: ModerationRow): void {
     if (!this.permitted || !this.guard.valid(this.guard.ticket())) return;
@@ -71,6 +83,11 @@ export struct ModerationCenterPage {
         if (this.scope === 'ADMIN') {
           Row({ space: 8 }) { this.kindButton('CARD'); this.kindButton('REVISION') }.width('100%')
           Row({ space: 8 }) { this.kindButton('MERCHANT'); this.kindButton('REPORT') }.width('100%')
+          Button(this.diagnosticBusy ? '正在核对…' : '查看上线状态').width('100%').attributeModifier(new SecondaryActionStyle()).enabled(!this.diagnosticBusy)
+            .onClick((): void => { void this.inspectReadiness(); })
+          if (this.diagnostics.length > 0) {
+            Scroll() { Column({ space: 4 }) { ForEach(this.diagnostics, (line: string): void => { Text(line).fontSize(12).lineHeight(18).fontColor($r('app.color.muted')).width('100%') }, (line: string): string => line) }.padding(12).width('100%') }.width('100%').constraintSize({ maxHeight: 160 }).backgroundColor($r('app.color.surface')).borderRadius(20)
+          }
           Button('清理任务管理').width('100%').attributeModifier(new QuietActionStyle()).enabled(this.permitted)
             .onClick((): void => this.pathStack.pushPathByName('lifecycle-jobs', null))
         }

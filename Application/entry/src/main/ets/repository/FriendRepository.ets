@@ -12,7 +12,7 @@ import {
 } from '../model/FriendModels';
 import { AuthService } from '../service/AuthService';
 import { CloudGateway } from '../service/CloudGateway';
-import { PhotoUploadService } from '../service/PhotoUploadService';
+import { ImageRepository } from '../service/ImageRepository';
 
 export class FriendRepository {
   private removalRequests: Map<string, RemoveFriendRequest> = new Map<string, RemoveFriendRequest>();
@@ -23,7 +23,7 @@ export class FriendRepository {
       return;
     }
     try {
-      user.avatarUrl = await PhotoUploadService.getDownloadUrl(context, user.avatarBucket, user.avatarPath);
+      user.avatarUrl = await ImageRepository.getDownloadUrl(context, user.avatarBucket, user.avatarPath);
     } catch (_error) {
       user.avatarUrl = '';
     }
@@ -35,7 +35,7 @@ export class FriendRepository {
       return;
     }
     try {
-      card.photoUrl = await PhotoUploadService.getDownloadUrl(context, card.photoBucket, card.photoPath);
+      card.photoUrl = await ImageRepository.getDownloadUrl(context, card.photoBucket, card.photoPath, 'normal', undefined, card.photos?.[0], true);
     } catch (_error) {
       card.photoUrl = '';
     }
@@ -76,7 +76,7 @@ export class FriendRepository {
     response.profile.coverUrl = '';
     if (response.profile.coverPath.length > 0 && response.profile.coverBucket.length > 0) {
       try {
-        response.profile.coverUrl = await PhotoUploadService.getDownloadUrl(context,
+        response.profile.coverUrl = await ImageRepository.getDownloadUrl(context,
           response.profile.coverBucket, response.profile.coverPath);
       } catch (_error) {
         response.profile.coverUrl = '';

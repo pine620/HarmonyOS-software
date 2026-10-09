@@ -1,9 +1,8 @@
 import { PrimaryActionStyle, SecondaryActionStyle, stage47ErrorText } from '../common/Stage47Ui';
 import { common } from '@kit.AbilityKit';
-import { util } from '@kit.ArkTS';
 import { FoodCard } from '../model/CloudContracts';
 import { cardPriceText } from '../model/CardPrice';
-import { MealCandidate, MealCandidatePage, MealChoiceRequest } from '../model/MealModels';
+import { MealCandidate, MealCandidatePage } from '../model/MealModels';
 import { MealRepository } from '../repository/MealRepository';
 import { CardRepository } from '../repository/CardRepository';
 import { AccountRequestGuard } from '../service/AccountRequestGuard';
@@ -24,7 +23,6 @@ export struct TodayEatPage {
   private generation: number = 0;
   private excluded: Array<string> = [];
   private batchIds: Array<string> = [];
-  private choice: MealChoiceRequest | undefined = undefined;
   private repo: MealRepository = new MealRepository();
   private cardRepo: CardRepository = new CardRepository();
 
@@ -49,7 +47,6 @@ export struct TodayEatPage {
     this.aboutToDisappear();
     this.excluded = [];
     this.batchIds = [];
-    this.choice = undefined;
     this.closed = false;
     this.message = '正在从你的想吃和收藏里随机选三张。';
     if (this.visibleLifecycle && this.appActive) this.aboutToAppear();
@@ -72,8 +69,7 @@ export struct TodayEatPage {
     const cards: Array<FoodCard> = this.candidates.map((candidate: MealCandidate): FoodCard => candidate.card);
     try {
       await this.cardRepo.hydrateNearbyPrimaryPhotoUrls(this.context(), cards, 0, cards.length, 'normal',
-        async (): Promise<boolean> => this.current(generation));
-      if (this.current(generation)) this.candidates = this.candidates.slice();
+        async (): Promise<boolean> => this.current(generation), (_card: FoodCard): void => { if (this.current(generation)) this.candidates = this.candidates.slice(); });
     } catch (_error) {
       if (this.current(generation)) this.message = '实拍图暂不可用，仍可查看卡片或换一批。';
     }
@@ -105,7 +101,6 @@ export struct TodayEatPage {
     const generation: number = ++this.generation;
     this.busy = true;
     this.closed = false;
-    this.choice = undefined;
     this.message = '正在从你的想吃和收藏里随机选三张。';
     try {
       let restarted: boolean = false;
@@ -160,24 +155,7 @@ export struct TodayEatPage {
     }
   }
   private async choose(card: FoodCard): Promise<void> {
-    if (this.busy || this.closed) return;
-    const generation: number = this.generation;
-    this.busy = true;
-    try {
-      if (this.choice === undefined || this.choice.cardId !== card.id) {
-        const request: MealChoiceRequest = { requestId: util.generateRandomUUID(), cardId: card.id };
-        this.choice = request;
-      }
-      await this.repo.choose(this.choice);
-      if (!this.current(generation)) return;
-      this.closed = true;
-      this.message = '已选定并记录到选餐历史，可以查看卡片详情。';
-      this.onOpenCard(card);
-    } catch (error) {
-      if (this.current(generation)) this.message = stage47ErrorText(error as Object, '选择未确认，请重试就吃这个。');
-    } finally {
-      if (this.current(generation)) this.busy = false;
-    }
+    await this.preview(card);
   }
   private merchantLabel(card: FoodCard): string {
     const snapshot: string | undefined = card.merchantNameSnapshot;
@@ -188,12 +166,12 @@ export struct TodayEatPage {
     Column({ space: 10 }) {
       Row({ space: 12 }) {
         if (candidate.card.photoUrl.length > 0) {
-          Image(candidate.card.photoUrl).width(88).height(112).objectFit(ImageFit.Cover).borderRadius(12)
+          Image(candidate.card.photoUrl).width(88).height(112).objectFit(ImageFit.Contain).autoResize(true).syncLoad(false).borderRadius(18)
             .accessibilityText(candidate.card.productName + '实拍图')
         } else {
           Text(candidate.card.primaryPhotoLoadFailed === true ? '图片暂不可用' : candidate.card.photoPath.length === 0 ? '暂无实拍图' : '实拍图加载中')
             .width(88).height(112).fontSize(12).textAlign(TextAlign.Center)
-            .fontColor($r('app.color.muted')).backgroundColor($r('app.color.accent_soft')).borderRadius(12)
+            .fontColor($r('app.color.muted')).backgroundColor($r('app.color.accent_soft')).borderRadius(18)
         }
         Column({ space: 6 }) {
           Text(candidate.card.productName).fontSize(17).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'))
@@ -207,21 +185,25 @@ export struct TodayEatPage {
       }.width('100%').alignItems(VerticalAlign.Top)
       Text(candidate.reasons.join(' · ')).fontSize(12).fontColor($r('app.color.muted')).maxLines(2).width('100%')
       Row({ space: 8 }) {
-        Button('查看卡片').attributeModifier(new SecondaryActionStyle()).height(48).layoutWeight(1)
+        Button('查看卡片').attributeModifier(new SecondaryActionStyle()).constraintSize({ minHeight: 48 }).layoutWeight(1)
           .enabled(!this.busy && !this.closed).onClick((): void => { void this.preview(candidate.card); })
-        Button('就吃这个').attributeModifier(new PrimaryActionStyle()).height(48).layoutWeight(1)
+        Button('就吃这个').attributeModifier(new PrimaryActionStyle()).constraintSize({ minHeight: 48 }).layoutWeight(1)
           .enabled(!this.busy && !this.closed).onClick((): void => { void this.choose(candidate.card); })
       }.width('100%')
-    }.width('100%').padding(12).alignItems(HorizontalAlign.Start)
-      .backgroundColor($r('app.color.surface')).borderRadius(18).border({ width: 1, color: $r('app.color.line') })
+    }.width('100%').padding(16).alignItems(HorizontalAlign.Start)
+      .backgroundColor($r('app.color.surface')).borderRadius(24).border({ width: 1, color: $r('app.color.line') })
   }
   build() {
     Scroll() {
       Column({ space: 12 }) {
-        Text('从我的想吃和收藏里选').fontSize(16).fontWeight(FontWeight.Medium).fontColor($r('app.color.ink'))
-        Text(this.message).fontSize(13).lineHeight(20).fontColor($r('app.color.muted')).width('100%')
+        Column({ space: 8 }) {
+          Text('今天吃什么').fontSize(26).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'))
+          Text('把纠结留给食刻').fontSize(15).fontColor($r('app.color.action_text'))
+          Text(this.message).fontSize(13).lineHeight(20).fontColor($r('app.color.muted')).width('100%')
+          Text('从我的想吃和收藏里随机挑选').fontSize(12).fontColor($r('app.color.action_text'))
+        }.width('100%').alignItems(HorizontalAlign.Start).padding(20).backgroundColor($r('app.color.accent_soft')).borderRadius(24)
         Button(this.busy ? '正在推荐…' : this.closed ? '再推荐三张' : '换一批')
-          .attributeModifier(new PrimaryActionStyle()).height(48).width('100%').enabled(!this.busy)
+          .attributeModifier(new PrimaryActionStyle()).constraintSize({ minHeight: 48 }).width('100%').enabled(!this.busy)
           .onClick((): void => { void this.next(); })
         if (this.busy && this.candidates.length === 0) {
           LoadingProgress().width(36).height(36).color($r('app.color.accent_action'))
@@ -229,7 +211,7 @@ export struct TodayEatPage {
         if (!this.closed) {
           ForEach(this.candidates, (candidate: MealCandidate): void => {
             this.candidateCard(candidate)
-          }, (candidate: MealCandidate): string => candidate.card.id + ':' + candidate.card.photoUrl)
+          }, (candidate: MealCandidate): string => candidate.card.id)
         }
       }.width('100%').padding(16).alignItems(HorizontalAlign.Start)
     }.width('100%').height('100%').align(Alignment.TopStart).backgroundColor($r('app.color.canvas'))

@@ -9,6 +9,8 @@ export struct DiscoveryCard {
   @Prop selected: boolean = false;
   @Prop featured: boolean = false;
   @Prop coverScale: number = 1;
+  onCoverFailed: () => void = (): void => {};
+  onRetry: () => void = (): void => {};
   onOpen: () => void = (): void => {};
   private merchantLabel(): string {
     const snapshot: string | undefined = this.card.merchantNameSnapshot;
@@ -29,7 +31,13 @@ export struct DiscoveryCard {
   build() {
     Column({ space: 0 }) {
       ReviewCard({ data: this.reviewData(), featured: this.featured, coverScale: this.coverScale,
+        onCoverFailed: this.onCoverFailed,
+        onCoverDecoded: (cardId: string, _url: string): void => { console.info('[PhotoDisplay] cardId=' + cardId + ' sinceReadMs=' + (Date.now() - (this.card.photos?.[0]?.readAcceptedAt || Date.now()))); },
         onOpen: (_cardId: string): void => this.onOpen() })
+      if (this.card.primaryPhotoLoadFailed === true && this.coverUrl.length === 0) {
+        Button('重试实拍图').height(48).borderRadius(24).backgroundColor($r('app.color.accent_soft')).fontColor($r('app.color.action_text'))
+          .margin({ left: 8, right: 8, top: 8 }).onClick((): void => this.onRetry())
+      }
       if (this.card.visibility === 'FRIENDS') {
         Text('仅好友可见').fontSize(12).fontColor($r('app.color.accent_action')).width('100%')
           .padding({ left: 12, right: 12, bottom: 8 }).onClick((): void => this.onOpen())

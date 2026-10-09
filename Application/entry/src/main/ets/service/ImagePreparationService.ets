@@ -14,6 +14,7 @@ export interface PreparedPhoto {
   height: number;
   byteSize: number;
   mimeType: string;
+  cover?: PreparedPhoto;
 }
 
 export interface ImageDimensions {
@@ -182,8 +183,31 @@ export class ImagePreparationService {
     return preparePhoto(uri, crop);
   }
 
+  static async prepareCover(photo: PreparedPhoto): Promise<PreparedPhoto> {
+    let source: image.ImageSource | undefined = undefined;
+    let pixels: image.PixelMap | undefined = undefined;
+    let packer: image.ImagePacker | undefined = undefined;
+    try {
+      source = image.createImageSource(photo.data);
+      const options: image.DecodingOptions = { desiredSize: scaledSize(photo.width, photo.height, 480) };
+      pixels = await source.createPixelMap(options);
+      const info: image.ImageInfo = await pixels.getImageInfo();
+      packer = image.createImagePacker();
+      const packing: image.PackingOption = { format: 'image/jpeg', quality: 78 };
+      const data: ArrayBuffer = await packer.packToData(pixels, packing);
+      const result: PreparedPhoto = { data, sha256: await sha256(data), width: info.size.width, height: info.size.height, byteSize: data.byteLength, mimeType: 'image/jpeg' };
+      return result;
+    } finally {
+      if (packer !== undefined) try { await packer.release(); } catch (_error) { }
+      if (pixels !== undefined) try { await pixels.release(); } catch (_error) { }
+      if (source !== undefined) try { await source.release(); } catch (_error) { }
+    }
+  }
+
   /** Decoding then JPEG re-encoding strips EXIF/GPS metadata. */
   static async prepareOwnedPhoto(uri: string): Promise<PreparedPhoto> {
-    return preparePhoto(uri, undefined);
+    const photo: PreparedPhoto = await preparePhoto(uri, undefined);
+    photo.cover = await ImagePreparationService.prepareCover(photo);
+    return photo;
   }
 }

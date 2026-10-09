@@ -2,7 +2,7 @@
 
 const { cloud } = require('@hw-agconnect/cloud-server');
 const crypto = require('crypto');
-const { createContentPolicy, policyModels, currentVisibility, accessError } = require('./content-policy');
+const { createContentPolicy, policyModels, currentVisibility, accessError } = require('./shared/content-policy');
 
 const MAX_DISTANCE_KM = 20.0;
 const MAX_PAGE_SIZE = 20;

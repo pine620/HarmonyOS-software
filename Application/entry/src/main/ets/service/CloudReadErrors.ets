@@ -31,6 +31,7 @@ export function cloudReadError(error: Object, operation: string, requestId: stri
   const code: string = detail.code === undefined ? prefix === null ? 'REQUEST_FAILED' : prefix[1] : String(detail.code);
   if (code === '3007009') return new CloudBusinessError('云数据库暂时繁忙，请稍后重试。', code, true, 2000,
     requestId, operation, 'cloud-call');
+  if (['1008210001', '503', 'NETWORK_UNAVAILABLE', 'MEDIA_TIMEOUT'].includes(code)) return new CloudBusinessError(message, code, true, 0, requestId, operation, 'cloud-call');
   if (code !== 'REQUEST_FAILED') return new CloudBusinessError(message, code, false, 0, requestId, operation, 'cloud-call');
   return error instanceof Error ? error : new CloudBusinessError(message, code, false, 0, requestId, operation, 'cloud-call');
 }

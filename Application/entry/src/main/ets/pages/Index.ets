@@ -8,15 +8,15 @@ import { ModerationDetailRequest, LifecycleJobRequest, ReportRoute } from '../mo
 import { CardIdRequest } from '../model/CloudContracts';
 import { PreferenceSetupPage } from './PreferenceSetupPage';
 import { TodayEatPage } from './TodayEatPage';
-import { MealHistoryPageView, DraftsPage } from './SocialDiscoveryPages';
+import { DraftsPage } from './SocialDiscoveryPages';
 import { LocalDraft } from '../model/DraftModels';
 import { PreferenceRepository } from '../repository/PreferenceRepository';
 import { common } from '@kit.AbilityKit';
 import { FoodCard, UserProfile } from '../model/CloudContracts';
 import { AuthService } from '../service/AuthService';
 import { PrivacyStore } from '../service/PrivacyStore';
-import { NearbyPreloadService } from '../service/NearbyPreloadService';
-import { PhotoUploadService } from '../service/PhotoUploadService';
+import { DiscoveryFeedState } from '../service/DiscoveryFeedState';
+import { ImageRepository } from '../service/ImageRepository';
 import { CardRepository } from '../repository/CardRepository';
 import { clearPendingSharedCard } from '../service/CardAppLink';
 import { FriendRepository } from '../repository/FriendRepository';
@@ -89,6 +89,7 @@ struct Index {
   @StorageLink('friendRelationshipRevision') @Watch('onFriendRelationshipChanged') friendRelationshipRevision: number = 0;
   @State showPreferencePrompt: boolean = false;
   @State selectedTab: number = 0;
+  private navigationHomeVisible: boolean = true;
   @State sharedLinkMessage: string = '';
   @StorageLink('pendingSharedCardId') @Watch('onPendingSharedCardChanged') pendingSharedCardId: string = '';
   @StorageLink('pendingSystemEntryRoute') @Watch('onPendingSystemEntryChanged') pendingSystemEntryRoute: string = '';
@@ -145,25 +146,28 @@ struct Index {
     this.loginMessage = '';
   }
 
-  private warmNearby(context: common.UIAbilityContext): void {
-    void NearbyPreloadService.warmIfEligible(context);
-  }
-
+  private restoreBusy: boolean = false;
+  @StorageLink('sessionRestoreMessage') sessionRestoreMessage: string = '';
   private async restoreStartupState(): Promise<void> {
+    if (this.restoreBusy) return;
+    this.restoreBusy = true;
+    const intent: number = AuthService.sessionIntent();
     const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     try {
       this.privacyAccepted = await PrivacyStore.hasConsent(context);
       this.privacyChecked = this.privacyAccepted;
       if (this.privacyAccepted) {
-        this.profile = await AuthService.restore(context, false);
+        const restored: UserProfile | undefined = await AuthService.restore(context, true);
+        if (intent !== AuthService.sessionIntent()) return;
+        this.profile = restored;
         this.loggedIn = this.profile !== undefined;
         if (this.profile !== undefined) {
-          PhotoUploadService.setCacheOwner(this.profile.uid);
-          this.warmNearby(context);
+          ImageRepository.setCacheOwner(this.profile.uid);
           void this.syncPushIfEnabled(context, this.profile.uid);
         }
       }
     } finally {
+      this.restoreBusy = false;
       this.ready = true;
       this.openPendingSharedCard();
       this.openPendingSystemEntry();
@@ -226,8 +230,8 @@ struct Index {
     this.profile = profile;
     this.loggedIn = true;
     this.loginRequested = false;
-    PhotoUploadService.setCacheOwner(profile.uid);
-    NearbyPreloadService.clear();
+    ImageRepository.setCacheOwner(profile.uid);
+    DiscoveryFeedState.clear();
     this.recommendationRevision += 1;
     // Push and service-card registration are opt-in enhancements. They must
     // never delay the post-authentication transition to the home page.
@@ -370,9 +374,9 @@ struct Index {
     clearPendingSharedCard();
     this.sharedLinkMessage = '';
     this.pathStack.clear();
-    NearbyPreloadService.clear();
+    DiscoveryFeedState.clear();
     const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    PhotoUploadService.clearCachedMedia(context);
+    void ImageRepository.clearCachedMedia(context).catch((): void => {});
     this.loggedIn = false;
     this.loginRequested = false;
     this.profile = undefined;
@@ -388,18 +392,9 @@ struct Index {
   private openCard(card: FoodCard): void {
     this.selectedCard = card;
     ContinuationState.showCard(card.id);
-    this.updateServiceCard(card);
     this.pathStack.pushPathByName('card-detail', card);
   }
 
-  private async updateServiceCard(card: FoodCard): Promise<void> {
-    try {
-      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      await ServiceCardStore.publishRecommendation(context, card);
-    } catch (_error) {
-      // Desktop-card refresh is an enhancement and cannot block navigation.
-    }
-  }
 
   private onPendingSharedCardChanged(): void {
     this.openPendingSharedCard();
@@ -590,17 +585,17 @@ struct Index {
   }
 
   private cardPublished(): void {
-    NearbyPreloadService.invalidate();
+    DiscoveryFeedState.clear();
     this.recommendationRevision += 1;
     this.profileRevision += 1;
   }
 
   private onContentMutation(): void {
-    NearbyPreloadService.invalidate();
+    DiscoveryFeedState.clear();
     this.recommendationRevision += 1; this.profileRevision += 1;
   }
 
-  private onFriendRelationshipChanged(): void { NearbyPreloadService.invalidate(); }
+  private onFriendRelationshipChanged(): void { DiscoveryFeedState.clear(); }
 
   private tabPosition(index: number): number {
     return this.loggedIn ? index : index === 4 ? 1 : 0;
@@ -615,6 +610,7 @@ struct Index {
     const safeIndex: number = this.loggedIn
       ? (index >= 0 && index <= 4 ? index : 0) : (index === 4 ? 4 : 0);
     this.selectedTab = safeIndex;
+    AppStorage.setOrCreate('discoveryVisible', this.navigationHomeVisible && safeIndex === 0);
     ContinuationState.showTab(safeIndex);
     if (safeIndex === 2) {
       AppStorage.setOrCreate('socialForegroundRevision',
@@ -727,8 +723,6 @@ struct Index {
     } else if (routeName === 'today-eat') {
       NavDestination() { TodayEatPage({ onOpenCard: (card: FoodCard): void => this.openCard(card) }) }.title('今天吃什么')
 
-    } else if (routeName === 'meal-history') {
-      NavDestination() { MealHistoryPageView({ onOpenCard: (card: FoodCard): void => this.openCard(card) }) }.title('选餐历史')
     } else if (routeName === 'drafts') {
       NavDestination() { DraftsPage({ onRestore: (draft: LocalDraft): void => { this.draftTarget = draft.targetCardId; this.selectedDraftId = draft.draftId; this.pathStack.pushPathByName('restore-draft', null); } }) }.title('草稿箱')
     } else if (routeName === 'restore-draft') {
@@ -1061,6 +1055,12 @@ struct Index {
   @Builder
   private mainTabs() {
     Column({ space: 0 }) {
+      if (!this.loggedIn && this.sessionRestoreMessage.length > 0) {
+        Row({ space: 8 }) {
+          Text(this.sessionRestoreMessage).fontSize(12).fontColor($r('app.color.muted')).layoutWeight(1)
+          Button('重试恢复').height(48).borderRadius(24).fontColor($r('app.color.action_text')).backgroundColor($r('app.color.surface')).onClick((): void => { void this.restoreStartupState(); })
+        }.width('100%').padding({ left: 16, right: 12 }).backgroundColor($r('app.color.accent_soft'))
+      }
       if (this.sharedLinkMessage.length > 0) {
         Row({ space: 10 }) {
           Text(this.sharedLinkMessage).fontSize(12).lineHeight(18).fontColor($r('app.color.warning'))
@@ -1158,6 +1158,7 @@ struct Index {
       Stack({ alignContent: Alignment.Center }) {
         Navigation(this.pathStack) { this.mainTabs() }
           .hideTitleBar(true).navDestination(this.pathMap).mode(NavigationMode.Stack)
+          .onNavBarStateChange((visible: boolean): void => { this.navigationHomeVisible = visible; AppStorage.setOrCreate('discoveryVisible', visible && this.selectedTab === 0); })
           .width('100%').height('100%')
           .onAreaChange((_oldArea: Area, newArea: Area): void => {
             const width: number = Number(newArea.width);
