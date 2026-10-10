@@ -213,7 +213,7 @@ export struct ShareCardPage {
             .width('100%');
           Text('只显示已互相确认的食刻好友').fontSize(13).fontColor($r('app.color.muted')).width('100%');
         }.width('100%').alignItems(HorizontalAlign.Start);
-        if (this.contentAllowed) { this.cardPreview(); } else { Text('正在重新验证卡片，发送暂不可用。'); }
+        if (this.contentAllowed) { this.cardPreview(); } else { Text('正在加载卡片，稍后可发送。'); }
         if (this.status.length > 0) {
           Text(this.status).fontSize(12).lineHeight(18).fontColor($r('app.color.warning')).width('100%')
             .padding(10).backgroundColor($r('app.color.accent_soft')).borderRadius(12);

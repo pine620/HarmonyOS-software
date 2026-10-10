@@ -157,7 +157,7 @@ function createStage3Services(ctx) {
       scope, viewport: scope === 'VIEWPORT' ? viewport(payload.viewport, env) : null, mode: mode(payload.mode), merchantId };
   }
   function sortedQuery(spec, category, phase, at, env) {
-    let q = collection(env, 'FoodCard').query().equalTo('visibility', 'PUBLIC').equalTo('status', 'APPROVED').lessThanOrEqualTo('publishedAt', new Date(at));
+    let q = collection(env, 'FoodCard').query().equalTo('status', 'APPROVED').lessThanOrEqualTo('publishedAt', new Date(at));
     if (spec.mode !== 'ALL') q = q.equalTo('consumptionMode', spec.mode);
     if (category) q = q.equalTo('categoryV2', category);
     if (spec.merchantId) q = q.equalTo('merchantId', spec.merchantId);
@@ -172,7 +172,7 @@ function createStage3Services(ctx) {
   }
   function candidateMatches(row, spec, category, phase, at, publicOnly = true) {
     const published = dateMillis(row.publishedAt);
-    if ((publicOnly && row.visibility !== 'PUBLIC') || row.status !== 'APPROVED' || published === null || published > at ||
+    if (row.status !== 'APPROVED' || published === null || published > at ||
       (spec.mode !== 'ALL' && row.consumptionMode !== spec.mode) || (category && row.categoryV2 !== category) ||
       (spec.merchantId && row.merchantId !== spec.merchantId) ||
       (spec.keyword && !String(row.searchTextNormalized || '').includes(spec.keyword))) return false;

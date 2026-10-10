@@ -3,7 +3,7 @@ const crypto = require('crypto');
 const { buildInfo } = require('./release-info');
 const READ_OPT_VERSION = buildInfo.buildId;
 const READ_STAGES = new Set(['authentication', 'preferences', 'capabilities', 'candidates',
-  'candidate-permissions', 'assembly', 'final-check', 'media-permissions', 'storage', 'cloud-operation']);
+  'content-state', 'assembly', 'final-check', 'storage', 'cloud-operation']);
 function shouldReadMetrics(env, id) {
   const source = env || process.env;
   const enabled = source.SHIKE_READ_METRICS_ENABLED === undefined ? process.env.SHIKE_READ_METRICS_ENABLED : source.SHIKE_READ_METRICS_ENABLED;

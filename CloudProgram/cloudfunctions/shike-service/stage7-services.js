@@ -1,6 +1,6 @@
 'use strict';
 const {dateMillis,currentVisibility}=require('./shared/content-policy');
-const {fail,hash,id,int,token,encode,coordinate,distance,friendsAllowed,flag,timestampPage,afterTuple}=require('./stages47-common');
+const {fail,hash,id,int,token,encode,coordinate,distance,flag,timestampPage,afterTuple}=require('./stages47-common');
 function createStage7Services(ctx){
  const {collection,one}=ctx;
  const stamp=row=>hash([row.id,row.ownerUid,Number(row.updatedAt),dateMillis(row.modifiedAt),Number(row.lifecycleGeneration),Number(row.tasteScore),dateMillis(row.publishedAt)]);
@@ -14,7 +14,7 @@ function createStage7Services(ctx){
   if(uid)await ctx.contentPolicy(env).assertAccountActive(uid);
   const readiness=await ctx.stage1().migrationReadiness(env), discovery=await ctx.stage3().capabilities(env,readiness), rankings=await rankingCapability(env,readiness);
   const reactionsEnabled=readiness.reactionCoverageComplete&&flag(env,'SHIKE_REACTION_VERIFIED');
-  return {protocolVersion:2,friendsEnabled:flag(env,'SHIKE_FRIENDS_PUBLISH_VERIFIED'),reactionsEnabled,reactionsReason:!readiness.reactionCoverageComplete?'赞踩历史整理尚未完成':!reactionsEnabled?'赞踩尚未完成上线验证':'',mealEnabled:discovery.searchEnabled,merchantEnabled:discovery.mapEnabled,collectionEnabled:ctx.collections().enabled(env),rankingsEnabled:rankings.enabled,rankingsReason:rankings.reason};
+  return {protocolVersion:2,reactionsEnabled,reactionsReason:!readiness.reactionCoverageComplete?'赞踩历史整理尚未完成':!reactionsEnabled?'赞踩尚未完成上线验证':'',mealEnabled:discovery.searchEnabled,merchantEnabled:discovery.mapEnabled,collectionEnabled:ctx.collections().enabled(env),rankingsEnabled:rankings.enabled,rankingsReason:rankings.reason};
  }
  async function userPage(uid,p,env){
   const target=id(p.userUid);
@@ -27,20 +27,17 @@ function createStage7Services(ctx){
    const page=await timestampPage(collection(env,'FoodCard').query().equalTo('ownerUid',target).equalTo('status','APPROVED').orderByDesc('createdAt'),next,at,Math.min(10,size-cards.length,60-consumed),'id','createdAt');
    const rows=page.rows;next=page.next;consumed+=rows.length;
    const context=await ctx.createCardReadContext(rows,uid,env);
-   const allowed=await ctx.readableCardRows(rows.filter(r=>friendsAllowed(env,r)),uid,env,false,context);
+   const allowed=await ctx.readableCardRows(rows,uid,env,false,context);
    await ctx.preparePrimaryPhotos(context,allowed,env);
    for(const row of allowed){cards.push(ctx.previewCard(row,context,env));sources.push(row);}
   }while(next&&consumed<60&&cards.length<size);
   const fresh=await ctx.finalizeCardReads(cards,sources,uid,env);
-  // Recheck profile-level block after assembly even for an empty homepage.
-  const relation=await ctx.contentPolicy(env).assertProfileReadable(uid,target);
-  const isFriend=uid===target||relation&&relation.status==='ACCEPTED';
   const latest=await one(collection(env,'UserProfile').query().equalTo('uid',target));
   if(!latest||Number(latest.updatedAt)!==Number(profile.updatedAt))throw fail('主页已变化，请刷新。','CURSOR_STALE');
   const view=ctx.profileResponse(latest,env);
-  return {profile:{uid:view.uid,nickname:view.nickname,avatarPath:view.avatarPath,avatarBucket:view.avatarBucket,publishCount:view.publishCount,coverPath:isFriend?view.coverPath||'':'',coverBucket:isFriend?view.coverBucket||'':''},
-   relationshipState:uid===target?'SELF':relation&&relation.status==='ACCEPTED'?'FRIEND':'VISITOR',
-   cards:isFriend?fresh:fresh.filter(card=>card.visibility!=='FRIENDS'),
+  return {profile:{uid:view.uid,nickname:view.nickname,avatarPath:view.avatarPath,avatarBucket:view.avatarBucket,publishCount:view.publishCount,coverPath:view.coverPath||'',coverBucket:view.coverBucket||''},
+   relationshipState:uid===target?'SELF':'VISITOR',
+   cards:fresh,
    nextCursor:next?encode(sig,at,next):''};
  }
  async function rankings(uid,p,env){
@@ -65,7 +62,7 @@ function createStage7Services(ctx){
   for(let start=0;start<rows.length&&cards.length<20;start+=10){
    await ctx.withReadPhase('assembly',async()=>{
     const batch=rows.slice(start,start+10);
-    const candidates=batch.filter(row=>dateMillis(row.publishedAt)!==null&&dateMillis(row.publishedAt)<=at&&(owners?owners.has(row.ownerUid):currentVisibility(row)==='PUBLIC')&&row.merchantId&&friendsAllowed(env,row));
+    const candidates=batch.filter(row=>dateMillis(row.publishedAt)!==null&&dateMillis(row.publishedAt)<=at&&(owners?owners.has(row.ownerUid):currentVisibility(row)==='PUBLIC')&&row.merchantId);
     const context=await ctx.createCardReadContext(candidates,uid,env);
     const readable=await ctx.readableCardRows(candidates,uid,env,!owners,context);
     const merchants=await ctx.readMerchantRowsByIds(readable.map(row=>row.merchantId),env,context);
@@ -101,8 +98,7 @@ function createStage7Services(ctx){
   const current=await one(collection(env,'FoodCard').query().equalTo('id',cardId));if(!current || currentVisibility(current)!=='PUBLIC' || !await ctx.contentPolicy(env).canReadCard('',current) || Number(current.updatedAt)!==Number(row.updatedAt) || dateMillis(current.modifiedAt)!==dateMillis(row.modifiedAt))throw fail('内容已不可访问。','CONTENT_UNAVAILABLE');return result;
  }
  async function publicShareMedia(p,env){const cardId=id(p.cardId);await publicShare({cardId},env);const row=await one(collection(env,'FoodCard').query().equalTo('id',cardId));if(!row || !row.mediaId)throw fail('图片已不可访问。','CONTENT_UNAVAILABLE');const media=await one(collection(env,'CardMedia').query().equalTo('id',row.mediaId));if(!media || media.cardId!==row.id || media.status!=='APPROVED')throw fail('图片已不可访问。','CONTENT_UNAVAILABLE');const response=await ctx.readPublicShareMedia(row,media,env);await publicShare({cardId},env);const current=await one(collection(env,'FoodCard').query().equalTo('id',cardId));if(!current||current.mediaId!==row.mediaId)throw fail('图片已变化，请刷新。','CONTENT_UNAVAILABLE');return response;}
- async function formerGrants(uid,p,env){await ctx.contentPolicy(env).assertAccountActive(uid);return {grants:[],nextCursor:''};}
  async function reaction(uid,p,env){const caps=await capabilities(uid,env);if(!caps.reactionsEnabled)throw fail('赞踩迁移与一致性尚未验证。','FEATURE_NOT_READY');return ctx.stage1().mutateReaction(uid,p,env);}
- return {capabilities,userPage,rankings,publicShare,publicShareMedia,formerGrants,reaction};
+ return {capabilities,userPage,rankings,publicShare,publicShareMedia,reaction};
 }
 module.exports={createStage7Services};

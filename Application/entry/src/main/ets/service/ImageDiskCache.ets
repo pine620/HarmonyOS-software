@@ -59,7 +59,8 @@ export class ImageDiskCache {
   static async find(context: common.Context, mediaId: string, mode: ImageMode, variant: ImageVariant, revisionId: string): Promise<ImageCacheEntry | undefined> {
     const owner: string = ImageDiskCache.owner; await ImageDiskCache.ensure(context);
     if (owner !== ImageDiskCache.owner) return undefined;
-    const entry: ImageCacheEntry | undefined = ImageDiskCache.entries.find((row: ImageCacheEntry): boolean => row.mediaId === mediaId && row.mode === mode && row.requestedVariant === variant && row.revisionId === revisionId);
+    const entry: ImageCacheEntry | undefined = ImageDiskCache.entries.find((row: ImageCacheEntry): boolean => row.mediaId === mediaId && row.mode === mode && row.requestedVariant === variant && row.revisionId === revisionId) ||
+      ImageDiskCache.entries.find((row: ImageCacheEntry): boolean => row.mediaId === mediaId && row.mode === mode && row.descriptor.variant === variant && row.revisionId === revisionId);
     if (entry === undefined) return undefined;
     const path: string = ImageDiskCache.directory(context) + '/' + entry.fileName;
     let file: fileIo.File | undefined = undefined;
@@ -208,8 +209,11 @@ export class ImageDiskCache {
     const owner: string = ImageDiskCache.owner; await ImageDiskCache.ensure(context);
     await ImageDiskCache.enqueue(async (): Promise<void> => {
       if (owner !== ImageDiskCache.owner) return;
-      const removed: Array<ImageCacheEntry> = ImageDiskCache.entries.filter((entry: ImageCacheEntry): boolean => entry.mediaId === mediaId && entry.requestedVariant === variant && entry.mode === mode && entry.revisionId === revisionId);
-      ImageDiskCache.entries = ImageDiskCache.entries.filter((entry: ImageCacheEntry): boolean => !(entry.mediaId === mediaId && entry.requestedVariant === variant && entry.mode === mode && entry.revisionId === revisionId));
+      const removed: Array<ImageCacheEntry> = ImageDiskCache.entries.filter((entry: ImageCacheEntry): boolean => entry.mediaId === mediaId &&
+        (entry.requestedVariant === variant || entry.descriptor.variant === variant) && entry.mode === mode && entry.revisionId === revisionId);
+      const files: Set<string> = new Set<string>(removed.map((entry: ImageCacheEntry): string => entry.fileName));
+      ImageDiskCache.entries = ImageDiskCache.entries.filter((entry: ImageCacheEntry): boolean => !files.has(entry.fileName));
+      for (const fileName of files) ImageDiskCache.verified.delete(ImageDiskCache.directory(context) + '/' + fileName);
       for (const entry of removed) if (!ImageDiskCache.entries.some((value: ImageCacheEntry): boolean => value.fileName === entry.fileName)) try { await fileIo.unlink(ImageDiskCache.directory(context) + '/' + entry.fileName); } catch (_error) { }
       await ImageDiskCache.writeIndex(context, owner);
     });

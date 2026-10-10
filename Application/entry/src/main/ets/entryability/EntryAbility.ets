@@ -40,7 +40,7 @@ export default class EntryAbility extends UIAbility {
     this.captureSystemEntry(want);
   }
 
-  onBackground(): void { AppStorage.setOrCreate('stage47AppActive', false); ReadScheduler.invalidateQueued(); ImageRepository.revokePermissions(); void DraftStore.flushActive().catch((_error: Object): void => {}); }
+  onBackground(): void { AppStorage.setOrCreate('stage47AppActive', false); ReadScheduler.invalidateQueued(); ImageRepository.subscriptionsChanged(); void DraftStore.flushActive().catch((_error: Object): void => {}); }
 
   onForeground(): void {
     AppStorage.setOrCreate('stage47AppActive', true);

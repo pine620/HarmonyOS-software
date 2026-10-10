@@ -195,9 +195,7 @@ export class ShikeService {
   listMerchantRankings(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('list-merchant-rankings', input);
   }
-  listFormerFriendContentGrants(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('list-former-friend-content-grants', input);
-  }
+
   setCardReactionV2(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('set-card-reaction-v2', input);
   }
@@ -306,13 +304,7 @@ export class ShikeService {
     return executeCloudOperation('validate-lifecycle-job', input);
   }
 
-  setCardVisibility(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('set-card-visibility', input);
-  }
 
-  revokeFriendContentAccess(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('revoke-friend-content-access', input);
-  }
 
   processFriendCleanupJob(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('process-friend-cleanup-job', input);

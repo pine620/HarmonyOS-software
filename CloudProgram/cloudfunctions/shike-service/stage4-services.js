@@ -1,7 +1,7 @@
 'use strict';
 const crypto=require('crypto');
 const {dateMillis}=require('./shared/content-policy');
-const {fail,hash,int,version,token,encode,preference,preferenceView,hasPreference,score,friendsAllowed}=require('./stages47-common');
+const {fail,hash,int,version,token,encode,preference,preferenceView,hasPreference,score}=require('./stages47-common');
 function createStage4Services(ctx) {
  const {collection,one,models}=ctx; const model=(name,row)=>Object.assign(new models[name](),row);
  async function get(uid,env) { await ctx.contentPolicy(env).assertAccountActive(uid);return preferenceView(await one(collection(env,'TastePreference').query().equalTo('uid',uid))); }
@@ -28,9 +28,9 @@ function createStage4Services(ctx) {
    const caps=await ctx.stage3().capabilities(env);
    const raw=await ctx.withReadPhase('candidates',()=>collection(env,'FoodCard').query().equalTo('status','APPROVED').lessThanOrEqualTo('createdAt',at).orderByDesc('createdAt').orderByAsc('id').limit(400).get());
    ctx.recordReadCounts({scannedCandidateCount:raw.length});
-   const candidates=raw.filter(r=>{const published=dateMillis(r.publishedAt);return friendsAllowed(env,r) && (!caps.searchEnabled || published!==null && published<=at);});
+   const candidates=raw.filter(r=>{const published=dateMillis(r.publishedAt);return (!caps.searchEnabled || published!==null && published<=at);});
    if(caps.searchEnabled)candidates.sort((a,b)=>dateMillis(b.publishedAt)-dateMillis(a.publishedAt) || a.id.localeCompare(b.id));
-   const readable=await ctx.withReadPhase('candidate-permissions',()=>ctx.readableCardRows(candidates,uid,env,!uid));
+   const readable=await ctx.withReadPhase('content-state',()=>ctx.readableCardRows(candidates,uid,env,!uid));
    ctx.recordReadCounts({eligibleCandidateCount:readable.length});
    let order=readable.map(r=>({id:r.id,explore:false}));
    if(hasPreference(p)){
@@ -57,14 +57,14 @@ function createStage4Services(ctx) {
      for(const entry of entries)fetchedIds.add(entry.id);
      ctx.recordReadCounts({fetchedCandidateCount:fetchedIds.size,consumedCandidateCount:consumed});
      const byId=await ctx.readCardRowsByIds(entries.map(entry=>entry.id),env);
-     const rows=entries.map(entry=>byId.get(entry.id)).filter(row=>row&&friendsAllowed(env,row));
+     const rows=entries.map(entry=>byId.get(entry.id)).filter(row=>row);
      const context=await ctx.createCardReadContext(rows,uid,env);
      const readable=await ctx.readableCardRows(rows,uid,env,!uid,context);
      await ctx.preparePrimaryPhotos(context,readable,env);
      for(const entry of entries){
       if(cards.length===size)break;
       position++;consumed++;const row=byId.get(entry.id);
-      if(!row||!friendsAllowed(env,row))continue;
+      if(!row)continue;
       const card=await ctx.readCardIfAllowed(row,env,0,true,uid,false,1,null,context);
       if(!card)continue;
       cards.push(card);sources.set(card.id,row);

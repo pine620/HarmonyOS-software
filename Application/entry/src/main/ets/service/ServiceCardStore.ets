@@ -276,7 +276,7 @@ export class ServiceCardStore {
   }
 
   static async publishRecommendation(context: common.Context, card: FoodCard): Promise<void> {
-    if (card.visibility === 'FRIENDS' || card.status !== 'APPROVED' || card.id.trim().length === 0) return;
+    if (card.status !== 'APPROVED' || card.id.trim().length === 0) return;
     const generation: number = ++ServiceCardStore.publicationGeneration;
     // Finish all preference operations before an await can invalidate this process's cache.
     const reusable: boolean = ServiceCardStore.writeRecommendation(context, card);

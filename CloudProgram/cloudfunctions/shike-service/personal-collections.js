@@ -1,7 +1,7 @@
 'use strict';
 
 const { dateMillis, currentVisibility } = require('./shared/content-policy');
-const { fail, hash, id, uuid, int, token, encode, flag, friendsAllowed, timestampPage, afterTuple } = require('./stages47-common');
+const { fail, hash, id, uuid, int, token, encode, flag,  timestampPage, afterTuple } = require('./stages47-common');
 const TYPE = 'MIGRATE_PERSONAL_COLLECTION';
 const VERSION = 1;
 const BATCH = 10;
@@ -256,7 +256,7 @@ function createPersonalCollections(ctx) {
     if (!committed) throw fail('操作未保存，请重试。', 'CONFLICT');
     const result = { cardId, kind, active: desired, requestId, contentAvailable: false };
     const card = await one(collection(env, 'FoodCard').query().equalTo('id', cardId));
-    if (!card || !friendsAllowed(env, card) || !await ctx.contentPolicy(env).canReadCard(uid, card)) return result;
+    if (!card || !await ctx.contentPolicy(env).canReadCard(uid, card)) return result;
     const summary = await ctx.stage1().reactionSummary(cardId, uid, env);
     const fresh = await one(collection(env, 'FoodCard').query().equalTo('id', cardId));
     if (!fresh || Number(fresh.updatedAt) !== Number(card.updatedAt) ||
@@ -275,7 +275,7 @@ function createPersonalCollections(ctx) {
   }
   async function assemble(uid, ids, env) {
     const byId = await ctx.readCardRowsByIds(ids, env);
-    const rows = ids.map(key => byId.get(key)).filter(row => row && friendsAllowed(env, row));
+    const rows = ids.map(key => byId.get(key)).filter(row => row);
     const context = await ctx.createCardReadContext(rows, uid, env);
     const readable = await ctx.readableCardRows(rows, uid, env, false, context);
     await ctx.preparePrimaryPhotos(context, readable, env);

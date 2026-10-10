@@ -2,9 +2,10 @@ import { util } from '@kit.ArkTS';
 import { AuthSessionStore } from './AuthSessionStore';
 import { CloudBusinessError, ReadCancelledError, cloudReadError } from './CloudReadErrors';
 
-export type ReadPriority = 'metadata' | 'cover' | 'prefetch';
+export type ReadPriority = 'metadata' | 'cover' | 'secondary' | 'prefetch';
 export interface ReadRequestOptions {
   priority?: ReadPriority;
+  currentPriority?: () => ReadPriority;
   mayContinue?: () => Promise<boolean>;
 }
 
@@ -18,6 +19,7 @@ class ReadJob {
   preferenceRevision: number;
   dataVersion: number;
   priority: ReadPriority;
+  prioritySource: (() => ReadPriority) | undefined;
   attempt: number = 0;
   notBefore: number = 0;
   createdAt: number = Date.now();
@@ -36,7 +38,8 @@ class ReadJob {
     this.dataVersion = dataVersion;
     this.contentRevision = AppStorage.get<number>('accountContentRevision') || 0;
     this.preferenceRevision = AppStorage.get<number>('preferenceRevision') || 0;
-    this.priority = options.priority || 'metadata';
+    this.priority = options.priority || ReadScheduler.defaultPriority(operation);
+    this.prioritySource = options.currentPriority;
     this.addGuard(options);
     this.action = action; this.resolve = resolve; this.reject = reject;
   }
@@ -60,6 +63,8 @@ export class ReadScheduler {
   private static jobs: Map<string, ReadJob> = new Map<string, ReadJob>();
   private static active: number = 0;
   private static imageActive: number = 0;
+  private static metadataActive: number = 0;
+  private static visibleImageWork: number = 0;
   private static nextStartAt: number = 0;
   private static lifecycle: number = 0;
   private static dataVersion: number = 0;
@@ -68,6 +73,18 @@ export class ReadScheduler {
   private static recovering: boolean = false;
   private static successCount: number = 0;
   private static timer: number | undefined = undefined;
+  private static timerAt: number = 0;
+  static defaultPriority(operation: string): ReadPriority {
+    if (ReadScheduler.imageOperation(operation)) return 'cover';
+    return ['get-card-detail', 'get-card-previews', 'list-personalized-recommendations', 'list-nearby-cards',
+      'search-public-cards', 'get-merchant-recommendations'].includes(operation) ? 'metadata' : 'secondary';
+  }
+  static beginImageWork(): void { ReadScheduler.visibleImageWork++; }
+  static endImageWork(): void { ReadScheduler.visibleImageWork = Math.max(0, ReadScheduler.visibleImageWork - 1); ReadScheduler.drain(); }
+  static canPrefetch(): boolean {
+    return !ReadScheduler.recovering && ReadScheduler.visibleImageWork === 0 && ReadScheduler.metadataActive === 0 &&
+      !ReadScheduler.pending.some((job: ReadJob): boolean => job.priority === 'metadata' || job.priority === 'cover');
+  }
   private static imageOperation(operation: string): boolean { return ['image-read-batch', 'get-public-media', 'get-review-media', 'get-revision-media'].includes(operation); }
   static allows(operation: string): boolean { return operation === 'image-read-batch' || /^(get-|list-|search-)/.test(operation); }
   static dataRevision(): number { return ReadScheduler.dataVersion; }
@@ -104,7 +121,7 @@ export class ReadScheduler {
       ReadScheduler.parameters(payload);
     const existing: Promise<object> | undefined = ReadScheduler.inFlight.get(key);
     if (existing !== undefined) {
-      const priority: ReadPriority = options.priority || 'metadata';
+      const priority: ReadPriority = options.priority || ReadScheduler.defaultPriority(operation);
       const job: ReadJob | undefined = ReadScheduler.jobs.get(key);
       if (job !== undefined) {
         job.mergedCount++;
@@ -145,7 +162,7 @@ export class ReadScheduler {
       ReadScheduler.inFlight.delete(key); ReadScheduler.jobs.delete(key);
     }
   }
-  private static rank(priority: ReadPriority): number { return priority === 'metadata' ? 0 : priority === 'cover' ? 1 : 2; }
+  private static rank(priority: ReadPriority): number { return priority === 'metadata' ? 0 : priority === 'cover' ? 1 : priority === 'secondary' ? 2 : 3; }
   private static current(job: ReadJob): boolean {
     return job.session === AuthSessionStore.generation() && job.lifecycle === ReadScheduler.lifecycle &&
       (ReadScheduler.imageOperation(job.operation) || job.dataVersion === ReadScheduler.dataVersion) &&
@@ -160,10 +177,15 @@ export class ReadScheduler {
     // Active calls retain their slots until the actual action has settled.
   }
   private static resume(delay: number): void {
-    if (ReadScheduler.timer !== undefined) return;
+    const wait: number = Math.min(60000, Math.max(1, delay));
+    if (ReadScheduler.timer !== undefined) {
+      if (ReadScheduler.timerAt <= Date.now() + wait) return;
+      clearTimeout(ReadScheduler.timer);
+    }
+    ReadScheduler.timerAt = Date.now() + wait;
     ReadScheduler.timer = setTimeout((): void => {
       ReadScheduler.timer = undefined; ReadScheduler.drain();
-    }, Math.min(60000, Math.max(1, delay)));
+    }, wait);
   }
   static subscriptionsChanged(): void { void ReadScheduler.pruneUnused(); }
   private static async pruneUnused(): Promise<void> {
@@ -175,6 +197,10 @@ export class ReadScheduler {
   }
   private static drain(): void {
     ReadScheduler.pending = ReadScheduler.pending.filter((job: ReadJob): boolean => {
+      if (job.prioritySource !== undefined) job.priority = job.prioritySource();
+      if (job.priority === 'prefetch' && (ReadScheduler.recovering || ReadScheduler.visibleImageWork > 0)) {
+        job.reject(new ReadCancelledError()); return false;
+      }
       if (ReadScheduler.current(job)) return true;
       job.reject(new ReadCancelledError()); return false;
     });
@@ -184,15 +210,29 @@ export class ReadScheduler {
       return;
     }
     const limit: number = ReadScheduler.recovering ? 1 : 2;
-    ReadScheduler.pending.sort((a: ReadJob, b: ReadJob): number => (Date.now() - a.createdAt > 10000 ? 0 : ReadScheduler.rank(a.priority)) - (Date.now() - b.createdAt > 10000 ? 0 : ReadScheduler.rank(b.priority)) || a.createdAt - b.createdAt);
+    ReadScheduler.pending.sort((a: ReadJob, b: ReadJob): number => (a.priority === 'secondary' && Date.now() - a.createdAt >= 10000 ? 0 : ReadScheduler.rank(a.priority)) - (b.priority === 'secondary' && Date.now() - b.createdAt >= 10000 ? 0 : ReadScheduler.rank(b.priority)) || a.createdAt - b.createdAt);
     while (ReadScheduler.active < limit && ReadScheduler.pending.length > 0) {
-      const index: number = ReadScheduler.pending.findIndex((entry: ReadJob): boolean => entry.notBefore <= Date.now() && (!ReadScheduler.imageOperation(entry.operation) || ReadScheduler.imageActive === 0));
-      if (index < 0) { let earliest: number = Number.MAX_SAFE_INTEGER; for (const entry of ReadScheduler.pending) if (entry.notBefore > Date.now()) earliest = Math.min(earliest, entry.notBefore); if (earliest < Number.MAX_SAFE_INTEGER) ReadScheduler.resume(earliest - Date.now()); return; }
+      const foreground: boolean = ReadScheduler.visibleImageWork > 0 || ReadScheduler.metadataActive > 0 || ReadScheduler.imageActive > 0 ||
+        ReadScheduler.pending.some((entry: ReadJob): boolean => entry.priority === 'metadata' || entry.priority === 'cover');
+      const index: number = ReadScheduler.pending.findIndex((entry: ReadJob): boolean => entry.notBefore <= Date.now() &&
+        (!ReadScheduler.imageOperation(entry.operation) || ReadScheduler.imageActive === 0) &&
+        (!foreground || entry.priority === 'metadata' || entry.priority === 'cover' ||
+          entry.priority === 'secondary' && Date.now() - entry.createdAt >= 10000));
+      if (index < 0) {
+        let earliest: number = Number.MAX_SAFE_INTEGER;
+        for (const entry of ReadScheduler.pending) {
+          if (entry.notBefore > Date.now()) earliest = Math.min(earliest, entry.notBefore);
+          if (entry.priority === 'secondary' && entry.createdAt + 10000 > Date.now()) earliest = Math.min(earliest, entry.createdAt + 10000);
+        }
+        if (earliest < Number.MAX_SAFE_INTEGER) ReadScheduler.resume(earliest - Date.now());
+        return;
+      }
       const job: ReadJob | undefined = ReadScheduler.pending.splice(index, 1)[0];
       if (job === undefined) return;
       if (ReadScheduler.recovering && job.priority === 'prefetch') { job.reject(new ReadCancelledError()); continue; }
       ReadScheduler.active++;
       if (ReadScheduler.imageOperation(job.operation)) ReadScheduler.imageActive++;
+      if (job.priority === 'metadata') ReadScheduler.metadataActive++;
       ReadScheduler.nextStartAt = Date.now() + 500;
       void ReadScheduler.run(job);
       if (ReadScheduler.pending.length > 0) ReadScheduler.resume(500);
@@ -201,13 +241,14 @@ export class ReadScheduler {
   }
   private static async run(job: ReadJob): Promise<void> {
     const busyLevel: number = ReadScheduler.busyLevel;
+    const metadataSlot: boolean = job.priority === 'metadata';
     try {
       if (!ReadScheduler.current(job) || !await job.needed()) throw new ReadCancelledError();
       if (!ReadScheduler.current(job)) throw new ReadCancelledError();
       job.attempt++;
       if (job.firstStartedAt === 0) job.firstStartedAt = Date.now();
       console.info('[ReadScheduler] operation=' + job.operation + ' requestId=' + job.requestId + ' event=started attempt=' +
-        job.attempt + ' active=' + ReadScheduler.active + ' limit=' + (ReadScheduler.recovering ? 1 : 2));
+        job.attempt + ' priority=' + job.priority + ' active=' + ReadScheduler.active + ' limit=' + (ReadScheduler.recovering ? 1 : 2));
       const value: object = await job.action(job.requestId, job.attempt);
       if (!ReadScheduler.current(job) || !await job.needed()) throw new ReadCancelledError();
       if (!ReadScheduler.current(job)) throw new ReadCancelledError();
@@ -252,7 +293,9 @@ export class ReadScheduler {
         job.reject(error);
       }
     } finally {
-      ReadScheduler.active--; if (ReadScheduler.imageOperation(job.operation)) ReadScheduler.imageActive--; ReadScheduler.drain();
+      ReadScheduler.active--; if (ReadScheduler.imageOperation(job.operation)) ReadScheduler.imageActive--;
+      if (metadataSlot) ReadScheduler.metadataActive--;
+      ReadScheduler.drain();
     }
   }
 }

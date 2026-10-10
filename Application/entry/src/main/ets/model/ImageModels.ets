@@ -1,6 +1,6 @@
 export type ImageMode = 'PUBLIC' | 'REVIEW' | 'REVISION';
 export type ImageVariant = 'COVER_480' | 'ORIGINAL';
-export type MediaPriority = 'high' | 'normal' | 'low';
+export type MediaPriority = 'high' | 'normal' | 'prefetch' | 'low';
 export type MediaRequestGuard = () => Promise<boolean>;
 export interface ImageDescriptor {
   variant: ImageVariant;

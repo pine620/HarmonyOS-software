@@ -1,6 +1,6 @@
 import { FoodCard, FoodCategoryV2 } from '../model/CloudContracts';
 import { DiscoveryCamera, DiscoveryMode, DiscoveryScope, DiscoverySort, DiscoveryViewport, MapMerchant, PublicCardQuery } from '../model/DiscoveryModels';
-export interface DiscoveryEntry { card: FoodCard; coverUrl: string; allowed: boolean; }
+export interface DiscoveryEntry { card: FoodCard; coverUrl: string; loadedAt: number; }
 export interface PreviousRegion { viewport: DiscoveryViewport; camera: DiscoveryCamera; }
 export interface DiscoverySnapshot {
   owner: string; signature: string; scrollY: number;

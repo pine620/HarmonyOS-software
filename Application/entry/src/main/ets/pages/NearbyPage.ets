@@ -36,7 +36,7 @@ export struct NearbyPage {
     finally { if (this.active && generation === this.generation && session === AuthSessionStore.generation()) this.ready = true; }
   }
   private enqueueCard(card: FoodCard, remote: boolean): void {
-    if (!this.active || card.visibility === 'FRIENDS') return;
+    if (!this.active) return;
     this.pendingCard = card; this.pendingRemote = this.pendingRemote || remote;
     if (!this.publishing) void this.publishCard();
   }

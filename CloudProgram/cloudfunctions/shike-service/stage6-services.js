@@ -1,7 +1,7 @@
 'use strict';
 const crypto=require('crypto');
 const {dateMillis,currentVisibility,isAccountActive}=require('./shared/content-policy');
-const {fail,hash,id,uuid,int,version,token,encode,score,coordinate,distance,friendsAllowed}=require('./stages47-common');
+const {fail,hash,id,uuid,int,version,token,encode,score,coordinate,distance}=require('./stages47-common');
 function createStage6Services(ctx){
  const {collection,one,models}=ctx;const model=(n,r)=>Object.assign(new models[n](),r);
  async function personalCandidates(uid,p,env){
@@ -48,13 +48,13 @@ function createStage6Services(ctx){
      for(const item of batch)fetchedIds.add(item.cardId);
      ctx.recordReadCounts({fetchedCandidateCount:fetchedIds.size,scannedCandidateCount:scanned});
      const byId=await ctx.readCardRowsByIds(batch.map(item=>item.cardId),env);
-     const rows=batch.map(item=>byId.get(item.cardId)).filter(row=>row&&friendsAllowed(env,row));
+     const rows=batch.map(item=>byId.get(item.cardId)).filter(row=>row);
      const context=await ctx.createCardReadContext(rows,uid,env);
      const readable=await ctx.readableCardRows(rows,uid,env,false,context);
      await ctx.preparePrimaryPhotos(context,readable,env);
      for(const item of batch){
       if(output.length===3)break;
-      scanned++;const row=byId.get(item.cardId);if(!row||!friendsAllowed(env,row))continue;
+      scanned++;const row=byId.get(item.cardId);if(!row)continue;
       const card=await ctx.readCardIfAllowed(row,env,0,true,uid,false,1,null,context);if(!card)continue;
       const reasons=[];if(item.wanted)reasons.push('来自我的想吃');if(item.favorite)reasons.push('来自我的收藏');if(item.listIds.length)reasons.push('来自待整理收藏');
       output.push({card,reasons,distanceMeters:null});sources.set(card.id,row);
@@ -94,7 +94,7 @@ function createStage6Services(ctx){
   if(source==='ALL'||source==='PUBLIC_ONLY'){const rows=await collection(env,'FoodCard').query().equalTo('status','APPROVED').orderByDesc('createdAt').orderByAsc('id').limit(300).get();scanned+=rows.length;layers.push({rows:rows.filter(r=>currentVisibility(r)==='PUBLIC'),reason:'来自公开推荐'});}
   const seen=new Set(excluded),output=[];const merchants=new Map();
   for(const layer of layers){const filtered=[];
-   for(const row of layer.rows){if(seen.has(row.id)||!friendsAllowed(env,row)||!ctx.stage3().matchesHardFilters(row,spec,at)||!await ctx.contentPolicy(env).canReadCard(uid,row))continue;
+   for(const row of layer.rows){if(seen.has(row.id)||!ctx.stage3().matchesHardFilters(row,spec,at)||!await ctx.contentPolicy(env).canReadCard(uid,row))continue;
     let meters=null;if(point){if(!merchants.has(row.merchantId))merchants.set(row.merchantId,await one(collection(env,'Merchant').query().equalTo('merchantId',row.merchantId||'')));const merchant=merchants.get(row.merchantId);if(!coordinate(merchant))continue;meters=distance(point.lat,point.lon,merchant);if(meters>point.radius)continue;}
     filtered.push({row,meters});}
    filtered.sort((a,b)=>score(b.row,pref,at).value-score(a.row,pref,at).value || a.row.id.localeCompare(b.row.id));
@@ -103,7 +103,7 @@ function createStage6Services(ctx){
    for(const item of filtered){if(seen.has(item.row.id))continue;if(layer.reason==='来自当前好友推荐'){const relation=await ctx.friendshipBetween(uid,item.row.ownerUid,env);if(!relation||relation.status!=='ACCEPTED')continue;}const card=await ctx.readCardIfAllowed(item.row,env,item.meters===null?0:item.meters/1000,true,uid,false,1);if(!card)continue;seen.add(card.id);output.push({card,reasons:[layer.reason,...score(item.row,pref,at).reasons],distanceMeters:item.meters});if(output.length>=3 || output.filter(x=>x.reasons[0]===layer.reason).length>=quota)break;}
    if(output.length>=3)break;
   }
-  const final=[],sources=[];for(const item of output){const row=await one(collection(env,'FoodCard').query().equalTo('id',item.card.id));if(!row||!friendsAllowed(env,row)||!ctx.stage3().matchesHardFilters(row,spec,at))continue;if(item.reasons[0]==='来自当前好友推荐'){const relation=await ctx.friendshipBetween(uid,row.ownerUid,env);if(!relation||relation.status!=='ACCEPTED')continue;}let meters=null;if(point){const merchant=await one(collection(env,'Merchant').query().equalTo('merchantId',row.merchantId||''));if(!coordinate(merchant))continue;meters=distance(point.lat,point.lon,merchant);if(meters>point.radius)continue;}const card=await ctx.readCardIfAllowed(row,env,meters===null?0:meters/1000,true,uid,false,1);if(card){final.push({card,reasons:[item.reasons[0],...score(row,pref,at).reasons],distanceMeters:meters});sources.push(row);}}
+  const final=[],sources=[];for(const item of output){const row=await one(collection(env,'FoodCard').query().equalTo('id',item.card.id));if(!row||!ctx.stage3().matchesHardFilters(row,spec,at))continue;if(item.reasons[0]==='来自当前好友推荐'){const relation=await ctx.friendshipBetween(uid,row.ownerUid,env);if(!relation||relation.status!=='ACCEPTED')continue;}let meters=null;if(point){const merchant=await one(collection(env,'Merchant').query().equalTo('merchantId',row.merchantId||''));if(!coordinate(merchant))continue;meters=distance(point.lat,point.lon,merchant);if(meters>point.radius)continue;}const card=await ctx.readCardIfAllowed(row,env,meters===null?0:meters/1000,true,uid,false,1);if(card){final.push({card,reasons:[item.reasons[0],...score(row,pref,at).reasons],distanceMeters:meters});sources.push(row);}}
   const readable=await ctx.finalizeCardReads(final.map(x=>x.card),sources,uid,env);const candidates=final.filter(x=>readable.some(c=>c.id===x.card.id));
   return {candidates,coverage:'BOUNDED',scannedCandidateCount:scanned,insufficient:candidates.length<3,sessionExhausted:candidates.length===0};
  }
@@ -122,7 +122,7 @@ function createStage6Services(ctx){
  }
  async function validatedOptions(tx,poll,snapshot,env){const options=await tx.executeQuery(collection(env,'MealPollOption').query().equalTo('pollId',poll.pollId).orderByAsc('optionId').limit(13));const votes=await tx.executeQuery(collection(env,'MealPollVote').query().equalTo('pollId',poll.pollId).limit(21));if(options.length>12||votes.length>20)throw fail('投票超过事务预算。','TRANSACTION_LIMIT');const policy=ctx.transactionPolicy(tx,env,snapshot.profiles);const details=new Map();const invalid=[];
   for(const option of options){let accessible=option.status==='ACTIVE';let row=null;
-   if(accessible && poll.mode==='CARD'){row=await ctx.stage1().txOne(tx,env,'FoodCard','id',option.cardId);accessible=!!row && friendsAllowed(env,row) && (poll.consumptionMode==='ANY'||row.consumptionMode===poll.consumptionMode);if(accessible)for(const member of snapshot.members){if(!await policy.canReadCard(member.memberUid,row)){accessible=false;break;}}}
+   if(accessible && poll.mode==='CARD'){row=await ctx.stage1().txOne(tx,env,'FoodCard','id',option.cardId);accessible=!!row && (poll.consumptionMode==='ANY'||row.consumptionMode===poll.consumptionMode);if(accessible)for(const member of snapshot.members){if(!await policy.canReadCard(member.memberUid,row)){accessible=false;break;}}}
    if(accessible && poll.mode==='MERCHANT'){row=await ctx.stage1().txOne(tx,env,'Merchant','merchantId',option.merchantId);accessible=!!coordinate(row);}
    if(!accessible && option.status==='ACTIVE' && poll.status==='OPEN')invalid.push(model('MealPollOption',{...option,status:'INVALID'}));details.set(option.optionId,{accessible,row});
   }
@@ -145,7 +145,7 @@ function createStage6Services(ctx){
     if(action==='STOP')next.acceptingOptions=false;
     if(action==='ADD'){
      if(!poll.acceptingOptions)throw fail('已停止添加候选。','POLL_CLOSED');if(valid.options.length>=12)throw fail('候选最多 12 个。','INSUFFICIENT_CANDIDATES');const reference=poll.mode==='CARD'?id(p.cardId):id(p.merchantId);const optionId=hash([poll.pollId,poll.mode,reference]);if(valid.options.some(o=>o.optionId===optionId))throw fail('候选已存在。','CONFLICT');let row;
-     if(poll.mode==='CARD'){row=await ctx.stage1().txOne(tx,env,'FoodCard','id',reference);if(!row||!friendsAllowed(env,row))throw fail('候选尚无读取资格。','CONTENT_UNAVAILABLE');if(poll.consumptionMode!=='ANY' && row.consumptionMode!==poll.consumptionMode)throw fail('候选不符合消费方式。');const policy=ctx.transactionPolicy(tx,env,snapshot.profiles);for(const member of snapshot.members)if(!await policy.canReadCard(member.memberUid,row))throw fail('当前全群无法读取此候选。','FORBIDDEN');}
+     if(poll.mode==='CARD'){row=await ctx.stage1().txOne(tx,env,'FoodCard','id',reference);if(!row)throw fail('候选尚无读取资格。','CONTENT_UNAVAILABLE');if(poll.consumptionMode!=='ANY' && row.consumptionMode!==poll.consumptionMode)throw fail('候选不符合消费方式。');const policy=ctx.transactionPolicy(tx,env,snapshot.profiles);for(const member of snapshot.members)if(!await policy.canReadCard(member.memberUid,row))throw fail('当前全群无法读取此候选。','FORBIDDEN');}
      else{const caps=await ctx.stage3().capabilities(env);if(!caps.mapEnabled)throw fail('商家候选需先验证坐标。','FEATURE_NOT_READY');row=await ctx.stage1().txOne(tx,env,'Merchant','merchantId',reference);if(!coordinate(row))throw fail('商家暂不可选。','MERCHANT_NOT_VERIFIED');}
      const added=model('MealPollOption',{pollId:poll.pollId,optionId,addedByUid:uid,cardId:poll.mode==='CARD'?reference:'',merchantId:poll.mode==='MERCHANT'?reference:'',status:'ACTIVE',createdAt:new Date(now)});writes.push(added);valid.options.push(added);valid.details.set(optionId,{accessible:true,row});
     }
@@ -158,7 +158,7 @@ function createStage6Services(ctx){
   }});if(!committed)throw fail('投票冲突，请刷新重试。','CONFLICT');if(deadlineReached)throw fail('截止已到，结果已固化。','POLL_DEADLINE_REACHED');return pollView(uid,output,env);
  }
  async function pollView(uid,data,env){const {poll,valid,snapshot}=data;await ctx.contentPolicy(env).assertAccountActive(uid);const currentMembers=await collection(env,'GroupMember').query().equalTo('groupId',poll.groupId).limit(21).get();if(!currentMembers.some(m=>m.memberUid===uid))throw fail('你已不在此群。','FORBIDDEN');const activeMembers=[];for(const member of currentMembers){const profile=await one(collection(env,'UserProfile').query().equalTo('uid',member.memberUid));if(isAccountActive(profile))activeMembers.push(member);}const counts=poll.status==='CLOSED'?JSON.parse(poll.resultCountsJson||'{}'):{};const liveVotes=valid.validVotes.filter(v=>activeMembers.some(m=>m.memberUid===v.voterUid&&dateMillis(v.updatedAt)>=Number(m.joinedAt||0)));if(poll.status==='OPEN')for(const v of liveVotes)counts[v.optionId]=(counts[v.optionId]||0)+1;const options=[];
-  for(const o of valid.options){const d=valid.details.get(o.optionId);let card=null,merchant=null;if(d.accessible){if(poll.mode==='CARD'){let allReadable=true;const fresh=await one(collection(env,'FoodCard').query().equalTo('id',d.row.id));for(const member of activeMembers)if(!fresh||!await ctx.contentPolicy(env).canReadCard(member.memberUid,fresh)){allReadable=false;break;}if(allReadable&&friendsAllowed(env,fresh)){card=await ctx.readCardIfAllowed(fresh,env,0,true,uid,false,1);if(card){const finalized=await ctx.finalizeCardReads([card],[fresh],uid,env);card=finalized[0]||null;for(const member of activeMembers)if(!await ctx.contentPolicy(env).canReadCard(member.memberUid,fresh)){card=null;break;}}}}else{const fresh=await one(collection(env,'Merchant').query().equalTo('merchantId',d.row.merchantId));if(coordinate(fresh))merchant={merchantId:fresh.merchantId,name:fresh.name,address:fresh.address,latitude:fresh.latitudeE6/1e6,longitude:fresh.longitudeE6/1e6};}}const accessible=!!card||!!merchant;const out={optionId:o.optionId,status:accessible?'ACTIVE':'INVALID',accessible,card,merchant,voteCount:poll.status==='OPEN'&&!accessible?0:Number(counts[o.optionId]||0)};
+  for(const o of valid.options){const d=valid.details.get(o.optionId);let card=null,merchant=null;if(d.accessible){if(poll.mode==='CARD'){let allReadable=true;const fresh=await one(collection(env,'FoodCard').query().equalTo('id',d.row.id));for(const member of activeMembers)if(!fresh||!await ctx.contentPolicy(env).canReadCard(member.memberUid,fresh)){allReadable=false;break;}if(allReadable){card=await ctx.readCardIfAllowed(fresh,env,0,true,uid,false,1);if(card){const finalized=await ctx.finalizeCardReads([card],[fresh],uid,env);card=finalized[0]||null;for(const member of activeMembers)if(!await ctx.contentPolicy(env).canReadCard(member.memberUid,fresh)){card=null;break;}}}}else{const fresh=await one(collection(env,'Merchant').query().equalTo('merchantId',d.row.merchantId));if(coordinate(fresh))merchant={merchantId:fresh.merchantId,name:fresh.name,address:fresh.address,latitude:fresh.latitudeE6/1e6,longitude:fresh.longitudeE6/1e6};}}const accessible=!!card||!!merchant;const out={optionId:o.optionId,status:accessible?'ACTIVE':'INVALID',accessible,card,merchant,voteCount:poll.status==='OPEN'&&!accessible?0:Number(counts[o.optionId]||0)};
    if(poll.visibilityMode==='NAMED'){out.voters=valid.validVotes.filter(v=>v.optionId===o.optionId&&activeMembers.some(m=>m.memberUid===v.voterUid&&dateMillis(v.updatedAt)>=Number(m.joinedAt||0))).map(v=>({uid:v.voterUid,nickname:String((snapshot.profiles.find(r=>r.uid===v.voterUid)||{}).nicknameValue||'群成员')}));}options.push(out);}
   const myVote=(poll.status==='OPEN'?liveVotes:valid.votes).find(v=>v.voterUid===uid);return {poll:{pollId:poll.pollId,groupId:poll.groupId,creatorUid:poll.creatorUid,title:poll.title,mode:poll.mode,visibilityMode:poll.visibilityMode,consumptionMode:poll.consumptionMode,status:poll.status,deadlineAt:dateMillis(poll.deadlineAt),acceptingOptions:poll.acceptingOptions,closeOutcome:poll.closeOutcome||'',closeReason:poll.closeReason||'',winnerOptionId:poll.winnerOptionId||'',winnerResolvedAt:dateMillis(poll.winnerResolvedAt),version:Number(poll.version),serverTime:Date.now()},options,myVote:myVote?myVote.optionId:''};
  }

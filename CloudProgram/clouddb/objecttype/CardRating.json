@@ -1,0 +1,131 @@
+{
+  "objectTypeName": "CardRating",
+  "fields": [
+    {
+      "fieldName": "id",
+      "fieldType": "String",
+      "belongPrimaryKey": true,
+      "notNull": true,
+      "isNeedEncrypt": false,
+      "isSensitive": false
+    },
+    {
+      "fieldName": "cardId",
+      "fieldType": "String",
+      "belongPrimaryKey": false,
+      "notNull": true,
+      "isNeedEncrypt": false,
+      "isSensitive": false,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "raterUid",
+      "fieldType": "String",
+      "belongPrimaryKey": false,
+      "notNull": true,
+      "isNeedEncrypt": false,
+      "isSensitive": false,
+      "defaultValue": ""
+    },
+    {
+      "fieldName": "tasteScoreE1",
+      "fieldType": "Integer",
+      "belongPrimaryKey": false,
+      "notNull": true,
+      "isNeedEncrypt": false,
+      "isSensitive": false,
+      "defaultValue": 0
+    },
+    {
+      "fieldName": "valueScoreE1",
+      "fieldType": "Integer",
+      "belongPrimaryKey": false,
+      "notNull": true,
+      "isNeedEncrypt": false,
+      "isSensitive": false,
+      "defaultValue": 0
+    },
+    {
+      "fieldName": "portionScoreE1",
+      "fieldType": "Integer",
+      "belongPrimaryKey": false,
+      "notNull": true,
+      "isNeedEncrypt": false,
+      "isSensitive": false,
+      "defaultValue": 0
+    },
+    {
+      "fieldName": "repurchaseScoreE1",
+      "fieldType": "Integer",
+      "belongPrimaryKey": false,
+      "notNull": true,
+      "isNeedEncrypt": false,
+      "isSensitive": false,
+      "defaultValue": 0
+    },
+    {
+      "fieldName": "createdAt",
+      "fieldType": "Long",
+      "belongPrimaryKey": false,
+      "notNull": true,
+      "isNeedEncrypt": false,
+      "isSensitive": false,
+      "defaultValue": 0
+    },
+    {
+      "fieldName": "updatedAt",
+      "fieldType": "Long",
+      "belongPrimaryKey": false,
+      "notNull": true,
+      "isNeedEncrypt": false,
+      "isSensitive": false,
+      "defaultValue": 0
+    }
+  ],
+  "indexes": [
+    {
+      "indexName": "cardId",
+      "indexList": [
+        {
+          "fieldName": "cardId",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "raterUid_updatedAt",
+      "indexList": [
+        {
+          "fieldName": "raterUid",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "updatedAt",
+          "sortType": "DESC"
+        }
+      ]
+    }
+  ],
+  "permissions": [
+    {
+      "role": "World",
+      "rights": []
+    },
+    {
+      "role": "Authenticated",
+      "rights": []
+    },
+    {
+      "role": "Creator",
+      "rights": []
+    },
+    {
+      "role": "Administrator",
+      "rights": [
+        "Read",
+        "Upsert",
+        "Delete"
+      ]
+    }
+  ]
+}

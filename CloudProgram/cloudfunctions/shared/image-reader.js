@@ -34,7 +34,7 @@ function normalize(input) {
   });
 }
 
-// Injected boundary makes permission/race/budget contracts user-testable without a cloud account.
+// Injected storage/data boundary keeps the contracts testable without a cloud account.
 function createImageReader(deps) {
   const bytesCache = new Map(), storageInFlight = new Map();
   let cachedBytes = 0;
@@ -79,7 +79,7 @@ function createImageReader(deps) {
     if (missingCards.length) cards.push(...await batchRows('FoodCard', 'id', missingCards, metrics));
     const collection = name => {
       const target = deps.collection(name);
-      // The shared policy uses at most one profile/relationship batch in ordinary mode.
+      // Profile images and private revisions can also query profile state.
       function wrap(query) {
         return new Proxy(query, { get(target, property) {
           if (property === 'get') return async () => {
@@ -94,8 +94,8 @@ function createImageReader(deps) {
       return { query: () => wrap(target.query()) };
     };
     const policy = createContentPolicy(collection, async query => (await query.limit(1).get())[0] || null, { cards, revisions, cardIds: [...cardIds, ...missingCards], revisionIds: items.filter(item => item.mode === 'REVISION').map(item => item.revisionId) });
-    await policy.prepareMediaReads(viewerUid, media);
-    if (viewerUid) await policy.assertAccountActive(viewerUid, true);
+
+    if (viewerUid && items.some(item => item.mode !== 'PUBLIC')) await policy.assertAccountActive(viewerUid, true);
     return { media: new Map(media.map(row => [String(row.id), row])), cards: new Map(cards.map(row => [String(row.id), row])), policy };
   }
   async function allowed(state, viewerUid, item, media, administrator) {
@@ -110,8 +110,9 @@ function createImageReader(deps) {
     function phase(next) { const now = Date.now(); metrics.phaseMs[metrics.phase] = (metrics.phaseMs[metrics.phase] || 0) + now - phaseStarted; metrics.phase = next; phaseStarted = now; }
     let viewerUid = '', outcome = 'error', failure = '';
     try {
-      if (trustedViewer !== undefined) viewerUid = trustedViewer;
-      else if (input.accessToken !== undefined && input.accessToken !== '') {
+      const privateRead = items.some(item => item.mode !== 'PUBLIC');
+      if (privateRead && trustedViewer !== undefined) viewerUid = trustedViewer;
+      else if (privateRead && input.accessToken !== undefined && input.accessToken !== '') {
         if (typeof input.accessToken !== 'string' || input.accessToken.length > 8192) throw accessError('登录凭证无效。', 'AUTH_REQUIRED');
         metrics.authVerify++;
         const providerUid = await deps.verifyToken(input.accessToken);
@@ -121,7 +122,7 @@ function createImageReader(deps) {
         viewerUid = binding ? String(binding.canonicalUid) : providerUid;
       }
       const administrator = !!viewerUid && deps.adminUids.includes(viewerUid);
-      phase('media-permissions');
+      phase('content-state');
       const initial = await authority(viewerUid, items, metrics), results = [], downloaded = [];
       let remaining = COVER_BUDGET, downloadCount = 0;
       for (let index = 0; index < items.length; index++) {
@@ -158,10 +159,10 @@ function createImageReader(deps) {
         Object.assign(result.descriptor, descriptor);
         if (descriptor.sha256 === item.knownSha256 && bytes.length === item.knownByteSize) result.status = 'CACHE_OK';
         else { result.status = 'BYTES'; result.dataBase64 = bytes.toString('base64'); metrics.wireImageBytes += bytes.length; }
-        downloaded.push({ index, media, descriptor });
+        if (item.mode !== 'PUBLIC') downloaded.push({ index, media, descriptor });
         remaining = original ? 0 : remaining - bytes.length;
       }
-      // Final authority is always new after storage/cache-byte access, never a global permission cache.
+      // Only private review/revision reads need a second authorization check.
       if (downloaded.length) {
         phase('final-check');
         const fresh = await authority(viewerUid, downloaded.map(entry => items[entry.index]), metrics);

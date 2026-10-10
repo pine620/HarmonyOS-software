@@ -294,7 +294,7 @@ async function writeApproved(payload, env) {
 
 async function readApproved(payload, env) {
   const key = validKey(payload && payload.key);
-  return require('./shared/image-reader').readLegacy({ ...payload, key, mediaId: mediaIdFromApprovedObjectKey(key) }, env);
+  return require('./shared/image-reader').readLegacy({ ...payload, key, mediaId: mediaIdFromApprovedObjectKey(key), mode: 'PUBLIC', viewerUid: '' }, env);
 }
 async function buildCover(media,env,sourceBytes){
  if(String(env.SHIKE_MEDIA_COVERS_VERIFIED)!=='true')return false;
@@ -415,11 +415,10 @@ async function uploadCardPhoto(input, env) {
 }
 
 async function getPublicMedia(input, env) {
-  if (!input || !input.accessToken) throw accessError('请先恢复登录状态。', 'AUTH_REQUIRED');
   const payload = input && input.payload || {};
   if (String(payload.bucketName || '').trim() !== required(env, 'SHIKE_STORAGE_BUCKET')) throw new Error('图片所属存储实例无效。');
   const key = validKey(payload.cloudPath);
-  return require('./shared/image-reader').readLegacy({ ...payload, key, mediaId: mediaIdFromApprovedObjectKey(key), readRequestId: input.readRequestId }, env, input.accessToken || '');
+  return require('./shared/image-reader').readLegacy({ ...payload, key, mediaId: mediaIdFromApprovedObjectKey(key), mode: 'PUBLIC', viewerUid: '', readRequestId: input && input.readRequestId }, env);
 }
 
 async function runCoverBackfill(env,retryFailed=false){

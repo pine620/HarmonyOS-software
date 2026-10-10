@@ -5,12 +5,13 @@ import {
 } from '../model/NotificationModels';
 import { AuthService } from '../service/AuthService';
 import { CloudGateway } from '../service/CloudGateway';
+import { ReadRequestOptions } from '../service/ReadScheduler';
 
 export class NotificationRepository {
-  async list(context: common.Context, pageToken: string = '', pageSize: number = 20): Promise<NotificationsResponse> {
+  async list(context: common.Context, pageToken: string = '', pageSize: number = 20, options: ReadRequestOptions = {}): Promise<NotificationsResponse> {
     await AuthService.ensureSession(context);
     const request: NotificationPageRequest = { pageToken, pageSize, includeComments: false };
-    return CloudGateway.callAuthenticated<NotificationsResponse>('list-notifications', request);
+    return CloudGateway.callAuthenticated<NotificationsResponse>('list-notifications', request, options);
   }
 
   async markRead(context: common.Context, notificationId: string): Promise<void> {

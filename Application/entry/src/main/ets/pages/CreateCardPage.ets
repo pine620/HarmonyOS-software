@@ -4,8 +4,8 @@ import { common } from '@kit.AbilityKit';
 import { ChoiceActionStyle, DangerActionStyle, FormInputStyle, FormNoteStyle, PrimaryActionStyle, QuietActionStyle, SecondaryActionStyle } from '../common/Stage47Ui';
 import util from '@ohos.util';
 import { CardEditContextResponse, CardPhoto, CardRevisionChanges, CardRevisionView, FoodCard, FoodCategory,
-  FoodCategoryV2, FoodConsumptionMode, FoodVisibility, PrepareCardPhotoRequest, PublishCardRequest,
-  SetCardVisibilityRequest, SubmitCardRevisionRequest } from '../model/CloudContracts';
+  FoodCategoryV2, FoodConsumptionMode, PrepareCardPhotoRequest, PublishCardRequest,
+  SubmitCardRevisionRequest } from '../model/CloudContracts';
 import { CreateUserMerchantRequest, DeliveryPlatform, Merchant, MerchantChoice, ResolveMerchantRequest,
   UpdateUserMerchantRequest } from '../model/MerchantModels';
 import { CATEGORY_V2_OPTIONS, CategoryV2Option, categoryV2FromLegacy, categoryV2Label, formatFenInput,
@@ -19,7 +19,6 @@ import { DeliveryPlatformConfigService } from '../service/DeliveryPlatformConfig
 import { CloudBusinessError, MediaServiceUnavailableError } from '../service/CloudGateway';
 import { ImageRepository } from '../service/ImageRepository';
 import { PhotoUploadService } from '../service/PhotoUploadService';
-import { PublishVisibilityStore } from '../service/PublishVisibilityStore';
 import { ModeFieldCache, ModeFields } from '../service/ModeFieldCache';
 import { AuthService } from '../service/AuthService';
 import { isSafeHttpsSourceLink } from '../service/SafeSourceLink';
@@ -66,8 +65,6 @@ export struct CreateCardPage {
   @State @Watch('onDraftChanged') category: FoodCategory = 'staple';
   @State @Watch('onDraftChanged') categoryV2: FoodCategoryV2 = 'RICE_SET';
   @State @Watch('onDraftChanged') mode: FoodConsumptionMode = 'DELIVERY';
-  @State @Watch('onDraftChanged') cardVisibility: FoodVisibility = 'PUBLIC';
-  @State friendsEnabled: boolean = false;
   @State merchant: Merchant | undefined = undefined;
   @State merchantChoice: MerchantChoice | undefined = undefined;
   @State @Watch('onDraftChanged') merchantName: string = '';
@@ -108,7 +105,6 @@ export struct CreateCardPage {
   private providerEnabled: boolean = false;
   private successMerchant: Merchant | undefined = undefined;
   private successMode: FoodConsumptionMode = 'DELIVERY';
-  private successVisibility: FoodVisibility = 'PUBLIC';
 
   @Prop restoreDraftId: string = '';
   @State draftChoices: Array<LocalDraft> = [];
@@ -131,7 +127,7 @@ export struct CreateCardPage {
     const form: DraftForm = { ownsPhoto: this.ownsPhoto, productName: this.productName, price: this.price, dineInAvg: this.dineInAvg,
       orderTotal: this.orderTotal, deliveryFee: this.deliveryFee, consumedDate: this.consumedDate, sourceLink: this.sourceLink,
       reviewText: this.reviewText, tasteScore: this.tasteScore, category: this.category, categoryV2: this.categoryV2,
-      mode: this.mode, cardVisibility: this.cardVisibility, merchant: this.merchant, merchantChoice: this.merchantChoice,
+      mode: this.mode, merchant: this.merchant, merchantChoice: this.merchantChoice,
       merchantName: this.merchantName, merchantAddress: this.merchantAddress, platformKey: this.platformKey, platformLabel: this.platformLabel,
       moreDeliveryInfo: this.moreDeliveryInfo, historicalShop: this.historicalShop, retainedPhotos: this.retainedPhotos.map((photo: RetainedPhoto): RetainedPhoto => { return { id: photo.id, url: '' }; }),
       uploadedMediaIds: this.uploadedMediaIds.slice(), publicationRequestId: this.publicationRequestId, requestUnconfirmed: this.requestUnconfirmed,
@@ -168,7 +164,7 @@ export struct CreateCardPage {
       const form: DraftForm = restored.draft.form;
       this.productName = form.productName; this.price = form.price; this.dineInAvg = form.dineInAvg; this.orderTotal = form.orderTotal;
       this.deliveryFee = form.deliveryFee; this.consumedDate = form.consumedDate; this.sourceLink = form.sourceLink; this.reviewText = form.reviewText;
-      this.tasteScore = form.tasteScore; this.category = form.category; this.categoryV2 = form.categoryV2; this.mode = form.mode; this.cardVisibility = form.cardVisibility;
+      this.tasteScore = form.tasteScore; this.category = form.category; this.categoryV2 = form.categoryV2; this.mode = form.mode;
       this.merchant = form.merchant; this.merchantChoice = form.merchantChoice; this.merchantName = form.merchantName; this.merchantAddress = form.merchantAddress;
       this.platformKey = form.platformKey; this.platformLabel = form.platformLabel; this.moreDeliveryInfo = form.moreDeliveryInfo; this.historicalShop = form.historicalShop;
       this.retainedPhotos = form.retainedPhotos.map((photo: RetainedPhoto): RetainedPhoto => { return { id: photo.id, url: '' }; }); this.uploadedMediaIds = form.uploadedMediaIds.slice(); this.publicationRequestId = form.publicationRequestId;
@@ -226,12 +222,8 @@ export struct CreateCardPage {
     try {
       const caps = await this.merchantRepository.capabilities(this.context());
       if (!this.stillCurrent(generation)) return;
-      this.friendsEnabled = caps.friendsPublishEnabled; this.providerEnabled = caps.providerVerificationEnabled;
+      this.providerEnabled = caps.providerVerificationEnabled;
       if (this.isEditing()) await this.loadEditContext(generation);
-      else {
-        this.cardVisibility = PublishVisibilityStore.read(this.context(), this.activeUid);
-        if (!this.friendsEnabled) this.cardVisibility = 'PUBLIC';
-      }
       const platforms: Array<DeliveryPlatform> = await DeliveryPlatformConfigService.load();
       if (!this.stillCurrent(generation)) return;
       this.platforms = platforms;
@@ -257,7 +249,6 @@ export struct CreateCardPage {
     this.deliveryFee = formatFenInput(card.deliveryFeeFen); this.consumedDate = dateInput(card.consumedAt);
     this.sourceLink = card.sourceLink; this.reviewText = card.reviewText; this.tasteScore = card.tasteScore;
     this.mode = card.consumptionMode === undefined ? 'UNSPECIFIED' : card.consumptionMode;
-    this.cardVisibility = card.visibility === undefined ? 'PUBLIC' : card.visibility;
     this.categoryV2 = categoryV2FromLegacy(card.category);
     for (const option of CATEGORY_V2_OPTIONS) if (option.key === card.categoryV2) this.categoryV2 = option.key;
     this.platformKey = card.deliveryPlatformKey === undefined ? '' : card.deliveryPlatformKey;
@@ -273,8 +264,7 @@ export struct CreateCardPage {
       if (changes.categoryV2 !== undefined) this.categoryV2 = changes.categoryV2;
       else if (changes.category !== undefined) this.categoryV2 = categoryV2FromLegacy(changes.category);
       if (changes.consumptionMode !== undefined) this.mode = changes.consumptionMode;
-      if (changes.visibility !== undefined) this.cardVisibility = changes.visibility;
-      if (changes.merchantId !== undefined) merchantId = changes.merchantId;
+        if (changes.merchantId !== undefined) merchantId = changes.merchantId;
       this.price = formatFenInput(changes.itemPriceFen === undefined ?
         changes.priceFen !== undefined && changes.priceFen > 0 ? changes.priceFen : null : changes.itemPriceFen);
       this.dineInAvg = formatFenInput(changes.dineInAvgFen);
@@ -409,7 +399,7 @@ export struct CreateCardPage {
     const item: number | null = parseYuanInputToFen(this.price);
     const changes: CardRevisionChanges = { productName: this.productName.trim(), priceFen: item === null ? 0 : item,
       reviewText: this.reviewText.trim(), tasteScore: this.tasteScore, sourceLink: this.sourceLink.trim(),
-      category: legacyCategoryFor(this.categoryV2), categoryV2: this.categoryV2, consumptionMode: this.mode, visibility: this.cardVisibility,
+      category: legacyCategoryFor(this.categoryV2), categoryV2: this.categoryV2, consumptionMode: this.mode, visibility: 'PUBLIC',
       merchantId: this.merchant === undefined ? '' : this.merchant.merchantId, itemPriceFen: item,
       dineInAvgFen: this.mode === 'DINE_IN' ? parseYuanInputToFen(this.dineInAvg) : null,
       orderTotalFen: this.mode === 'DELIVERY' ? parseYuanInputToFen(this.orderTotal) : null,
@@ -424,7 +414,6 @@ export struct CreateCardPage {
     if (!this.isEditing() && this.mode === 'UNSPECIFIED') return '请选择外卖或到店。';
     if (this.reviewText.trim().length > 600) return '点评最多 600 字。';
     if (this.tasteScore < 1 || this.tasteScore > 10) return '请选择 1–10 分。';
-    if (this.cardVisibility === 'FRIENDS' && !this.friendsEnabled && (!this.baseCard || this.baseCard.visibility !== 'FRIENDS')) return '好友发布尚未开放。';
     if (this.sourceLink.trim().length > 0 && !isSafeHttpsSourceLink(this.sourceLink)) return '来源链接需为有效的 HTTPS 地址，不含内嵌账号信息。';
     if (this.retainedPhotos.length + this.preparedPhotos.length < 1) return '请至少添加一张实拍图。';
     if (this.retainedPhotos.length + this.preparedPhotos.length > MAX_CARD_PHOTOS) return '最多六张实拍图。';
@@ -492,7 +481,7 @@ export struct CreateCardPage {
             priceFen: item === null ? 0 : item, priceLabel: '', originalPriceFen: 0, specification: '', shop: this.historicalShop,
             sellingPoints: [], publicOffers: [], reviewText: this.reviewText.trim(), tasteScore: this.tasteScore,
             sourceLink: this.sourceLink.trim(), category: this.category, categoryV2: this.categoryV2, consumptionMode: this.mode,
-            visibility: this.cardVisibility, merchantId: this.merchant === undefined ? '' : this.merchant.merchantId,
+            visibility: 'PUBLIC', merchantId: this.merchant === undefined ? '' : this.merchant.merchantId,
             itemPriceFen: item, dineInAvgFen: this.mode === 'DINE_IN' ? parseYuanInputToFen(this.dineInAvg) : null,
             orderTotalFen: this.mode === 'DELIVERY' ? parseYuanInputToFen(this.orderTotal) : null,
             deliveryFeeFen: this.mode === 'DELIVERY' ? parseYuanInputToFen(this.deliveryFee) : null,
@@ -506,8 +495,7 @@ export struct CreateCardPage {
         const result = await this.repository.publish(this.context(), request);
         if (!this.stillCurrent(generation)) return;
         if (result.status !== 'APPROVED') throw new Error('发布结果需进一步确认。');
-        this.successMerchant = this.merchant; this.successMode = this.mode; this.successVisibility = this.cardVisibility;
-        try { PublishVisibilityStore.save(this.context(), this.activeUid, this.cardVisibility); } catch (_error) { }
+        this.successMerchant = this.merchant; this.successMode = this.mode;
         try { ModeFieldCache.clear(this.context(), this.activeUid, this.editCardId); } catch (_error) { }
         try { await DraftStore.remove(this.context(), this.activeUid, this.draftId); } catch (_error) { this.draftNotice = '发布已确认，本机草稿清理待重试。'; } this.draftReady = false; this.draftDirty = false; this.resetForm(); this.draftId = util.generateRandomUUID(); this.hasPublishedNotice = true;
         this.status = '发布成功，已提交后审。可以继续发布同店菜品。'; this.onPublished();
@@ -517,7 +505,7 @@ export struct CreateCardPage {
       if (error instanceof CloudBusinessError) {
         // A business rejection is a confirmed response. Transport/handler errors
         // remain ambiguous and keep the immutable request for retry.
-        const confirmed: Array<string> = ['CONFLICT', 'VALIDATION_ERROR', 'FRIENDS_VALIDATION_REQUIRED', 'NARROWING_REQUIRED',
+        const confirmed: Array<string> = ['CONFLICT', 'VALIDATION_ERROR', 
           'MERCHANT_NOT_VERIFIED', 'ACCOUNT_INACTIVE', 'CONTENT_ACCESS_DENIED', 'COUNTER_RECONCILIATION_REQUIRED'];
         if (confirmed.includes(error.code)) { this.requestUnconfirmed = false; this.pendingRevision = undefined; this.pendingPublication = undefined; this.publicationRequestId = ''; }
         if (error.code === 'CONFLICT' && this.isEditing()) this.editContextReady = false;
@@ -540,24 +528,6 @@ export struct CreateCardPage {
     } catch (error) { if (this.stillCurrent(generation)) this.status = errorText(error as ErrorDetail); }
     finally { if (this.stillCurrent(generation)) this.publishing = false; }
   }
-  private async narrow(): Promise<void> {
-    const card: FoodCard | undefined = this.baseCard;
-    if (card === undefined || !this.formEnabled() || !this.friendsEnabled) return;
-    this.publishing = true; const generation: number = this.formGeneration;
-    try {
-      const request: SetCardVisibilityRequest = { cardId: card.id, visibility: 'FRIENDS', expectedModifiedAt: card.modifiedAt };
-      await this.editRepository.narrow(this.context(), request);
-      if (!this.stillCurrent(generation)) return;
-      AppStorage.setOrCreate('contentMutationRevision', (AppStorage.get<number>('contentMutationRevision') || 0) + 1);
-      await this.loadEditContext(generation); this.status = '已立即设为仅好友可见；旧编辑不能恢复公开，请在新基准上提交。';
-    } catch (error) {
-      if (this.stillCurrent(generation)) {
-        this.editContextReady = false;
-        this.status = errorText(error as ErrorDetail) + '；请读取最新基准以确认可见范围，表单已保留。';
-      }
-    }
-    finally { if (this.stillCurrent(generation)) this.publishing = false; }
-  }
   private async reloadEditBasis(): Promise<void> {
     if (this.baseCard === undefined) { await this.initialize(); return; }
     const generation: number = this.formGeneration;
@@ -566,17 +536,15 @@ export struct CreateCardPage {
       const response: CardEditContextResponse = await this.editRepository.context(this.context(), this.editCardId);
       if (!this.stillCurrent(generation)) return;
       this.baseCard = response.card; this.currentRevision = response.revision === null ? undefined : response.revision;
-      this.cardVisibility = response.card.visibility === undefined ? 'PUBLIC' : response.card.visibility;
       this.editContextReady = true;
-      this.status = '已读取最新基准并确认当前可见范围；保留了输入和照片，请检查后重新提交。旧图片失效时请重新选择。';
+      this.status = '已读取最新编辑基准；保留了输入和照片，请检查后重新提交。旧图片失效时请重新选择。';
     } catch (error) { if (this.stillCurrent(generation)) this.status = errorText(error as ErrorDetail); }
     finally { if (this.stillCurrent(generation)) this.initializing = false; }
   }
   private continueSameMerchant(): void {
     const merchant: Merchant | undefined = this.successMerchant; const mode: FoodConsumptionMode = this.successMode;
-    const visibility: FoodVisibility = this.successVisibility;
-    this.resetForm(); this.merchant = merchant; this.mode = mode; this.cardVisibility = visibility;
-    this.draftReady = true; this.status = '已继承店铺、消费方式和可见范围；请填写新菜品、价格、照片和评分。';
+    this.resetForm(); this.merchant = merchant; this.mode = mode;
+    this.draftReady = true; this.status = '已继承店铺和消费方式；请填写新菜品、价格、照片和评分。';
   }
   @Builder
   private fieldLabel(title: string, required: boolean = false): void {
@@ -795,28 +763,6 @@ export struct CreateCardPage {
       .border({ width: 1, color: $r('app.color.line') }).enabled(this.formEnabled());
   }
   @Builder
-  private visibilitySection(): void {
-    Column({ space: 10 }) {
-      this.fieldLabel('可见范围');
-      Row({ space: 10 }) {
-        Button(this.cardVisibility === 'PUBLIC' ? '公开 · 已选' : '公开').height(48).layoutWeight(1)
-          .onClick((): void => { this.cardVisibility = 'PUBLIC'; }).attributeModifier(new ChoiceActionStyle(this.cardVisibility === 'PUBLIC'));
-        Button(this.cardVisibility === 'FRIENDS' ? '仅好友 · 已选' : '仅好友').height(48).layoutWeight(1)
-          .enabled(this.friendsEnabled && (!this.isEditing() || this.baseCard === undefined || this.baseCard.visibility === 'FRIENDS'))
-          .onClick((): void => { this.cardVisibility = 'FRIENDS'; }).attributeModifier(new ChoiceActionStyle(this.cardVisibility === 'FRIENDS'));
-      }.width('100%').enabled(this.formEnabled());
-      if (!this.friendsEnabled) { Text('仅好友发布等待权限验收后开放。').fontSize(13).fontColor($r('app.color.muted')); }
-      if (this.isEditing() && this.baseCard !== undefined && this.baseCard.visibility !== 'FRIENDS') {
-        Button('立即设为仅好友可见').height(48).width('100%').enabled(this.friendsEnabled && this.formEnabled())
-          .onClick((): void => { void this.narrow(); }).attributeModifier(new SecondaryActionStyle());
-        Text('立即生效，旧待审编辑失效；其他内容需在新基准上重新编辑。').fontSize(13).lineHeight(19).fontColor($r('app.color.muted'));
-      } else if (this.isEditing() && this.cardVisibility === 'PUBLIC') {
-        Text('扩大为公开需审核，通过前维持当前好友范围。').fontSize(13).fontColor($r('app.color.muted'));
-      }
-    }.width('100%').padding(18).backgroundColor($r('app.color.surface')).borderRadius(24)
-      .border({ width: 1, color: $r('app.color.line') });
-  }
-  @Builder
   private draftPanel() {
     Column({ space: 8 }) {
       Row({ space: 8 }) {
@@ -851,7 +797,7 @@ export struct CreateCardPage {
         this.draftPanel();
         if (this.initializing) {
           LoadingProgress().height(40).width(40).color($r('app.color.accent_action'));
-          Text('正在读取当前权限与编辑状态…').fontSize(13).fontColor($r('app.color.muted'));
+          Text('正在读取编辑状态…').fontSize(13).fontColor($r('app.color.muted'));
         }
         if (this.hasPublishedNotice) {
           Button('继续发布同店菜品').height(52).width('100%').onClick((): void => this.continueSameMerchant()).attributeModifier(new SecondaryActionStyle());
@@ -862,7 +808,7 @@ export struct CreateCardPage {
         }.width('100%').alignItems(HorizontalAlign.Start).padding(20).backgroundColor($r('app.color.accent_soft')).borderRadius(24);
         this.productInfoSection(); this.merchantSection();
         if (this.mode === 'DELIVERY') { this.deliverySection(); }
-        this.reviewSection(); this.photoSection(); this.visibilitySection();
+        this.reviewSection(); this.photoSection(); 
         Text(this.status).fontSize(13).lineHeight(20).fontColor(this.hasPublishedNotice ? $r('app.color.leaf') : $r('app.color.muted'))
           .width('100%').padding(12).backgroundColor($r('app.color.accent_soft')).borderRadius(16);
         if (this.isEditing() && !this.editContextReady && !this.initializing && !this.requestUnconfirmed) {

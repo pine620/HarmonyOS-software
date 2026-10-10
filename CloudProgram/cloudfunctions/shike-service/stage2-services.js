@@ -19,12 +19,6 @@ function createStage2Services(ctx) {
     (await tx.executeQuery(collection(env, name).query().equalTo(field, value).limit(1)))[0] || null;
   const setting = (env, key) => String(env[key] || process.env[key] || '');
   const coordinateSystem = (value) => ['GCJ02', 'WGS84'].includes(value) ? value : 'UNKNOWN';
-  function friendsReady(env) { return setting(env, 'SHIKE_FRIENDS_PUBLISH_VERIFIED') === 'true'; }
-  function requireFriendsGate(visibility, env) {
-    if (visibility === 'FRIENDS' && !friendsReady(env)) {
-      throw accessError('好友内容全入口权限验收完成后才能开放此操作。', 'FRIENDS_VALIDATION_REQUIRED');
-    }
-  }
   function text(value, max, required = false) {
     const result = String(value || '').trim();
     if (result.length > max || (required && result.length === 0)) throw accessError('店铺信息长度无效。', 'VALIDATION_ERROR');
@@ -76,8 +70,7 @@ function createStage2Services(ctx) {
     if (!['DELIVERY', 'DINE_IN'].includes(mode) && !(allowUnspecified && mode === 'UNSPECIFIED')) {
       throw accessError('请选择外卖或到店。', 'VALIDATION_ERROR');
     }
-    const visibility = String(payload.visibility || 'PUBLIC');
-    if (!['PUBLIC', 'FRIENDS'].includes(visibility)) throw accessError('可见范围无效。', 'VALIDATION_ERROR');
+    const visibility = 'PUBLIC';
     const categoryV2 = String(payload.categoryV2 || (allowUnspecified ? LEGACY_TO_V2[payload.category] || 'OTHER' : ''));
     if (!CATEGORIES.includes(categoryV2)) throw accessError('请选择有效的主分类。', 'VALIDATION_ERROR');
     const itemPriceFen = money(payload.itemPriceFen === undefined && allowUnspecified
@@ -321,10 +314,10 @@ function createStage2Services(ctx) {
     if (!committed || !result) throw new Error('店铺审核未保存。');
     return { merchant: merchantView(result) };
   }
-  function capabilities(env) { return { friendsPublishEnabled: friendsReady(env),
+  function capabilities(env) { return {
     pickerCoordinateSystem: coordinateSystem(setting(env, 'SHIKE_MAP_PICKER_COORDINATE_SYSTEM')),
     providerVerificationEnabled: !!setting(env, 'SHIKE_HUAWEI_SITE_API_KEY') && setting(env, 'SHIKE_HUAWEI_POI_VERIFIED') === 'true' }; }
-  return { cardFields, storageFields, requireFriendsGate, prepareCounterTransition, prepareAccountCounterRemoval,
+  return { cardFields, storageFields, prepareCounterTransition, prepareAccountCounterRemoval,
     reconcileMerchantPublicCounters, resolveMerchant, createUserMerchant, updateUserMerchant, getMerchant,
     listModerationMerchants, moderateMerchant, capabilities, normalize, mapEligible };
 }

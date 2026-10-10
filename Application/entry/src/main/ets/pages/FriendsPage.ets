@@ -7,6 +7,9 @@ import { NotificationRepository } from '../repository/NotificationRepository';
 import { NotificationsResponse } from '../model/NotificationModels';
 import { SocialAvatar } from '../components/social/SocialDisplay';
 import { ErrorDetail, errorText } from '../common/ErrorKit';
+import { ReadRequestOptions, ReadScheduler } from '../service/ReadScheduler';
+import { ImageRepository } from '../service/ImageRepository';
+import { SECONDARY_DATA_REUSE_MS } from '../service/ImageReadConfig';
 
 type FriendActionKind = 'REMOVE' | 'BLOCK';
 
@@ -24,6 +27,24 @@ function timeLabel(timestamp: number): string {
 
 @Component
 export struct FriendsPage {
+  @Prop @Watch('onActiveChanged') pageActive: boolean = true;
+  @StorageLink('stage47AppActive') @Watch('onActiveChanged') appActive: boolean = true;
+  private mounted: boolean = false;
+  private active: boolean = false;
+  private readGeneration: number = 0;
+  private lastRefreshedAt: number = 0;
+  private current(generation: number): boolean { return this.active && this.pageActive && this.appActive && generation === this.readGeneration; }
+  private readOptions(generation: number): ReadRequestOptions {
+    return { priority: 'secondary', mayContinue: async (): Promise<boolean> => this.current(generation) };
+  }
+  private onActiveChanged(): void {
+    const active: boolean = this.mounted && this.pageActive && this.appActive;
+    if (active === this.active) return;
+    this.active = active; this.readGeneration++;
+    this.friendsLoading = false; this.conversationsLoading = false; this.groupsLoading = false;
+    if (active) void this.refreshAll(false);
+    else { ReadScheduler.subscriptionsChanged(); ImageRepository.subscriptionsChanged(); }
+  }
   onOpenChat: (friend: SocialUser) => void = (_friend: SocialUser): void => {};
   onOpenProfile: (friend: SocialUser) => void = (_friend: SocialUser): void => {};
   onOpenGroup: (group: GroupConversationSummary) => void = (_group: GroupConversationSummary): void => {};
@@ -63,12 +84,14 @@ export struct FriendsPage {
   private notificationRepository: NotificationRepository = new NotificationRepository();
 
   aboutToAppear(): void {
+    this.mounted = true;
     if (this.requestedFriendSection === 1) {
       this.selectedSection = 1;
       this.requestedFriendSection = 0;
     }
-    this.refreshAll();
+    this.onActiveChanged();
   }
+  aboutToDisappear(): void { this.mounted = false; this.onActiveChanged(); }
 
   private onRequestedFriendSectionChanged(): void {
     if (this.requestedFriendSection === 1) {
@@ -78,11 +101,11 @@ export struct FriendsPage {
   }
 
   private onNotificationForegroundChanged(): void {
-    if (this.notificationForegroundRevision > 0) void this.loadNotificationCount();
+    if (this.active && this.notificationForegroundRevision > 0) void this.loadNotificationCount();
   }
 
   private onSocialForegroundChanged(): void {
-    if (this.socialForegroundRevision > 0) this.refreshAll();
+    if (this.active && this.socialForegroundRevision > 0) void this.refreshAll(false);
   }
 
   private appendUsers(existing: Array<SocialUser>, next: Array<SocialUser>): Array<SocialUser> {
@@ -102,12 +125,14 @@ export struct FriendsPage {
   }
 
   private async loadFriends(reset: boolean): Promise<void> {
-    if (this.friendsLoading || (!reset && this.friendsNextPageToken.length === 0)) return;
+    if (!this.active || this.friendsLoading || (!reset && this.friendsNextPageToken.length === 0)) return;
+    const generation: number = this.readGeneration;
     this.friendsLoading = true;
     this.friendError = '';
     try {
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      const response = await this.repository.listFriends(context, reset ? '' : this.friendsNextPageToken);
+      const response = await this.repository.listFriends(context, reset ? '' : this.friendsNextPageToken, 50, this.readOptions(generation));
+      if (!this.current(generation)) return;
       this.friends = reset ? response.friends : this.appendUsers(this.friends, response.friends);
       this.incomingRequests = reset ? response.incomingRequests
         : this.appendRequests(this.incomingRequests, response.incomingRequests);
@@ -116,59 +141,70 @@ export struct FriendsPage {
       this.blockedUsers = reset ? response.blockedUsers : this.appendUsers(this.blockedUsers, response.blockedUsers);
       this.friendsNextPageToken = response.nextPageToken;
     } catch (error) {
-      this.friendError = `好友与申请加载失败：${errorText(error as ErrorDetail)}`;
+      if (this.current(generation)) this.friendError = `好友与申请加载失败：${errorText(error as ErrorDetail)}`;
     } finally {
-      this.friendsLoading = false;
+      if (generation === this.readGeneration) this.friendsLoading = false;
     }
   }
 
   private async loadConversations(reset: boolean): Promise<void> {
-    if (this.conversationsLoading || (!reset && this.conversationsNextPageToken.length === 0)) return;
+    if (!this.active || this.conversationsLoading || (!reset && this.conversationsNextPageToken.length === 0)) return;
+    const generation: number = this.readGeneration;
     this.conversationsLoading = true;
     this.conversationError = '';
     try {
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      const response = await this.repository.listConversations(context, reset ? '' : this.conversationsNextPageToken);
+      const response = await this.repository.listConversations(context, reset ? '' : this.conversationsNextPageToken, 50, this.readOptions(generation));
+      if (!this.current(generation)) return;
       this.conversations = reset ? response.conversations : this.conversations.concat(response.conversations);
       this.unreadCount = response.unreadCount;
       this.conversationsNextPageToken = response.nextPageToken;
     } catch (error) {
-      this.conversationError = `私信加载失败：${errorText(error as ErrorDetail)}`;
+      if (this.current(generation)) this.conversationError = `私信加载失败：${errorText(error as ErrorDetail)}`;
     } finally {
-      this.conversationsLoading = false;
+      if (generation === this.readGeneration) this.conversationsLoading = false;
     }
   }
 
   private async loadGroups(reset: boolean): Promise<void> {
-    if (this.groupsLoading || (!reset && this.groupsNextPageToken.length === 0)) return;
+    if (!this.active || this.groupsLoading || (!reset && this.groupsNextPageToken.length === 0)) return;
+    const generation: number = this.readGeneration;
     this.groupsLoading = true;
     this.groupError = '';
     try {
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      const response = await this.repository.listGroupConversations(context, reset ? '' : this.groupsNextPageToken);
+      const response = await this.repository.listGroupConversations(context, reset ? '' : this.groupsNextPageToken, 50, this.readOptions(generation));
+      if (!this.current(generation)) return;
       this.groupConversations = reset ? response.groups : this.groupConversations.concat(response.groups);
       this.groupUnreadCount = response.unreadCount;
       this.groupsNextPageToken = response.nextPageToken;
     } catch (error) {
-      this.groupError = `群聊加载失败：${errorText(error as ErrorDetail)}`;
+      if (this.current(generation)) this.groupError = `群聊加载失败：${errorText(error as ErrorDetail)}`;
     } finally {
-      this.groupsLoading = false;
+      if (generation === this.readGeneration) this.groupsLoading = false;
     }
   }
 
   private async loadNotificationCount(): Promise<void> {
+    if (!this.active) return;
+    const generation: number = this.readGeneration;
     try {
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      const response: NotificationsResponse = await this.notificationRepository.list(context, '', 1);
-      this.notificationUnreadCount = response.unreadCount;
+      const response: NotificationsResponse = await this.notificationRepository.list(context, '', 1, this.readOptions(generation));
+      if (this.current(generation)) this.notificationUnreadCount = response.unreadCount;
     } catch (_error) {
       // The inbox remains usable from the button even while the badge cannot refresh.
     }
   }
 
-  private async refreshAll(): Promise<void> {
+  private async refreshAll(force: boolean = true): Promise<void> {
+    if (!this.active || this.friendsLoading || this.conversationsLoading || this.groupsLoading ||
+      !force && Date.now() - this.lastRefreshedAt < SECONDARY_DATA_REUSE_MS) return;
+    const generation: number = this.readGeneration;
     await Promise.all([this.loadFriends(true), this.loadConversations(true), this.loadGroups(true),
       this.loadNotificationCount()]);
+    if (this.current(generation) && this.friendError.length === 0 && this.conversationError.length === 0 && this.groupError.length === 0)
+      this.lastRefreshedAt = Date.now();
   }
 
   private notifyRelationshipChanged(): void {

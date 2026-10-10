@@ -89,7 +89,7 @@ struct Index {
   @StorageLink('friendRelationshipRevision') @Watch('onFriendRelationshipChanged') friendRelationshipRevision: number = 0;
   @State showPreferencePrompt: boolean = false;
   @State selectedTab: number = 0;
-  private navigationHomeVisible: boolean = true;
+  @State navigationHomeVisible: boolean = true;
   @State sharedLinkMessage: string = '';
   @StorageLink('pendingSharedCardId') @Watch('onPendingSharedCardChanged') pendingSharedCardId: string = '';
   @StorageLink('pendingSystemEntryRoute') @Watch('onPendingSystemEntryChanged') pendingSystemEntryRoute: string = '';
@@ -1107,6 +1107,7 @@ struct Index {
           if (this.loggedIn) {
             TabContent() {
               RankingPage({
+                pageActive: this.navigationHomeVisible && this.selectedTab === 1,
                 onOpenCard: (card: FoodCard): void => this.openCard(card),
                 revision: this.recommendationRevision + this.friendRelationshipRevision,
                 onOpenRecommendations: (): void => this.tabsController.changeIndex(this.tabPosition(0))
@@ -1114,6 +1115,7 @@ struct Index {
             }.tabBar(this.bottomTab('榜单', 1))
             TabContent() {
               FriendsPage({
+                pageActive: this.navigationHomeVisible && this.selectedTab === 2,
                 onOpenChat: (friend: SocialUser): void => this.openChat(friend),
                 onOpenProfile: (friend: SocialUser): void => this.openFriendProfile(friend),
                 onOpenGroup: (group: GroupConversationSummary): void => this.openGroupChat(group),

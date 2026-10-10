@@ -271,11 +271,7 @@ function createStage1Services(ctx) {
     if (changes.category !== undefined && changes.categoryV2 === undefined) candidate.categoryV2 = CATEGORY_MAP[changes.category] || 'OTHER';
     const fields = await ctx.stage2().cardFields(candidate, uid, env, read, true);
     Object.assign(candidate, fields);
-    if (currentVisibility(card) !== 'FRIENDS') ctx.stage2().requireFriendsGate(candidate.visibility, env);
     const validated = validateCard(candidate);
-    if (!['PUBLIC', 'FRIENDS'].includes(candidate.visibility)) throw new Error('可见范围无效。');
-    // Narrowing is a separate immediate operation and cannot wait in a revision.
-    if (currentVisibility(card) === 'PUBLIC' && candidate.visibility === 'FRIENDS') throw accessError('请先立即收窄，再刷新编辑基准。', 'NARROWING_REQUIRED');
     return { ...validated, brand: String(candidate.brand || '').slice(0, 80), priceFen: Number(candidate.priceFen || 0),
       priceLabel: String(candidate.priceLabel || '').slice(0, 30), originalPriceFen: Number(candidate.originalPriceFen || 0),
       specification: String(candidate.specification || '').slice(0, 100), shop: String(candidate.shop || '').slice(0, 100),
@@ -288,7 +284,7 @@ function createStage1Services(ctx) {
     const { sellingPointsJson, publicOffersJson, ...fields } = stored;
     return { revisionId: row.revisionId, cardId: row.cardId, authorUid: row.authorUid, status: row.status,
       baseModifiedAt: dateMillis(row.baseModifiedAt), baseLifecycleGeneration: Number(row.baseLifecycleGeneration || 0),
-      changes: { ...fields, sellingPoints: ctx.safeArray(sellingPointsJson), publicOffers: ctx.safeArray(publicOffersJson) },
+      changes: { ...fields, visibility: 'PUBLIC', sellingPoints: ctx.safeArray(sellingPointsJson), publicOffers: ctx.safeArray(publicOffersJson) },
       mediaIds: JSON.parse(row.mediaManifestJson), submittedAt: dateMillis(row.submittedAt),
       reviewedAt: dateMillis(row.reviewedAt), reviewReason: String(row.reviewReason || '') };
   }
@@ -459,7 +455,7 @@ function createStage1Services(ctx) {
       const status = action === 'APPROVE' ? 'APPROVED' : action === 'REJECT' ? 'REJECTED' : 'WITHDRAWN';
       if (action === 'APPROVE') {
         const fields = JSON.parse(revision.payloadJson);
-        // A base check precedes every application, including visibility expansion.
+        // Each edit still validates its content version.
         const updated = model('FoodCard', { ...card, ...fields, ...ctx.stage2().storageFields(appliedFields), schemaVersion: 2,
           migrationSource: 'SERVER', status: 'APPROVED', reviewState: 'APPROVED', reviewReason: '',
           edited: true, publishedAt: new Date(now), modifiedAt: new Date(now), updatedAt: now,
@@ -639,8 +635,6 @@ function createStage1Services(ctx) {
             }
             if (verify) missing = legacy;
             else if (legacy && historical) {
-              const visibility = String(current.visibility || 'PUBLIC');
-              if (visibility !== 'PUBLIC') throw accessError('旧卡片有非公开范围，不能自动推定。', 'INVALID_STATE');
               upsertRows(tx, [model('FoodCard', { ...current, ...derived(current), schemaVersion: 1, migrationSource: 'LEGACY',
                 consumptionMode: 'UNSPECIFIED', visibility: 'PUBLIC', reviewState: current.status === 'APPROVED' ? 'LEGACY_APPROVED' : 'TAKEN_DOWN',
                 publishedAt: new Date(created), modifiedAt: new Date(modified), lifecycleGeneration: generation(current), edited: false })]);

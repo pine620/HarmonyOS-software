@@ -6,7 +6,7 @@ import { CloudBusinessError, ReadCancelledError } from './CloudReadErrors';
 import { AuthSessionStore } from './AuthSessionStore';
 import { ImageDescriptors } from './ImageDescriptors';
 import { IMAGE_TRANSPORT, IMAGE_ALLOW_LEGACY_ON_UNSUPPORTED, ImageTransport } from './ImageReadConfig';
-import { ReadRequestOptions } from './ReadScheduler';
+import { ReadPriority, ReadRequestOptions, ReadScheduler } from './ReadScheduler';
 import { ImageDiskCache } from './ImageDiskCache';
 export { MediaPriority, MediaRequestGuard } from '../model/ImageModels';
 
@@ -85,7 +85,30 @@ export class ImageRepository {
     const mediaId: string = await ImageDiskCache.evictUrl(context, url);
     if (session === AuthSessionStore.generation() && mediaId.length > 0) ImageDescriptors.remove(mediaId);
   }
-  static revokePermissions(): void { ImageDescriptors.revoke(); }
+  static canReuseCover(card: FoodCard): boolean {
+    const id: string = card.photos?.[0]?.id || card.photoPath.split('/').pop()?.replace('.jpg', '') || '';
+    const descriptor: ImageDescriptor | undefined = ImageDescriptors.read(id, 'PUBLIC', 'COVER_480') || ImageDescriptors.read(id, 'PUBLIC', 'ORIGINAL');
+    return descriptor !== undefined && card.photoUrl.length > 0 &&
+      (!card.contentRevision || descriptor.cardRevision === card.contentRevision);
+  }
+  /** Local-only lookup of the current content version. */
+  static async cachedPhotoUrl(context: common.Context, photo: CardPhoto, cover: boolean, cardRevision: string = ''): Promise<string> {
+    const id: string = photo.id || photo.path.split('/').pop()?.replace('.jpg', '') || '';
+    const url: string = await ImageRepository.cachedUrl(context, id, 'PUBLIC', cover ? 'COVER_480' : 'ORIGINAL', '', cardRevision);
+    return cover && url.length === 0 ? ImageRepository.cachedUrl(context, id, 'PUBLIC', 'ORIGINAL', '', cardRevision) : url;
+  }
+  private static async cachedUrl(context: common.Context, mediaId: string, mode: ImageMode, variant: ImageVariant,
+    revisionId: string, cardRevision: string = ''): Promise<string> {
+    const session: number = AuthSessionStore.generation(); const epoch: number = ImageDescriptors.epoch();
+    const permit: ImageDescriptor | undefined = ImageDescriptors.read(mediaId, mode, variant, revisionId);
+    if (permit === undefined || cardRevision.length > 0 && permit.cardRevision !== cardRevision) return '';
+    const cached: ImageCacheEntry | undefined = await ImageDiskCache.find(context, mediaId, mode, variant, revisionId);
+    const current: ImageDescriptor | undefined = ImageDescriptors.read(mediaId, mode, variant, revisionId);
+    if (session !== AuthSessionStore.generation() || epoch !== ImageDescriptors.epoch() || cached === undefined || current === undefined ||
+      current.sha256 !== permit.sha256 || current.cardRevision !== permit.cardRevision || cached.descriptor.sha256 !== current.sha256 ||
+      cached.descriptor.byteSize !== current.byteSize || cached.descriptor.variant !== current.variant) return '';
+    return ImageDiskCache.url(context, cached);
+  }
   static async getDownloadUrl(context: common.Context, bucket: string, path: string, priority: MediaPriority = 'normal', mayContinue?: MediaRequestGuard,
     photo?: CardPhoto, cover: boolean = false, revalidate: boolean = false, readCycle: number = 0): Promise<string> {
     if (bucket.trim().length === 0) return '';
@@ -102,13 +125,38 @@ export class ImageRepository {
   }
   private static async subscribe(context: common.Context, mediaId: string, mode: ImageMode, variant: ImageVariant, revisionId: string,
     priority: MediaPriority, mayContinue: MediaRequestGuard | undefined, force: boolean, bucket: string = '', path: string = '', readCycle: number = 0): Promise<string> {
+    const session: number = AuthSessionStore.generation(); const epoch: number = ImageDescriptors.epoch();
+    const lifecycle: number = ReadScheduler.lifecycleRevision();
+    if (ImageRepository.isForeground(priority)) ReadScheduler.beginImageWork();
+    try { return await ImageRepository.subscribeImage(context, mediaId, mode, variant, revisionId, priority, mayContinue, force, bucket, path, readCycle); }
+    catch (error) {
+      // A queued prefetch can be cancelled just as it becomes visible. Rejoin
+      // once only if this is still the same live foreground subscription.
+      if (error instanceof ReadCancelledError && ImageRepository.isForeground(priority) &&
+        (mayContinue === undefined || await mayContinue()) && session === AuthSessionStore.generation() &&
+        epoch === ImageDescriptors.epoch() && lifecycle === ReadScheduler.lifecycleRevision() && AppStorage.get<boolean>('stage47AppActive') !== false)
+        return await ImageRepository.subscribeImage(context, mediaId, mode, variant, revisionId, priority, mayContinue, force, bucket, path, readCycle);
+      throw error instanceof Error ? error : new Error('图片读取失败。');
+    }
+    finally { if (ImageRepository.isForeground(priority)) ReadScheduler.endImageWork(); }
+  }
+  private static async subscribeImage(context: common.Context, mediaId: string, mode: ImageMode, variant: ImageVariant, revisionId: string,
+    priority: MediaPriority, mayContinue: MediaRequestGuard | undefined, force: boolean, bucket: string, path: string, readCycle: number): Promise<string> {
     const guard: MediaRequestGuard = mayContinue === undefined ? async (): Promise<boolean> => true : mayContinue;
+    const session: number = AuthSessionStore.generation(); const epoch: number = ImageDescriptors.epoch();
     if (!await guard()) throw new ReadCancelledError();
+    if (!force) {
+      const local: string = await ImageRepository.cachedUrl(context, mediaId, mode, variant, revisionId);
+      if (!await guard() || session !== AuthSessionStore.generation() || epoch !== ImageDescriptors.epoch()) throw new ReadCancelledError();
+      if (local.length > 0) { console.info('[ImageCache] event=fast-hit bytes=0'); return local; }
+    }
+    if (!ImageRepository.isForeground(priority) && !ReadScheduler.canPrefetch()) throw new ReadCancelledError();
     if (ImageRepository.unsupported) throw new CloudBusinessError('图片服务尚未启用，请稍后重试。', 'NOT_SUPPORTED');
     const cycle: number = force && readCycle === 0 ? ++ImageRepository.readCycle : readCycle;
     const known: ImageDescriptor | undefined = ImageDescriptors.read(mediaId, mode, variant, revisionId);
     const key: string = ImageDescriptors.key(mediaId, mode, variant, revisionId) + ':' + (known?.sha256 || '') + ':' + cycle + ':' + AuthSessionStore.generation() + ':' + ImageDescriptors.epoch();
     let task: ImageTask | undefined = ImageRepository.tasks.get(key);
+    if (task !== undefined && task.settled) { ImageRepository.tasks.delete(key); task = undefined; }
     if (task === undefined) {
       if (ImageRepository.pending.length >= 32) throw new CloudBusinessError('图片队列已满，请稍后重试。', 'QUEUE_FULL');
       task = new ImageTask(key, mediaId, mode, variant, revisionId, priority, force); task.bucket = bucket; task.path = path; task.readCycle = cycle;
@@ -125,7 +173,8 @@ export class ImageRepository {
     if (!await guard() || task.session !== AuthSessionStore.generation() || task.epoch !== ImageDescriptors.epoch()) throw new ReadCancelledError();
     return result;
   }
-  private static rank(priority: MediaPriority): number { return priority === 'high' ? 0 : priority === 'normal' ? 1 : 2; }
+  private static isForeground(priority: MediaPriority): boolean { return priority === 'high' || priority === 'normal'; }
+  private static rank(priority: MediaPriority): number { return priority === 'high' ? 0 : priority === 'normal' ? 1 : priority === 'prefetch' ? 2 : 3; }
   private static async pump(context: common.Context): Promise<void> {
     if (ImageRepository.running) return;
     ImageRepository.running = true;
@@ -138,12 +187,19 @@ export class ImageRepository {
           }
           ImageRepository.pending = []; break;
         }
-        ImageRepository.pending.sort((a: ImageTask, b: ImageTask): number => (Date.now() - a.createdAt > 10000 ? 0 : ImageRepository.rank(a.priority)) - (Date.now() - b.createdAt > 10000 ? 0 : ImageRepository.rank(b.priority)) || a.createdAt - b.createdAt);
+        ImageRepository.pending.sort((a: ImageTask, b: ImageTask): number => ImageRepository.rank(a.priority) - ImageRepository.rank(b.priority) || a.createdAt - b.createdAt);
         const first: ImageTask | undefined = ImageRepository.pending.shift(); if (first === undefined) break;
         const batch: Array<ImageTask> = [first];
-        if (first.variant === 'COVER_480') {
-          for (const task of ImageRepository.pending.slice()) if (batch.length < 4 && task.variant === 'COVER_480' && task.mode === first.mode && task.session === first.session && task.epoch === first.epoch && !batch.some((entry: ImageTask): boolean => entry.mediaId === task.mediaId && entry.revisionId === task.revisionId)) {
-            batch.push(task); ImageRepository.pending = ImageRepository.pending.filter((item: ImageTask): boolean => item !== task);
+        const firstCover: ImageDescriptor | undefined = ImageDescriptors.read(first.mediaId, first.mode, 'COVER_480', first.revisionId);
+        if (first.variant === 'COVER_480' && firstCover !== undefined && firstCover.variant === 'COVER_480') {
+          let remainingBytes: number = 524288 - firstCover.byteSize;
+          for (const task of ImageRepository.pending.slice()) {
+            const cover: ImageDescriptor | undefined = ImageDescriptors.read(task.mediaId, task.mode, 'COVER_480', task.revisionId);
+            if (batch.length >= 4 || cover === undefined || cover.variant !== 'COVER_480' || cover.byteSize > remainingBytes) continue;
+            if (task.variant === 'COVER_480' && task.mode === first.mode && task.session === first.session && task.epoch === first.epoch && !batch.some((entry: ImageTask): boolean => entry.mediaId === task.mediaId && entry.revisionId === task.revisionId)) {
+              batch.push(task); ImageRepository.pending = ImageRepository.pending.filter((item: ImageTask): boolean => item !== task);
+              remainingBytes -= cover.byteSize;
+            }
           }
         }
         console.info('[ImageRepository] event=batch count=' + batch.length + ' pending=' + ImageRepository.pending.length + ' mode=' + first.mode + ' requestedVariant=' + first.variant);
@@ -164,26 +220,28 @@ export class ImageRepository {
         task.cached = await ImageDiskCache.migrateLegacy(context, task.mediaId, task.mode, task.variant, task.revisionId, task.bucket, task.path, fallback);
       }
       if (!await task.needed()) { task.fail(new ReadCancelledError()); continue; }
+      task.descriptor = ImageDescriptors.read(task.mediaId, task.mode, task.variant, task.revisionId);
       if (!task.force && task.cached !== undefined && task.descriptor !== undefined && task.cached.descriptor.sha256 === task.descriptor.sha256 && task.cached.descriptor.variant === task.descriptor.variant) {
         task.finish(ImageDiskCache.url(context, task.cached)); console.info('[ImageCache] event=hit bytes=0');
       } else needed.push(task);
     }
     if (needed.length === 0) return;
-    await ImageRepository.fetch(context, needed, true);
+    // Ask for all small covers in one bounded response. The server retains its
+    // byte budget and defers missing-cover original fallbacks to single reads.
+    await ImageRepository.fetch(context, needed);
     const rest: Array<ImageTask> = needed.filter((task: ImageTask): boolean => !task.settled);
-    if (rest.length > 0) await ImageRepository.fetch(context, rest, false);
     // A missing rendition is split once into a single-original request.
-    for (const task of rest) if (!task.settled) await ImageRepository.fetch(context, [task], false);
+    for (const task of rest) if (!task.settled) await ImageRepository.fetch(context, [task]);
     for (const task of batch) if (!task.settled) task.fail(new CloudBusinessError('图片暂未就绪，请单张重试。', 'MEDIA_DEFERRED'));
   }
-  private static async fetch(context: common.Context, tasks: Array<ImageTask>, firstOnly: boolean): Promise<void> {
+  private static async fetch(context: common.Context, tasks: Array<ImageTask>): Promise<void> {
     const active: Array<ImageTask> = [];
     for (const task of tasks) if (await task.needed()) active.push(task); else task.fail(new ReadCancelledError());
     if (active.length === 0) return;
-    const items: Array<ImageReadItem> = active.map((task: ImageTask, index: number): ImageReadItem => {
+    const items: Array<ImageReadItem> = active.map((task: ImageTask): ImageReadItem => {
       const item: ImageReadItem = { mediaId: task.mediaId, mode: task.mode, variant: task.variant, revisionId: task.revisionId,
         knownSha256: task.cached === undefined ? '' : task.cached.descriptor.sha256, knownByteSize: task.cached === undefined ? 0 : task.cached.descriptor.byteSize,
-        wantBytes: !firstOnly || index === 0 };
+        wantBytes: true };
       return item;
     });
     // A new display confirmation must not join an RPC admitted before it was hidden/revoked.
@@ -191,9 +249,9 @@ export class ImageRepository {
     for (const task of active) cycle = Math.max(cycle, task.readCycle);
     const request: ImageReadRequest = { protocolVersion: 'image-read-v1', items, readScope: active[0].epoch + ':' + cycle };
     const options: ReadRequestOptions = {
-      priority: active[0].priority === 'low' ? 'prefetch' : 'cover', mayContinue: async (): Promise<boolean> => {
+      priority: ImageRepository.isForeground(active[0].priority) ? 'cover' : 'prefetch', mayContinue: async (): Promise<boolean> => {
         for (const task of active) if (await task.needed()) return true; return false;
-      }
+      }, currentPriority: (): ReadPriority => active.some((task: ImageTask): boolean => ImageRepository.isForeground(task.priority)) ? 'cover' : 'prefetch'
     };
     if (ImageRepository.transport === 'LEGACY') { await ImageRepository.fetchLegacy(context, active); return; }
     let response: ImageBatchResponse;
@@ -236,7 +294,8 @@ export class ImageRepository {
       const payload: LegacyImageRequest = { mediaId: task.mediaId, revisionId: task.revisionId, bucketName: task.bucket, cloudPath: task.path,
         variant: task.variant, knownSha256: task.cached === undefined ? '' : task.cached.descriptor.sha256,
         knownByteSize: task.cached === undefined ? 0 : task.cached.descriptor.byteSize, readScope: task.epoch + ':' + task.readCycle };
-      const options: ReadRequestOptions = { priority: task.priority === 'low' ? 'prefetch' : 'cover', mayContinue: async (): Promise<boolean> => task.needed() };
+      const options: ReadRequestOptions = { priority: ImageRepository.isForeground(task.priority) ? 'cover' : 'prefetch',
+        currentPriority: (): ReadPriority => ImageRepository.isForeground(task.priority) ? 'cover' : 'prefetch', mayContinue: async (): Promise<boolean> => task.needed() };
       try {
         const result: LegacyImageResponse = task.mode === 'PUBLIC' ? await CloudGateway.callPublic<LegacyImageResponse>('get-public-media', payload, options) :
           await CloudGateway.callAuthenticated<LegacyImageResponse>(task.mode === 'REVIEW' ? 'get-review-media' : 'get-revision-media', payload, options);

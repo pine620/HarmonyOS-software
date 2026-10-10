@@ -16,7 +16,6 @@ import { PushNotificationService, PushNotificationStatus } from '../service/Push
 import { ServiceCardRemoteSyncService, ServiceCardRemoteSyncStatus } from '../service/ServiceCardRemoteSyncService';
 import { ErrorDetail, errorText } from '../common/ErrorKit';
 import { ModeFieldCache } from '../service/ModeFieldCache';
-import { PublishVisibilityStore } from '../service/PublishVisibilityStore';
 
 const AVATAR_CROP_VIEWPORT = 240;
 const CLOUD_BUSY_MAX_ATTEMPTS = 3;
@@ -509,7 +508,7 @@ export struct PermissionsPrivacyPage {
               .fontColor($r('app.color.ink')).border({ width: 1, color: $r('app.color.line') })
               .onClick(() => this.showPrivacy = !this.showPrivacy)
             if (this.showPrivacy) {
-              Text('食刻使用 AGC Auth 管理邮箱验证码注册、登录和最近一次重新认证；邮箱原文不写入 UserProfile，食刻也不会收集或保存邮箱密码。华为账号仅作为兼容登录入口，完成邮箱绑定后，业务数据继续使用稳定的食刻账号标识。你可在资料页主动填写昵称并选择头像；头像与实拍图均先在本机重编码、移除 EXIF/GPS，再上传到 AGC 公开路径。发布位置只上传三位小数坐标和行政区，浏览位置不写入云端。好友功能会保存食刻号、好友申请、好友关系、会话未读数，以及你主动发送的文字、HTTPS 链接和卡片标识。好友通知和桌面卡片远程同步默认关闭，分别由你主动开启；相关 Push Token 均会加密保存。远程同步只更新已审核公开推荐摘要，不携带定位、实拍图、好友关系或私信。跨设备接续只传页签、卡片 ID 或好友 ID。移除好友时当前会话从双方页面移除，历史私信进入清理流程；删除好友后仍可作为访客查看公开卡片，好友可见卡片仅限当前好友；拉黑后禁止该账号访问主页、卡片和图片。收藏与想吃分别保存为本人标记，旧清单会合并到收藏，旧私人备注、吃过时间和评分保留。测试阶段的实拍图随卡片直接上架；正式上架前应根据平台要求补充内容审核和 HTTPS 隐私政策地址。')
+              Text('食刻使用 AGC Auth 管理邮箱验证码注册、登录和最近一次重新认证；邮箱原文不写入 UserProfile，食刻也不会收集或保存邮箱密码。华为账号仅作为兼容登录入口，完成邮箱绑定后，业务数据继续使用稳定的食刻账号标识。你可在资料页主动填写昵称并选择头像；头像与实拍图均先在本机重编码、移除 EXIF/GPS，再上传到 AGC 公开路径。发布位置只上传三位小数坐标和行政区，浏览位置不写入云端。好友功能会保存食刻号、好友申请、好友关系、会话未读数，以及你主动发送的文字、HTTPS 链接和卡片标识。好友通知和桌面卡片远程同步默认关闭，分别由你主动开启；相关 Push Token 均会加密保存。远程同步只更新已审核公开推荐摘要，不携带定位、实拍图、好友关系或私信。跨设备接续只传页签、卡片 ID 或好友 ID。移除好友时当前会话从双方页面移除，历史私信进入清理流程；所有已发布卡片和商品实拍图统一公开，删除好友或拉黑不影响公开内容浏览；拉黑仍限制好友互动与私信。收藏与想吃分别保存为本人标记，旧清单会合并到收藏，旧私人备注、吃过时间和评分保留。测试阶段的实拍图随卡片直接上架；正式上架前应根据平台要求补充内容审核和 HTTPS 隐私政策地址。')
                 .fontSize(13).lineHeight(21).fontColor($r('app.color.muted')).width('100%')
                 .padding(14).backgroundColor($r('app.color.canvas')).borderRadius(14)
             }
@@ -689,7 +688,6 @@ export struct ProfileSettingsPage {
           // Account deletion has already succeeded; local history cleanup is best effort.
         }
         try { ModeFieldCache.clearAccount(context, deletedUid); } catch (_error) { }
-        try { PublishVisibilityStore.clearAccount(context, deletedUid); } catch (_error) { }
       }
       this.deleteConfirmationVisible = false;
       this.onSessionEnded(message);

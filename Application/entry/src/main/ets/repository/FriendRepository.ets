@@ -13,17 +13,18 @@ import {
 import { AuthService } from '../service/AuthService';
 import { CloudGateway } from '../service/CloudGateway';
 import { ImageRepository } from '../service/ImageRepository';
+import { ReadRequestOptions } from '../service/ReadScheduler';
 
 export class FriendRepository {
   private removalRequests: Map<string, RemoveFriendRequest> = new Map<string, RemoveFriendRequest>();
 
-  private async resolveUserAvatar(context: common.Context, user: SocialUser): Promise<void> {
+  private async resolveUserAvatar(context: common.Context, user: SocialUser, options: ReadRequestOptions = {}): Promise<void> {
     if (user.avatarPath.length === 0 || user.avatarBucket.length === 0) {
       user.avatarUrl = '';
       return;
     }
     try {
-      user.avatarUrl = await ImageRepository.getDownloadUrl(context, user.avatarBucket, user.avatarPath);
+      user.avatarUrl = await ImageRepository.getDownloadUrl(context, user.avatarBucket, user.avatarPath, 'low', options.mayContinue);
     } catch (_error) {
       user.avatarUrl = '';
     }
@@ -43,9 +44,9 @@ export class FriendRepository {
     if (photos.length > 0) photos[0].url = card.photoUrl;
   }
 
-  private async resolveRequestUsers(context: common.Context, requests: Array<FriendRequestItem>): Promise<void> {
+  private async resolveRequestUsers(context: common.Context, requests: Array<FriendRequestItem>, options: ReadRequestOptions = {}): Promise<void> {
     await Promise.all(requests.map((request: FriendRequestItem): Promise<void> =>
-      this.resolveUserAvatar(context, request.user)));
+      this.resolveUserAvatar(context, request.user, options)));
   }
 
   async search(context: common.Context, keyword: string): Promise<Array<SocialUser>> {
@@ -56,14 +57,14 @@ export class FriendRepository {
     return response.users;
   }
 
-  async listFriends(context: common.Context, pageToken: string = '', pageSize: number = 50): Promise<FriendsResponse> {
+  async listFriends(context: common.Context, pageToken: string = '', pageSize: number = 50, options: ReadRequestOptions = {}): Promise<FriendsResponse> {
     await AuthService.ensureSession(context);
     const request: PageRequest = { pageToken, pageSize };
-    const response = await CloudGateway.callAuthenticated<FriendsResponse>('list-friends', request);
-    await Promise.all(response.friends.map((user: SocialUser): Promise<void> => this.resolveUserAvatar(context, user)));
-    await this.resolveRequestUsers(context, response.incomingRequests);
-    await this.resolveRequestUsers(context, response.outgoingRequests);
-    await Promise.all(response.blockedUsers.map((user: SocialUser): Promise<void> => this.resolveUserAvatar(context, user)));
+    const response = await CloudGateway.callAuthenticated<FriendsResponse>('list-friends', request, options);
+    await Promise.all(response.friends.map((user: SocialUser): Promise<void> => this.resolveUserAvatar(context, user, options)));
+    await this.resolveRequestUsers(context, response.incomingRequests, options);
+    await this.resolveRequestUsers(context, response.outgoingRequests, options);
+    await Promise.all(response.blockedUsers.map((user: SocialUser): Promise<void> => this.resolveUserAvatar(context, user, options)));
     return response;
   }
 
@@ -140,12 +141,12 @@ export class FriendRepository {
     this.removalRequests.delete(key);
   }
 
-  async listConversations(context: common.Context, pageToken: string = '', pageSize: number = 50): Promise<ConversationsResponse> {
+  async listConversations(context: common.Context, pageToken: string = '', pageSize: number = 50, options: ReadRequestOptions = {}): Promise<ConversationsResponse> {
     await AuthService.ensureSession(context);
     const request: PageRequest = { pageToken, pageSize };
-    const response = await CloudGateway.callAuthenticated<ConversationsResponse>('list-conversations', request);
+    const response = await CloudGateway.callAuthenticated<ConversationsResponse>('list-conversations', request, options);
     await Promise.all(response.conversations.map((conversation: ConversationSummary): Promise<void> =>
-      this.resolveUserAvatar(context, conversation.friend)));
+      this.resolveUserAvatar(context, conversation.friend, options)));
     return response;
   }
 
@@ -165,10 +166,10 @@ export class FriendRepository {
     return response.message;
   }
 
-  async listGroupConversations(context: common.Context, pageToken: string = '', pageSize: number = 50): Promise<GroupConversationsResponse> {
+  async listGroupConversations(context: common.Context, pageToken: string = '', pageSize: number = 50, options: ReadRequestOptions = {}): Promise<GroupConversationsResponse> {
     await AuthService.ensureSession(context);
     const request: PageRequest = { pageToken, pageSize };
-    return CloudGateway.callAuthenticated<GroupConversationsResponse>('list-group-conversations', request);
+    return CloudGateway.callAuthenticated<GroupConversationsResponse>('list-group-conversations', request, options);
   }
 
   async createGroupChat(context: common.Context, name: string, memberUids: Array<string>): Promise<CreateGroupChatResponse> {

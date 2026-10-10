@@ -2,7 +2,6 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const crypto = require('node:crypto');
 const {token, encode, withCursorContext, timestampPage, hash} = require('../cloudfunctions/shike-service/stages47-common');
 const {shouldReadMetrics} = require('../cloudfunctions/shared/read-errors');
 const {createContentPolicy} = require('../cloudfunctions/shared/content-policy');
@@ -68,36 +67,27 @@ function policyFixture() {
   return {records, calls, create, card};
 }
 
-test('overlapping policy preparations share pending and negative reads', async () => {
+test('published reads for guests and signed-in viewers perform no profile or friendship query', async () => {
   const fixture = policyFixture(), policy = fixture.create();
-  await Promise.all([policy.prepareCardReads('viewer', [fixture.card]), policy.prepareCardReads('viewer', [fixture.card])]);
-  assert.equal(fixture.calls.UserProfile, 1); assert.equal(fixture.calls.Friendship, 1);
+  assert.equal(await policy.canReadCard('', fixture.card), true);
   assert.equal(await policy.canReadCard('viewer', fixture.card), true);
-  await policy.prepareCardReads('viewer', [fixture.card]);
-  assert.equal(fixture.calls.UserProfile, 1); assert.equal(fixture.calls.Friendship, 1);
+  assert.deepEqual(fixture.calls, {UserProfile: 0, Friendship: 0});
 });
 
-test('fresh final policy observes a block and account deactivation after assembly', async () => {
-  const fixture = policyFixture(), first = fixture.create();
-  assert.equal(await first.canReadCard('viewer', fixture.card), true);
-  const id = crypto.createHash('sha256').update('friend:author:viewer').digest('hex');
-  fixture.records.Friendship = [{id, status: 'BLOCKED'}];
-  assert.equal(await fixture.create().canReadCard('viewer', fixture.card), false);
-  fixture.records.Friendship = [];
-  fixture.records.UserProfile = [{uid: 'viewer', accountStatus: 'ACTIVE'}, {uid: 'author', accountStatus: 'DELETING'}];
-  assert.equal(await fixture.create().canReadCard('viewer', fixture.card), false);
+test('historical FRIENDS cards remain public after removing or blocking a friend', async () => {
+  const fixture = policyFixture(); fixture.card.visibility = 'FRIENDS';
+  fixture.records.Friendship = [{id: 'old-relationship', status: 'BLOCKED'}];
+  assert.equal(await fixture.create().canReadCard('', fixture.card), true);
+  assert.equal(await fixture.create().canReadCard('viewer', fixture.card), true);
+  assert.deepEqual(fixture.calls, {UserProfile: 0, Friendship: 0});
 });
 
-test('overlapping preparations recheck later batches after an await', async () => {
+test('deletion and takedown still remove content independently of friendships', async () => {
   const fixture = policyFixture(), policy = fixture.create();
-  const cards = Array.from({length: 105}, (_, index) => ({...fixture.card, id: 'card-' + index, ownerUid: 'author-' + index}));
-  fixture.records.UserProfile = [{uid: 'viewer', accountStatus: 'ACTIVE'}, ...cards.map(card => ({uid: card.ownerUid, accountStatus: 'ACTIVE'}))];
-  await Promise.all([policy.prepareCardReads('viewer', cards), policy.prepareCardReads('viewer', cards)]);
-  assert.equal(fixture.calls.UserProfile, 3);
-  assert.equal(fixture.calls.Friendship, 3);
-  assert.equal(await policy.canReadCard('viewer', cards[104]), true);
-  await policy.prepareCardReads('viewer', cards);
-  assert.equal(fixture.calls.UserProfile, 3); assert.equal(fixture.calls.Friendship, 3);
+  assert.equal(await policy.canReadCard('', {...fixture.card, deletedAt: new Date()}), false);
+  assert.equal(await policy.canReadCard('', {...fixture.card, reviewState: 'TAKEN_DOWN'}), false);
+  assert.equal(await policy.canReadCard('', {...fixture.card, status: 'REMOVED'}), false);
+  assert.deepEqual(fixture.calls, {UserProfile: 0, Friendship: 0});
 });
 
 test('timestamp continuation survives deletion before the frontier and equal timestamps', async () => {

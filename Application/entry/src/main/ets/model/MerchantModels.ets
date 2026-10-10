@@ -51,7 +51,6 @@ export interface UpdateUserMerchantRequest extends CreateUserMerchantRequest {
 export interface MerchantIdRequest { merchantId: string; }
 export interface MerchantResponse { merchant: Merchant; alreadyProcessed?: boolean; }
 export interface Stage2Capabilities {
-  friendsPublishEnabled: boolean;
   pickerCoordinateSystem: MerchantCoordinateSystem;
   providerVerificationEnabled: boolean;
 }

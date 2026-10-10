@@ -25,7 +25,6 @@ export struct DiscoveryCard {
       this.card.primaryPhotoLoadFailed !== true && this.card.photoPath.length > 0;
     data.coverFailed = this.coverUrl.length === 0 && this.card.primaryPhotoLoadFailed === true;
     data.shop = this.merchantLabel();
-    if (this.card.visibility === 'FRIENDS') data.evidenceLabel = '好友可见';
     return data;
   }
   build() {
@@ -37,10 +36,6 @@ export struct DiscoveryCard {
       if (this.card.primaryPhotoLoadFailed === true && this.coverUrl.length === 0) {
         Button('重试实拍图').height(48).borderRadius(24).backgroundColor($r('app.color.accent_soft')).fontColor($r('app.color.action_text'))
           .margin({ left: 8, right: 8, top: 8 }).onClick((): void => this.onRetry())
-      }
-      if (this.card.visibility === 'FRIENDS') {
-        Text('仅好友可见').fontSize(12).fontColor($r('app.color.accent_action')).width('100%')
-          .padding({ left: 12, right: 12, bottom: 8 }).onClick((): void => this.onOpen())
       }
       if (this.card.recommendationReasons !== undefined && this.card.recommendationReasons.length > 0) {
         Text(this.card.recommendationReasons.join(' · ')).fontSize(12).lineHeight(18)

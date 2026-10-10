@@ -65,17 +65,22 @@ test('disabled image reads remain disabled before parsing or I/O', async () => {
   assert.equal(response.code, 'NOT_SUPPORTED'); assert.equal(f.calls.length, 0);
 });
 
-test('wrapped invalid tokens still reach authentication and cannot become anonymous', async () => {
+test('wrapped private image requests reject invalid tokens before database or storage reads', async () => {
   let verified = 0;
   const reader = createImageReader({ verifyToken: async token => {
     verified++; assert.equal(token, request().accessToken);
     throw Object.assign(new Error('invalid token'), { code: 'AUTH_REQUIRED' });
   }, collection: () => { throw new Error('DB must not run'); }, download: () => { throw new Error('Storage must not run'); } });
   const f = fixture(input => reader.readBatch(input));
-  const response = await f.handler({ body: JSON.stringify(request()) });
-  assert.equal(response.code, 'AUTH_REQUIRED'); assert.equal(verified, 1);
-  assert.equal(response.requestId, request().readRequestId);
-  assert.ok(!f.logs.join('').includes(request().accessToken));
+  for (const mode of ['REVIEW', 'REVISION']) {
+    const input = request(); input.items[0].mode = mode;
+    input.items[0].revisionId = mode === 'REVISION' ? 'revision-1' : '';
+    const response = await f.handler({ body: JSON.stringify(input) });
+    assert.equal(response.code, 'AUTH_REQUIRED');
+    assert.equal(response.requestId, input.readRequestId);
+    assert.ok(!f.logs.join('').includes(input.accessToken));
+  }
+  assert.equal(verified, 2);
 });
 
 test('wrapped batches still enforce protocol and item limits before authentication', async () => {
@@ -89,7 +94,7 @@ test('wrapped batches still enforce protocol and item limits before authenticati
   }
 });
 
-test('HTTP body passes the real reader and returns verified bytes for a readable photo', async () => {
+test('wrapped public image requests return verified bytes without validating a stale token', async () => {
   const input = request(), jpeg = Buffer.from([255, 216, 255, 224, 255, 217]);
   const rows = {
     IdentityBinding: [], Friendship: [], FoodCardRevision: [],
@@ -99,9 +104,9 @@ test('HTTP body passes the real reader and returns verified bytes for a readable
     FoodCard: [{ id: 'card-1', ownerUid: 'author', status: 'APPROVED', schemaVersion: 0, updatedAt: 1 }],
     UserProfile: [{ uid: 'author', accountStatus: 'ACTIVE' }, { uid: 'viewer', accountStatus: 'ACTIVE' }]
   };
-  let downloads = 0;
-  const reader = createImageReader({ adminUids: [], verifyToken: async token => {
-    assert.equal(token, input.accessToken); return 'viewer';
+  let downloads = 0, verified = 0;
+  const reader = createImageReader({ adminUids: [], verifyToken: async () => {
+    verified++; throw Object.assign(new Error('stale public token'), { code: 'AUTH_REQUIRED' });
   }, collection: name => ({ query: () => {
     const filters = []; let size = 100;
     const query = {
@@ -118,4 +123,5 @@ test('HTTP body passes the real reader and returns verified bytes for a readable
   assert.equal(response.data.items[0].status, 'BYTES');
   assert.deepEqual(Buffer.from(response.data.items[0].dataBase64, 'base64'), jpeg);
   assert.equal(downloads, 1);
+  assert.equal(verified, 0);
 });

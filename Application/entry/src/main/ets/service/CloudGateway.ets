@@ -1,6 +1,7 @@
 import { bundleManager } from '@kit.AbilityKit';
 import { ImageDescriptors } from './ImageDescriptors';
-import { ImageReadRequest } from '../model/ImageModels';
+import { ImageReadItem, ImageReadRequest } from '../model/ImageModels';
+import { CardDetailRequest } from '../model/CloudContracts';
 import { cloudCommon, cloudFunction } from '@kit.CloudFoundationKit';
 import { importObject, ShikeAuth, ShikeLocation, ShikeMedia, ShikeService } from '@shike/cloud-objects';
 import type { CloudEnvelope } from '@shike/cloud-objects';
@@ -19,7 +20,7 @@ type Stage47ServiceMethod = 'getStage47Capabilities' | 'getTastePreference' | 'u
   'reorderFoodListItems' | 'getPersonalFoodState' | 'updatePersonalFoodState' | 'getMealCandidates' |
   'createMealPoll' | 'getMealPoll' | 'addMealPollOption' |
   'voteMealPoll' | 'closeMealPoll' | 'cancelMealPoll' | 'stopMealPollOptions' | 'getUserPage' |
-  'listMerchantRankings' | 'listFormerFriendContentGrants' | 'setCardReactionV2' |
+  'listMerchantRankings' | 'setCardReactionV2' |
   'getCardPreviews' | 'listPersonalCollection' | 'getPersonalCollectionMigration' |
   'startPersonalCollectionMigration' | 'resumePersonalCollectionMigration' | 'setCardFavorite' | 'setCardWanted' | 'getStage89Capabilities' | 'listModerationQueue' | 'getModerationDetail' | 'decideModeration' | 'listMyReports' | 'reportMerchant' | 'listOwnReviewRequests' | 'listDeletedCards' | 'restoreDeletedCard' | 'listLifecycleJobs' | 'getLifecycleJob' | 'retryLifecycleJob' | 'confirmAuthCleanup' | 'getReviewMedia' | 'runLifecycleJob';
 
@@ -244,8 +245,10 @@ export class CloudGateway {
   }
 
   static async callPublic<T>(name: string, payload: object, options: ReadRequestOptions = {}): Promise<T> {
-    // Public read methods still carry the signed-in viewer so block rules apply.
-    return CloudGateway.dispatch<T>(name, payload, ReadScheduler.allows(name) && CloudGateway.hasSession(), options);
+    // Viewer identity is used for personal actions only; content reads are public.
+    const publicImage: boolean = name === 'get-public-media' || name === 'image-read-batch' &&
+      (payload as ImageReadRequest).items.every((item: ImageReadItem): boolean => item.mode === 'PUBLIC');
+    return CloudGateway.dispatch<T>(name, payload, !publicImage && ReadScheduler.allows(name) && CloudGateway.hasSession(), options);
   }
 
   static async callAuthenticated<T>(name: string, payload: object, options: ReadRequestOptions = {}): Promise<T> {
@@ -281,8 +284,6 @@ export class CloudGateway {
       case 'set-card-favorite': case 'set-card-wanted': case 'set-card-reaction-v2':
       case 'start-personal-collection-migration': case 'resume-personal-collection-migration':
       case 'update-personal-food-state': case 'toggle-card-action':
-      case 'set-card-visibility': case 'revoke-friend-content-access':
-      case 'block-user': case 'unblock-user': case 'remove-friend': case 'respond-friend-request':
       case 'delete-own-card': case 'delete-account-data': case 'publish-card': case 'publish-cards':
       case 'decide-moderation': case 'restore-deleted-card': case 'report-merchant':
       case 'retry-lifecycle-job': case 'confirm-auth-cleanup':
@@ -467,9 +468,6 @@ export class CloudGateway {
         break;
       case 'list-merchant-rankings':
         raw = await CloudGateway.invokeStage47('listMerchantRankings', envelope);
-        break;
-      case 'list-former-friend-content-grants':
-        raw = await CloudGateway.invokeStage47('listFormerFriendContentGrants', envelope);
         break;
       case 'set-card-reaction-v2':
         raw = await CloudGateway.invokeStage47('setCardReactionV2', envelope);
@@ -705,12 +703,6 @@ export class CloudGateway {
       case 'get-revision-media':
         raw = await (CloudGateway.serviceObject as ShikeService).getRevisionMedia(envelope);
         break;
-      case 'set-card-visibility':
-        raw = await (CloudGateway.serviceObject as ShikeService).setCardVisibility(envelope);
-        break;
-      case 'revoke-friend-content-access':
-        raw = await (CloudGateway.serviceObject as ShikeService).revokeFriendContentAccess(envelope);
-        break;
       case 'process-friend-cleanup-job':
         raw = await (CloudGateway.serviceObject as ShikeService).processFriendCleanupJob(envelope);
         break;
@@ -743,6 +735,11 @@ export class CloudGateway {
         throw new Error('实拍图服务处理请求失败，请稍后重试。');
       }
       const code: string = decoded.code === undefined ? 'REQUEST_FAILED' : decoded.code;
+      if (session === AuthSessionStore.generation() && name === 'get-card-detail' &&
+        ['CONTENT_ACCESS_DENIED', 'CONTENT_UNAVAILABLE', 'NOT_FOUND'].includes(code)) {
+        const request: CardDetailRequest = payload as CardDetailRequest;
+        ImageDescriptors.removeCard(request.cardId);
+      }
       if (session === AuthSessionStore.generation() && (['ACCOUNT_INACTIVE', 'AUTH_REQUIRED'].includes(code) || code === 'FORBIDDEN' && ['list-moderation-queue', 'get-moderation-detail', 'decide-moderation', 'list-lifecycle-jobs', 'get-lifecycle-job', 'retry-lifecycle-job', 'run-lifecycle-job'].includes(name))) {
         AppStorage.setOrCreate('operationsRoleRevision', (AppStorage.get<number>('operationsRoleRevision') || 0) + 1);
       }
@@ -750,9 +747,7 @@ export class CloudGateway {
         decoded.retryAfterMs || 0, decoded.requestId || readRequestId, decoded.operation || name, decoded.stage || 'business-response');
     }
     if (session === AuthSessionStore.generation() && CloudGateway.changesReadContent(name)) ReadScheduler.contentChanged();
-    if (session === AuthSessionStore.generation() && ['set-card-visibility', 'delete-own-card', 'delete-account-data', 'block-user', 'unblock-user', 'remove-friend', 'respond-friend-request', 'decide-moderation', 'moderate-card', 'moderate-card-revision'].includes(name)) ImageDescriptors.revoke();
-    if (session === AuthSessionStore.generation() && ['block-user', 'unblock-user', 'remove-friend', 'respond-friend-request'].includes(name))
-      AppStorage.setOrCreate('accountContentRevision', (AppStorage.get<number>('accountContentRevision') || 0) + 1);
+    if (session === AuthSessionStore.generation() && ['delete-own-card', 'delete-account-data', 'decide-moderation', 'moderate-card', 'moderate-card-revision'].includes(name)) ImageDescriptors.revoke();
     if (ReadScheduler.allows(name) && session === AuthSessionStore.generation() &&
       AppStorage.get<boolean>('stage47AppActive') !== false) {
       const requestId: string = decoded.requestId || readRequestId;

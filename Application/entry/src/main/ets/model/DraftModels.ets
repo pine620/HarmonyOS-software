@@ -1,4 +1,4 @@
-import { CardRevisionView, FoodCard, FoodCategory, FoodCategoryV2, FoodConsumptionMode, FoodVisibility, PublishCardRequest, SubmitCardRevisionRequest } from './CloudContracts';
+import { CardRevisionView, FoodCard, FoodCategory, FoodCategoryV2, FoodConsumptionMode, PublishCardRequest, SubmitCardRevisionRequest } from './CloudContracts';
 import { Merchant, MerchantChoice, CreateUserMerchantRequest } from './MerchantModels';
 export interface DraftRetainedPhoto { id: string; url: string; }
 /** Raw strings preserve incomplete amount/date input without discarding the form. */
@@ -6,7 +6,7 @@ export interface DraftForm {
   ownsPhoto: boolean;
   productName: string; price: string; dineInAvg: string; orderTotal: string; deliveryFee: string; consumedDate: string;
   sourceLink: string; reviewText: string; tasteScore: number; category: FoodCategory; categoryV2: FoodCategoryV2;
-  mode: FoodConsumptionMode; cardVisibility: FoodVisibility; merchant?: Merchant; merchantChoice?: MerchantChoice;
+  mode: FoodConsumptionMode; merchant?: Merchant; merchantChoice?: MerchantChoice;
   merchantName: string; merchantAddress: string; platformKey: string; platformLabel: string; moreDeliveryInfo: boolean;
   historicalShop: string; retainedPhotos: Array<DraftRetainedPhoto>; uploadedMediaIds: Array<string>;
   publicationRequestId: string; requestUnconfirmed: boolean; pendingPublication?: PublishCardRequest; pendingRevision?: SubmitCardRevisionRequest;

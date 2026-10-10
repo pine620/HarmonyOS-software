@@ -51,9 +51,8 @@ async function executeMediaOperation(operation: MediaOperation, input: object): 
 }
 
 /**
- * Authenticated media boundary. Client methods validate the AGC access token
- * and the Cloud DB media record; execute remains for signed service-to-service
- * storage operations only.
+ * Uploads validate the AGC access token. Published images depend on content
+ * state; execute is reserved for signed service-to-service storage operations.
  */
 export class ShikeMedia {
   async prepareCardPhoto(input: object): Promise<CloudResponse> {

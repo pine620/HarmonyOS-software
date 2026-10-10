@@ -12,29 +12,41 @@ interface MediaEnvelope {
   candidates?: Array<CardEnvelopeItem>;
   items?: Array<CardEnvelopeItem>;
 }
-interface ImagePermit { descriptor: ImageDescriptor; epoch: number; session: number; }
+interface CachedImageDescriptor { mediaId: string; descriptor: ImageDescriptor; epoch: number; session: number; }
 
-/** Only CloudGateway responses and the image protocol register eligibility. Never persist permits. */
+/** In-memory image versions learned from content and image responses. */
 export class ImageDescriptors {
-  private static permits: Map<string, ImagePermit> = new Map<string, ImagePermit>();
+  private static descriptors: Map<string, CachedImageDescriptor> = new Map<string, CachedImageDescriptor>();
   private static revision: number = 0;
   static onRevoked: (mediaId: string) => void = (_mediaId: string): void => {};
   static epoch(): number { return ImageDescriptors.revision; }
   static key(mediaId: string, mode: ImageMode, variant: ImageVariant, revisionId: string = ''): string {
     return AuthSessionStore.owner() + ':' + mediaId + ':' + mode + ':' + variant + ':' + revisionId;
   }
-  static revoke(): void { ImageDescriptors.revision++; ImageDescriptors.permits.clear(); ImageDescriptors.onRevoked(''); }
+  static revoke(): void { ImageDescriptors.revision++; ImageDescriptors.descriptors.clear(); ImageDescriptors.onRevoked(''); }
   static remove(mediaId: string): void {
-    for (const key of ImageDescriptors.permits.keys()) if (key.includes(':' + mediaId + ':')) ImageDescriptors.permits.delete(key);
+    for (const key of ImageDescriptors.descriptors.keys()) if (key.includes(':' + mediaId + ':')) ImageDescriptors.descriptors.delete(key);
     ImageDescriptors.onRevoked(mediaId);
   }
+  static removeCard(cardId: string): void {
+    const mediaIds: Set<string> = new Set<string>();
+    for (const key of ImageDescriptors.descriptors.keys()) {
+      const permit: CachedImageDescriptor | undefined = ImageDescriptors.descriptors.get(key);
+      if (permit !== undefined && permit.descriptor.cardId === cardId) {
+        ImageDescriptors.descriptors.delete(key);
+        // Published service-card copies must also stop using the old content.
+        mediaIds.add(permit.mediaId);
+      }
+    }
+    for (const mediaId of mediaIds) ImageDescriptors.onRevoked(mediaId);
+  }
   static record(mediaId: string, mode: ImageMode, requested: ImageVariant, descriptor: ImageDescriptor, revisionId: string = ''): void {
-    const permit: ImagePermit = { descriptor, epoch: ImageDescriptors.revision, session: AuthSessionStore.generation() };
-    ImageDescriptors.permits.set(ImageDescriptors.key(mediaId, mode, requested, revisionId), permit);
-    if (ImageDescriptors.permits.size > 512) for (const first of ImageDescriptors.permits.keys()) { ImageDescriptors.permits.delete(first); break; }
+    const permit: CachedImageDescriptor = { mediaId, descriptor, epoch: ImageDescriptors.revision, session: AuthSessionStore.generation() };
+    ImageDescriptors.descriptors.set(ImageDescriptors.key(mediaId, mode, requested, revisionId), permit);
+    if (ImageDescriptors.descriptors.size > 512) for (const first of ImageDescriptors.descriptors.keys()) { ImageDescriptors.descriptors.delete(first); break; }
   }
   static read(mediaId: string, mode: ImageMode, variant: ImageVariant, revisionId: string = ''): ImageDescriptor | undefined {
-    const permit: ImagePermit | undefined = ImageDescriptors.permits.get(ImageDescriptors.key(mediaId, mode, variant, revisionId));
+    const permit: CachedImageDescriptor | undefined = ImageDescriptors.descriptors.get(ImageDescriptors.key(mediaId, mode, variant, revisionId));
     return permit !== undefined && permit.epoch === ImageDescriptors.revision && permit.session === AuthSessionStore.generation() ? permit.descriptor : undefined;
   }
   static accept(value: Object): void {

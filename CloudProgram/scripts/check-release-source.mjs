@@ -43,6 +43,14 @@ for(const [name,indexName,expected] of [
 }
 const cardMedia=schema.objectTypes.find(object=>object.objectTypeName==='CardMedia');
 for(const name of ['objectKey','sha256'])check('preserve sensitivity CardMedia.'+name,cardMedia?.fields?.find(field=>field.fieldName===name)?.isSensitive===true);
+// Removing the friend permission feature must not remove or redefine columns
+// already present in CloudDB. They are storage compatibility only, not an ACL.
+const foodCard=schema.objectTypes.find(object=>object.objectTypeName==='FoodCard');
+for(const [fieldName,fieldType] of [['friendVisibilitySince','Date'],['friendVisibilitySequence','Long']]){
+  const field=foodCard?.fields?.find(field=>field.fieldName===fieldName);
+  const expected={fieldName,fieldType,belongPrimaryKey:false,notNull:false,isNeedEncrypt:false,isSensitive:false};
+  check('preserve deployed field FoodCard.'+fieldName,!!field&&JSON.stringify(fieldShape([field]))===JSON.stringify(fieldShape([expected])));
+}
 const service='CloudProgram/cloudfunctions/shike-service/';
 const modules=['runtime.js','stage1-services.js','stage2-services.js','stage3-services.js','stages47-common.js','stage4-services.js','stage5-services.js','stage6-services.js','stage7-services.js','personal-collections.js','moderation-services.js','lifecycle-services.js','authentication-cleanup.js'];
 for(const module of modules){

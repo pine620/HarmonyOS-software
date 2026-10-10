@@ -91,9 +91,7 @@ export class ShikeService implements CloudObjectLikely {
     public async listMerchantRankings(input: CloudEnvelope): Promise<CloudResponse> {
         return Promise.reject(new Error('Method not implemented.'));
     }
-    public async listFormerFriendContentGrants(input: CloudEnvelope): Promise<CloudResponse> {
-        return Promise.reject(new Error('Method not implemented.'));
-    }
+
     public async setCardReactionV2(input: CloudEnvelope): Promise<CloudResponse> {
         return Promise.reject(new Error('Method not implemented.'));
     }
@@ -178,12 +176,8 @@ export class ShikeService implements CloudObjectLikely {
     public async validateLifecycleJob(input: CloudEnvelope): Promise<CloudResponse> {
         return Promise.reject(new Error('Method not implemented.'));
     }
-    public async setCardVisibility(input: CloudEnvelope): Promise<CloudResponse> {
-        return Promise.reject(new Error('Method not implemented.'));
-    }
-    public async revokeFriendContentAccess(input: CloudEnvelope): Promise<CloudResponse> {
-        return Promise.reject(new Error('Method not implemented.'));
-    }
+
+
     public async processFriendCleanupJob(input: CloudEnvelope): Promise<CloudResponse> {
         return Promise.reject(new Error('Method not implemented.'));
     }

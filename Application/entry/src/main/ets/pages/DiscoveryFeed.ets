@@ -203,8 +203,13 @@ export struct DiscoveryFeed {
       this.visibleFirst = snapshot.visibleFirst;
       this.visibleLast = snapshot.visibleLast;
 
-      this.cards = this.cards.map((entry: DiscoveryEntry): DiscoveryEntry => { return { card: entry.card, coverUrl: '', allowed: false }; });
       this.hydratedIds.clear(); this.failedPhotoIds.clear(); this.loadingPhotoIds.clear(); this.hydrationRunning = false;
+      this.cards = this.cards.map((entry: DiscoveryEntry): DiscoveryEntry => {
+        if (entry.coverUrl.length > 0 && ImageRepository.canReuseCover(entry.card)) {
+          this.hydratedIds.add(entry.card.id); return entry;
+        }
+        return { card: entry.card, coverUrl: '', loadedAt: entry.loadedAt };
+      });
       this.loading = false; this.loadingMore = false; this.mapLoading = false;
       this.loadedSignature = this.signature();
       void this.revalidateVisible(snapshot.scrollY);
@@ -217,12 +222,22 @@ export struct DiscoveryFeed {
     if (!this.active) return;
     console.info('[DiscoveryFeed] event=pause viewGeneration=' + this.listGeneration);
     this.saveSnapshot(); this.active = false; this.listGeneration++; this.mapGeneration++; this.merchantGeneration++; ImageRepository.subscriptionsChanged(); ReadScheduler.subscriptionsChanged();
-    if (!destroying) { this.selectedMerchant = undefined; this.merchantCards = []; this.cards = this.cards.map((entry: DiscoveryEntry): DiscoveryEntry => { return { card: entry.card, coverUrl: '', allowed: false }; }); }
+    if (!destroying) { this.selectedMerchant = undefined; this.merchantCards = []; this.cards = this.cards.map((entry: DiscoveryEntry): DiscoveryEntry => { return { card: entry.card, coverUrl: '', loadedAt: entry.loadedAt }; }); }
     if (this.debounce !== undefined) { clearTimeout(this.debounce); this.debounce = undefined; }
   }
   private async revalidateVisible(scrollY: number): Promise<void> {
-    await this.hydrateVisible(this.visibleFirst, this.visibleLast, true);
-    if (this.active) this.resultScroller.scrollTo({ xOffset: 0, yOffset: scrollY, animation: false });
+    // Restore layout before any remote work; stale content refresh is independent.
+    this.resultScroller.scrollTo({ xOffset: 0, yOffset: scrollY, animation: false });
+    const generation: number = this.listGeneration;
+    void this.hydrateVisible(this.visibleFirst, this.visibleLast);
+    const now: number = Date.now();
+    const ids: Array<string> = this.cards.slice(this.visibleFirst, this.visibleLast + 1)
+      .filter((entry: DiscoveryEntry): boolean => now - entry.loadedAt >= 30000)
+      .map((entry: DiscoveryEntry): string => entry.card.id);
+    if (ids.length === 0) return;
+    await this.refreshChangedCards(ids, generation);
+    if (!this.current(generation)) return;
+    void this.hydrateVisible(this.visibleFirst, this.visibleLast);
   }
   private onCapabilitiesChanged(): void {
     if (!this.capabilities.mapEnabled) {
@@ -268,20 +283,21 @@ export struct DiscoveryFeed {
     return query;
   }
   private entries(cards: Array<FoodCard>): Array<DiscoveryEntry> {
-    return cards.map((card: FoodCard): DiscoveryEntry => { return { card, coverUrl: card.photoUrl, allowed: true }; });
+    const loadedAt: number = Date.now();
+    return cards.map((card: FoodCard): DiscoveryEntry => { return { card, coverUrl: card.photoUrl, loadedAt }; });
   }
   private entryRenderKey(entry: DiscoveryEntry): string {
     // Entries are replaced after asynchronous reads. An ID-only ForEach key keeps
     // the old item's placeholder and callbacks even after its cover is ready.
     const parts: Array<string> = [entry.card.id, entry.card.contentRevision || '', entry.coverUrl,
-      String(entry.allowed), String(entry.card.primaryPhotoResolved === true),
+      String(entry.card.primaryPhotoResolved === true),
       String(entry.card.primaryPhotoLoadFailed === true)];
     return JSON.stringify(parts);
   }
   private merge(current: Array<DiscoveryEntry>, incoming: Array<FoodCard>): Array<DiscoveryEntry> {
     const output: Array<DiscoveryEntry> = current.slice(); const seen: Set<string> = new Set<string>();
     for (const value of current) seen.add(value.card.id);
-    for (const card of incoming) if (!seen.has(card.id)) { const value: DiscoveryEntry = { card, coverUrl: card.photoUrl, allowed: true }; output.push(value); seen.add(card.id); }
+    for (const card of incoming) if (!seen.has(card.id)) { const value: DiscoveryEntry = { card, coverUrl: card.photoUrl, loadedAt: Date.now() }; output.push(value); seen.add(card.id); }
     return output;
   }
   private resultStatus(count: number, coverage: QueryCoverage, cursor: string): string {
@@ -303,13 +319,12 @@ export struct DiscoveryFeed {
     this.loading = true; this.loadingMore = false; this.loadMoreFailed = false; this.hydrationRunning = false; this.hydratedIds.clear(); this.failedPhotoIds.clear(); this.loadingPhotoIds.clear(); this.nextCursor = '';
     let query: PublicCardQuery;
     try { query = this.makeQuery(); } catch (failure) { this.status = stage47ErrorText(failure as Object, '筛选条件无效。'); this.loading = false; return; }
-    this.cards = []; this.status = '正在重新验证推荐…';
+    this.cards = []; this.status = '正在加载推荐…';
     try {
       const result: DiscoveryCardPage = await this.queryCards(query, '');
       if (!this.current(generation)) return;
       if (query.scope === 'VIEWPORT' && (this.mapEmpty || (result.cards.length === 0 && result.coverage === 'COMPLETE')) && this.previousCards.length > 0) {
-        const fresh: Array<FoodCard> = this.previousCards.filter((entry: DiscoveryEntry): boolean => entry.card.visibility !== 'FRIENDS').map((entry: DiscoveryEntry): FoodCard => entry.card);
-        if (!this.current(generation)) return; this.cards = this.entries(fresh).map((entry: DiscoveryEntry): DiscoveryEntry => { return { card: entry.card, coverUrl: '', allowed: false }; }); this.hydratedIds.clear(); this.showingPrevious = true; this.nextCursor = '';
+        if (!this.current(generation)) return; this.cards = this.previousCards.map((entry: DiscoveryEntry): DiscoveryEntry => { return { card: entry.card, coverUrl: '', loadedAt: entry.loadedAt }; }); this.hydratedIds.clear(); this.showingPrevious = true; this.nextCursor = '';
         this.status = '当前区域无结果，暂时展示上一地区结果。';
       } else {
         this.cards = this.entries(result.cards); this.nextCursor = result.nextCursor; this.showingPrevious = false;
@@ -357,49 +372,60 @@ export struct DiscoveryFeed {
       else this.status = stage47ErrorText(failure as Object, '推荐加载失败。');
     } finally { if (this.current(generation)) this.loadingMore = false; }
   }
-  private async hydrateVisible(first: number, last: number, revalidate: boolean = false): Promise<void> {
+  private async hydrateVisible(first: number, last: number): Promise<void> {
     this.visibleFirst = first; this.visibleLast = last;
     if (this.hydrationRunning || !this.active || !this.navigationVisible || !this.appActive) return;
     const generation: number = this.listGeneration;
     const chosen: Array<FoodCard> = this.cards.slice(Math.max(0, first), Math.min(this.cards.length, last + 1))
       .map((entry: DiscoveryEntry): FoodCard => entry.card).filter((card: FoodCard): boolean => !this.hydratedIds.has(card.id) && !this.failedPhotoIds.has(card.id) && !this.loadingPhotoIds.has(card.id));
-    if (chosen.length === 0) return;
-    const confirm: boolean = revalidate || chosen.some((card: FoodCard): boolean => this.cards.some((entry: DiscoveryEntry): boolean => entry.card.id === card.id && !entry.allowed));
-    const withoutMedia: Array<string> = confirm ? chosen.filter((card: FoodCard): boolean => card.photoPath.length === 0).map((card: FoodCard): string => card.id) : [];
-    console.info('[DiscoveryFeed] event=hydrate viewGeneration=' + generation + ' count=' + chosen.length + ' confirm=' + String(confirm) + ' first=' + first + ' last=' + last);
+    if (chosen.length === 0) { this.prefetchNextRow(generation); return; }
+    console.info('[DiscoveryFeed] event=hydrate viewGeneration=' + generation + ' count=' + chosen.length + ' first=' + first + ' last=' + last);
     this.hydrationRunning = true; const changed: Array<string> = [];
     for (const card of chosen) this.loadingPhotoIds.add(card.id);
     try {
-      if (withoutMedia.length > 0) await this.refreshChangedCards(withoutMedia, generation);
       if (!this.current(generation)) return;
-      const images: Array<FoodCard> = chosen.filter((card: FoodCard): boolean => !withoutMedia.includes(card.id));
+      const images: Array<FoodCard> = chosen;
       await ImageRepository.hydrateCovers(this.context(), images, async (): Promise<boolean> => this.current(generation),
         (card: FoodCard): void => {
-          if (!this.current(generation)) return;
+          const currentEntry: DiscoveryEntry | undefined = this.cards.find((entry: DiscoveryEntry): boolean => entry.card === card);
+          if (!this.current(generation) || currentEntry === undefined) return;
           this.loadingPhotoIds.delete(card.id);
           if (card.mediaAccessDenied === true) { this.cards = this.cards.filter((entry: DiscoveryEntry): boolean => entry.card.id !== card.id); this.status = '部分内容已不可访问，请刷新推荐。'; return; }
           if (card.primaryPhotoLoadFailed === true) this.failedPhotoIds.add(card.id);
           else this.hydratedIds.add(card.id);
           if (card.mediaContentChanged === true) changed.push(card.id);
-          const settled: DiscoveryEntry = { card, coverUrl: card.photoUrl, allowed: card.mediaContentChanged !== true && (card.photoUrl.length > 0 || card.photoPath.length === 0) };
+          const settled: DiscoveryEntry = { card, coverUrl: card.mediaContentChanged === true ? '' : card.photoUrl, loadedAt: currentEntry.loadedAt };
           console.info('[DiscoveryFeed] event=cover-settled viewGeneration=' + generation + ' cardId=' + card.id +
-            ' ready=' + String(settled.coverUrl.length > 0) + ' allowed=' + String(settled.allowed) +
+            ' ready=' + String(settled.coverUrl.length > 0) +
             ' failed=' + String(card.primaryPhotoLoadFailed === true));
-          if (card.id === this.cards[0]?.card.id && card.visibility !== 'FRIENDS' && this.submittedQuery !== undefined && this.isRecommendation(this.submittedQuery) && settled.allowed) { this.onPrimaryCard(card, this.primaryRemoteSync); this.primaryRemoteSync = false; }
+          if (card.id === this.cards[0]?.card.id && this.submittedQuery !== undefined && this.isRecommendation(this.submittedQuery) && card.mediaContentChanged !== true) { this.onPrimaryCard(card, this.primaryRemoteSync); this.primaryRemoteSync = false; }
           this.cards = this.cards.map((entry: DiscoveryEntry): DiscoveryEntry => entry.card.id === card.id ? settled : entry);
-        }, confirm, 'normal', (card: FoodCard): boolean => { const index: number = this.cards.findIndex((entry: DiscoveryEntry): boolean => entry.card.id === card.id); return index >= this.visibleFirst && index <= this.visibleLast; });
+        }, false, 'normal', (card: FoodCard): boolean => { const index: number = this.cards.findIndex((entry: DiscoveryEntry): boolean => entry.card.id === card.id); return index >= this.visibleFirst && index <= this.visibleLast && this.cards[index].card === card; });
     } catch (_failure) { if (this.current(generation)) this.status = '实拍图暂不可用，推荐信息已保留，可刷新重试。'; }
     finally {
       if (this.current(generation)) {
         if (changed.length > 0) await this.refreshChangedCards(changed, generation);
         this.hydrationRunning = false;
         for (const card of chosen) this.loadingPhotoIds.delete(card.id);
-        if (withoutMedia.length > 0 || changed.length > 0 || this.visibleFirst !== first || this.visibleLast !== last) void this.hydrateVisible(this.visibleFirst, this.visibleLast);
+        if (changed.length > 0 || this.visibleFirst !== first || this.visibleLast !== last || this.cards.slice(this.visibleFirst, this.visibleLast + 1).some((entry: DiscoveryEntry): boolean => !this.hydratedIds.has(entry.card.id) && !this.failedPhotoIds.has(entry.card.id))) void this.hydrateVisible(this.visibleFirst, this.visibleLast);
+        else this.prefetchNextRow(generation);
       }
     }
   }
+  private prefetchNextRow(generation: number): void {
+    if (!this.current(generation) || !ReadScheduler.canPrefetch()) return;
+    const next: Array<DiscoveryEntry> = this.cards.slice(this.visibleLast + 1, this.visibleLast + 3);
+    for (const entry of next) {
+      const card: FoodCard = entry.card;
+      if (card.photoPath.length === 0 || this.failedPhotoIds.has(card.id)) continue;
+      void ImageRepository.getDownloadUrl(this.context(), card.photoBucket, card.photoPath, 'prefetch', async (): Promise<boolean> => {
+        const index: number = this.cards.findIndex((value: DiscoveryEntry): boolean => value.card.id === card.id);
+        return this.current(generation) && index > this.visibleLast && index <= this.visibleLast + 2;
+      }, card.photos?.[0], true).catch((): void => {});
+    }
+  }
   private async refreshChangedCards(ids: Array<string>, generation: number): Promise<void> {
-    const options: ReadRequestOptions = { mayContinue: async (): Promise<boolean> => this.current(generation) };
+    const options: ReadRequestOptions = { priority: 'secondary', mayContinue: async (): Promise<boolean> => this.current(generation) };
     for (let offset: number = 0; offset < ids.length && this.current(generation); offset += 10) {
       const request: CardPreviewsRequest = { cardIds: ids.slice(offset, offset + 10) };
       try {
@@ -410,15 +436,23 @@ export struct DiscoveryFeed {
           if (item === undefined || !item.accessible || item.card === null) this.cards = this.cards.filter((entry: DiscoveryEntry): boolean => entry.card.id !== id);
           else {
             const card: FoodCard = item.card;
-            const fresh: DiscoveryEntry = { card, coverUrl: '', allowed: true };
+            const previous: DiscoveryEntry | undefined = this.cards.find((entry: DiscoveryEntry): boolean => entry.card.id === id);
+            const reusable: boolean = previous !== undefined && previous.card.contentRevision === card.contentRevision && ImageRepository.canReuseCover(previous.card);
+            if (reusable && previous !== undefined) { card.photoUrl = previous.coverUrl; card.primaryPhotoResolved = true; card.primaryPhotoLoadFailed = false; }
+            const fresh: DiscoveryEntry = { card, coverUrl: reusable && previous !== undefined ? previous.coverUrl : '', loadedAt: Date.now() };
             this.cards = this.cards.map((entry: DiscoveryEntry): DiscoveryEntry => entry.card.id === id ? fresh : entry);
-            this.hydratedIds.delete(id); this.failedPhotoIds.delete(id);
+            if (!reusable) this.hydratedIds.delete(id); this.failedPhotoIds.delete(id);
           }
         }
       } catch (_error) {
         if (!this.current(generation)) return;
-        for (const id of request.cardIds) { this.failedPhotoIds.add(id); this.hydratedIds.delete(id); }
-        this.status = '内容已变化，暂时隐藏旧内容，请刷新重试。';
+        // A known version mismatch waits for manual retry; ordinary stale-cache
+        // refresh failure must not block independent image hydration.
+        for (const id of request.cardIds) {
+          const entry: DiscoveryEntry | undefined = this.cards.find((value: DiscoveryEntry): boolean => value.card.id === id);
+          if (entry !== undefined && entry.card.mediaContentChanged === true) { this.failedPhotoIds.add(id); this.hydratedIds.delete(id); }
+        }
+        this.status = '推荐更新失败，已保留缓存内容，可刷新重试。';
       }
     }
   }
@@ -466,8 +500,7 @@ export struct DiscoveryFeed {
       this.mapEmpty = merged.length === 0 && result.coverage === 'COMPLETE';
       this.mapStatus = result.coverage !== 'COMPLETE' ? '仅显示部分地点，请放大地图或继续搜索。' : this.mapEmpty ? '当前区域没有可展示的店铺。' : '已显示当前区域的可展示店铺。';
       if (this.mapEmpty && this.scope === 'VIEWPORT' && this.previousCards.length > 0) {
-        const fresh: Array<FoodCard> = this.previousCards.filter((entry: DiscoveryEntry): boolean => entry.card.visibility !== 'FRIENDS').map((entry: DiscoveryEntry): FoodCard => entry.card);
-        if (!this.active || generation !== this.mapGeneration || uid !== this.viewer()) return; this.cards = this.entries(fresh).map((entry: DiscoveryEntry): DiscoveryEntry => { return { card: entry.card, coverUrl: '', allowed: false }; }); this.hydratedIds.clear(); this.showingPrevious = true; this.nextCursor = ''; void this.hydrateVisible(0, 3, true);
+        if (!this.active || generation !== this.mapGeneration || uid !== this.viewer()) return; this.cards = this.previousCards.map((entry: DiscoveryEntry): DiscoveryEntry => { return { card: entry.card, coverUrl: '', loadedAt: entry.loadedAt }; }); this.hydratedIds.clear(); this.showingPrevious = true; this.nextCursor = ''; void this.hydrateVisible(0, 3);
       }
     } catch (failure) {
       if (!this.active || generation !== this.mapGeneration || uid !== this.viewer()) return;
@@ -543,7 +576,7 @@ export struct DiscoveryFeed {
   }
   private coverFailed(card: FoodCard): void {
     card.photoUrl = ''; card.primaryPhotoLoadFailed = true; this.failedPhotoIds.add(card.id); this.hydratedIds.delete(card.id);
-    this.cards = this.cards.map((entry: DiscoveryEntry): DiscoveryEntry => { const failed: DiscoveryEntry = { card, coverUrl: '', allowed: entry.allowed }; return entry.card.id === card.id ? failed : entry; });
+    this.cards = this.cards.map((entry: DiscoveryEntry): DiscoveryEntry => { const failed: DiscoveryEntry = { card, coverUrl: '', loadedAt: entry.loadedAt }; return entry.card.id === card.id ? failed : entry; });
   }
   private toggleCategory(key: FoodCategoryV2): void {
     if (this.categories.includes(key)) this.categories = this.categories.filter((value: FoodCategoryV2): boolean => value !== key);
@@ -669,13 +702,10 @@ export struct DiscoveryFeed {
       WaterFlow({ scroller: this.resultScroller }) {
         ForEach(this.cards, (entry: DiscoveryEntry, index: number) => {
           FlowItem() {
-          if (entry.allowed) { DiscoveryCard({ card: entry.card, coverUrl: entry.coverUrl, featured: index % 2 === 0, coverScale: this.coverScale(), selected: !this.showingPrevious && this.selectedMerchantId.length > 0 && entry.card.merchantId === this.selectedMerchantId,
-            onCoverFailed: (): void => this.coverFailed(entry.card),
-            onRetry: (): void => { ImageRepository.retryUnavailableService(); this.failedPhotoIds.delete(entry.card.id); this.hydratedIds.delete(entry.card.id); void this.hydrateVisible(index, index); },
-            onOpen: (): void => this.openCard(entry.card) }) }
-          else { Column({ space: 8 }) { Text('正在验证内容访问权限').fontSize(13).fontColor($r('app.color.muted'));
-            if (this.failedPhotoIds.has(entry.card.id)) { Button('重试').height(48).onClick((): void => { ImageRepository.retryUnavailableService(); this.failedPhotoIds.delete(entry.card.id); void this.hydrateVisible(index, index, true); }); }
-          }.width('100%').height(180).justifyContent(FlexAlign.Center) }
+            DiscoveryCard({ card: entry.card, coverUrl: entry.coverUrl, featured: index % 2 === 0, coverScale: this.coverScale(), selected: !this.showingPrevious && this.selectedMerchantId.length > 0 && entry.card.merchantId === this.selectedMerchantId,
+              onCoverFailed: (): void => this.coverFailed(entry.card),
+              onRetry: (): void => { ImageRepository.retryUnavailableService(); this.failedPhotoIds.delete(entry.card.id); this.hydratedIds.delete(entry.card.id); void this.hydrateVisible(index, index); },
+              onOpen: (): void => this.openCard(entry.card) })
           }.width('100%')
         }, (entry: DiscoveryEntry): string => this.entryRenderKey(entry))
       }.width('100%').layoutWeight(1).columnsTemplate(BreakpointSystem.columnsTemplate(this.windowBreakpoint))

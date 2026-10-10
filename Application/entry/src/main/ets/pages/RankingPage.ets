@@ -5,9 +5,14 @@ import { SocialDiscoveryRepository } from '../repository/SocialDiscoveryReposito
 import { LocationService } from '../service/LocationService';
 import { MapViewportStore } from '../service/MapViewportStore';
 import { AuthService } from '../service/AuthService';
+import { ReadRequestOptions, ReadScheduler } from '../service/ReadScheduler';
+import { SECONDARY_DATA_REUSE_MS } from '../service/ImageReadConfig';
 import { ChoiceActionStyle, QuietActionStyle, SecondaryActionStyle, featureUnavailable, stage47ErrorText } from '../common/Stage47Ui';
 @Component
 export struct RankingPage {
+  @Prop @Watch('onActiveChanged') pageActive: boolean = true;
+  private lastLoadedAt: number = 0;
+  private onActiveChanged(): void { if (this.pageActive && this.appActive && this.visibleLifecycle) this.aboutToAppear(); else this.aboutToDisappear(); }
   @StorageLink('accountContentRevision') @Watch('onAccountChanged') accountContentRevision: number = 0;
   private onAccountChanged(): void { this.cards = []; this.cursor = ''; this.latitude = MapViewportStore.defaults().latitude; this.longitude = MapViewportStore.defaults().longitude; this.centerSource = 'DEFAULT'; this.generation++; if (this.active) void this.load(); }
   @StorageLink('stage47AppActive') @Watch('onAppActiveChanged') appActive: boolean = true;
@@ -24,17 +29,25 @@ export struct RankingPage {
   @State featureNotReady: boolean = false;
   private latitude: number = MapViewportStore.defaults().latitude;
   private longitude: number = MapViewportStore.defaults().longitude;
-  private centerSource: string = 'DEFAULT'; private generation: number = 0; private active: boolean = true;
+  private centerSource: string = 'DEFAULT'; private generation: number = 0; private active: boolean = false;
   private repo: SocialDiscoveryRepository = new SocialDiscoveryRepository();
-  aboutToAppear(): void { this.active = true; void this.load(); }
-  aboutToDisappear(): void { this.active = false; this.generation++; this.cards = []; this.latitude = MapViewportStore.defaults().latitude; this.longitude = MapViewportStore.defaults().longitude; this.centerSource = 'DEFAULT'; }
+  aboutToAppear(): void {
+    if (this.active || !this.pageActive || !this.appActive) return;
+    this.active = true;
+    if (this.cards.length > 0 && Date.now() - this.lastLoadedAt < SECONDARY_DATA_REUSE_MS) return;
+    void this.load();
+  }
+  aboutToDisappear(): void { if (!this.active) return; this.active = false; this.generation++; this.busy = false; ReadScheduler.subscriptionsChanged(); }
   private reload(): void { this.cards = []; this.cursor = ''; if (this.active) void this.load(); }
   private async load(more: boolean = false): Promise<void> {
+    if (!this.active || !this.pageActive || !this.appActive) return;
     const generation: number = ++this.generation; this.busy = true;
     this.loadFailed = false; this.featureNotReady = false;
     try { if (this.kind === 'FRIENDS' && AuthService.profile() === undefined) throw new Error('好友榜需登录。');
       const request: MerchantRankingRequest = { kind: this.kind, lat: this.latitude, lon: this.longitude, coordinateSystem: 'GCJ02', centerSource: this.centerSource, cursor: more ? this.cursor : '' };
-      const result: MerchantRankingPage = await this.repo.ranking(request); if (!this.active || generation !== this.generation) return;
+      const options: ReadRequestOptions = { priority: 'secondary', mayContinue: async (): Promise<boolean> => this.active && this.pageActive && this.appActive && generation === this.generation };
+      const result: MerchantRankingPage = await this.repo.ranking(request, options); if (!this.active || generation !== this.generation) return;
+      this.lastLoadedAt = Date.now();
       this.cards = more ? this.cards.concat(result.cards.filter((c: FoodCard): boolean => !this.cards.some((r: FoodCard): boolean => r.id === c.id))) : result.cards;
       this.cursor = result.nextCursor; this.message = this.cards.length === 0 ? '当前范围暂无推荐。' :
         '已找到 ' + this.cards.length.toString() + ' 条推荐' + (this.cursor.length > 0 ? '，可继续加载。' : '。') + (result.coverage !== 'COMPLETE' ? ' 当前有界结果未覆盖全部卡片。' : '');
@@ -107,9 +120,6 @@ export struct RankingPage {
                     .fontColor($r('app.color.ink')).layoutWeight(1)
                   Text(card.tasteScore.toString() + ' 分').fontSize(14).fontColor($r('app.color.leaf'))
                 }.width('100%')
-                if (card.visibility === 'FRIENDS') {
-                  Text('仅好友可见').fontSize(12).fontColor($r('app.color.muted'))
-                }
               }.width('100%').alignItems(HorizontalAlign.Start)
             }.attributeModifier(new SecondaryActionStyle()).width('100%')
               .padding(16).onClick((): void => this.onOpenCard(card))

@@ -1,6 +1,6 @@
 # 项目文件索引
 
-按 2026-10-09 的现有发布文件结构整理，重点覆盖 `Application` 与 `CloudProgram`。先看下面的职责说明，完整文件清单在文末。首次运行见 [README](README.md)，后端操作见 [云端指南](CloudProgram/README.md)。
+按 2026-10-10 的现有发布文件结构整理，重点覆盖 `Application` 与 `CloudProgram`。先看下面的职责说明，完整文件清单在文末。首次运行见 [README](README.md)，后端操作见 [云端指南](CloudProgram/README.md)。
 
 路径从项目根目录起算。GitHub 仓库包含 Application 与 CloudProgram 的源码；三个不含签名的 build profile 随源码共享；本地签名、SDK 和云工程关联配置另列，不提交配置值。
 
@@ -127,7 +127,6 @@ CloudProgram/
 | `service/DeliveryPlatformConfigService.ets` | 外卖平台 Remote Config、校验、默认值与有效缓存恢复 |
 | `service/MerchantLocationPicker.ets` | 主动商家选点与上次选点中心；不自动请求设备位置 |
 | `service/ModeFieldCache.ets` | 按账号／卡片保存两种模式的独立字段与 30 天期限 |
-| `service/PublishVisibilityStore.ets` | 按账号保存发布可见范围偏好 |
 | `service/SafeSourceLink.ets` | 外部来源链接校验 |
 | `service/MapViewportStore.ets` | 本机地图浏览中心与缩放保存 |
 | `service/SearchHistoryStore.ets` | 本机成功搜索历史，去重并限制为 20 条 |
@@ -211,7 +210,7 @@ CloudProgram/
 
 `cloudfunctions/shike-image/` 为鉴权图片事件入口，`cloudfunctions/shared/` 为唯一维护的共享模块。media 增加封面 converter/worker。`scripts/package-functions.mjs` / `function-layout.mjs` / `check-artifact.mjs` 统一准备独立部署产物；`prepare-deveco.mjs` 为 IDE 生成函数内依赖，副本不提交。`tests/*.test.cjs` 是负责人手动执行的契约测试源码。
 
-## CloudProgram：32 个当前数据库对象
+## CloudProgram：33 个当前数据库对象
 
 均位于 `CloudProgram/clouddb/objecttype/<对象名>.json`，包含字段、主键、索引和权限。
 
@@ -224,8 +223,9 @@ CloudProgram/
 | Report | 卡片举报与下架治理 |
 | CardAction | 旧 LIKE 兼容与独立收藏关系 |
 | CardReaction | 新赞踩权威记录 |
+| CardRating | 评分记录；字段与索引以当前定义及真实云端导出为准 |
+| MealChoiceHistory | 今天吃什么选择历史 |
 | FoodCardRevision | 待审编辑版本、基准与图片清单 |
-| FriendContentAccessGrant | 解除好友后的方向持续授权与撤销 |
 | PublishRequestRecord | 请求幂等回执 |
 | MaintenanceJob | 迁移、会话清理及生命周期任务 |
 | CardComment | 评论与回复关系 |
@@ -266,7 +266,7 @@ CloudProgram/
 以下按当前源码重新生成，排除依赖、构建产物、缓存、日志和本地配置。克隆 GitHub 仓库可获得下列文件；首次需补齐的两个 AGC 配置路径单独列在末尾。
 
 <details>
-<summary>Application：225 个文件</summary>
+<summary>Application：224 个文件</summary>
 
 ```text
 Application/.gitignore
@@ -401,7 +401,6 @@ Application/entry/src/main/ets/service/PagedDataSource.ets
 Application/entry/src/main/ets/service/PersonalPreviewLoader.ets
 Application/entry/src/main/ets/service/PhotoUploadService.ets
 Application/entry/src/main/ets/service/PrivacyStore.ets
-Application/entry/src/main/ets/service/PublishVisibilityStore.ets
 Application/entry/src/main/ets/service/PushNotificationService.ets
 Application/entry/src/main/ets/service/ReadScheduler.ets
 Application/entry/src/main/ets/service/SafeSourceLink.ets
@@ -499,7 +498,7 @@ Application/scripts/summarize_preload_metrics.py
 </details>
 
 <details>
-<summary>CloudProgram：116 个文件</summary>
+<summary>CloudProgram：117 个文件</summary>
 
 ```text
 CloudProgram/AppScope/resources/rawfile/schema.json
@@ -509,6 +508,7 @@ CloudProgram/clouddb/objecttype/AuthMigrationTicket.json
 CloudProgram/clouddb/objecttype/CardAction.json
 CloudProgram/clouddb/objecttype/CardComment.json
 CloudProgram/clouddb/objecttype/CardMedia.json
+CloudProgram/clouddb/objecttype/CardRating.json
 CloudProgram/clouddb/objecttype/CardReaction.json
 CloudProgram/clouddb/objecttype/ChatMessage.json
 CloudProgram/clouddb/objecttype/CommentReaction.json
@@ -517,7 +517,6 @@ CloudProgram/clouddb/objecttype/FoodCard.json
 CloudProgram/clouddb/objecttype/FoodCardRevision.json
 CloudProgram/clouddb/objecttype/FoodList.json
 CloudProgram/clouddb/objecttype/FoodListItem.json
-CloudProgram/clouddb/objecttype/FriendContentAccessGrant.json
 CloudProgram/clouddb/objecttype/FriendReport.json
 CloudProgram/clouddb/objecttype/Friendship.json
 CloudProgram/clouddb/objecttype/GroupConversation.json
@@ -525,6 +524,7 @@ CloudProgram/clouddb/objecttype/GroupMember.json
 CloudProgram/clouddb/objecttype/GroupMessage.json
 CloudProgram/clouddb/objecttype/IdentityBinding.json
 CloudProgram/clouddb/objecttype/MaintenanceJob.json
+CloudProgram/clouddb/objecttype/MealChoiceHistory.json
 CloudProgram/clouddb/objecttype/MealPoll.json
 CloudProgram/clouddb/objecttype/MealPollOption.json
 CloudProgram/clouddb/objecttype/MealPollVote.json

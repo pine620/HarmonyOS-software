@@ -1,6 +1,6 @@
 # 云端搭建与部署
 
-本目录包含 4 个 AGC 云对象、3 个独立云函数（图片读取 / 公开分享 HTTP / 定时维护）、32 个 Cloud DB 对象定义及环境变量配置说明。客户端第一次运行见 [项目 README](../README.md)，各文件职责见 [索引](../PROJECT_FILE_INDEX.md)。源码状态更新日期为 2026-10-09，官方操作资料核对日期仍为 2026-10-02。
+本目录包含 4 个 AGC 云对象、3 个独立云函数（图片读取 / 公开分享 HTTP / 定时维护）、33 个 Cloud DB 对象定义及环境变量配置说明。客户端第一次运行见 [项目 README](../README.md)，各文件职责见 [索引](../PROJECT_FILE_INDEX.md)。源码状态更新日期为 2026-10-10，官方操作资料核对日期仍为 2026-10-02。
 
 ## 0. 先确定团队、项目与分工
 
@@ -43,7 +43,7 @@
 ## 2. Cloud DB 和 Storage
 
 1. 建立中国区 Cloud DB 存储区 **`shike`**，与 `clouddb/db-config.json` 及服务端默认值一致。
-2. DevEco 右击 **clouddb > Deploy Cloud DB**，等待 `Deploy successfully`；从 `Tools > CloudDev > Serverless > Cloud DB > Go to console`检查“对象类型”“存储区”“数据”页签，确认 `objecttype/`下 32 个对象与目标 shike 存储区。部署前核对项目，不覆盖结构不同的已有对象。
+2. DevEco 右击 **clouddb > Deploy Cloud DB**，等待 `Deploy successfully`；从 `Tools > CloudDev > Serverless > Cloud DB > Go to console`检查“对象类型”“存储区”“数据”页签，确认 `objecttype/`下 33 个对象与目标 shike 存储区。部署前核对项目，不覆盖结构不同的已有对象。
 3. 所有对象仅给 **Administrator：Read/Upsert/Delete**，World/Authenticated/Creator 不开放权限。
 4. 创建一个中国区 AGC Cloud Storage 实例，把完整实例名用于 `SHIKE_STORAGE_BUCKET`。不使用 OBS，不开放客户端或匿名直接读写/列举 `public/approved/` 图片目录。
 5. 图片由 shike-media 使用平台项目凭证处理；设备只通过鉴权媒体接口访问。`PROJECT_CREDENTIAL` 由 AGC 注入，不自行创建或复制。
@@ -54,14 +54,14 @@
 | 内容/媒体 | FoodCard：商品、价格、口味、E3 位置与状态；CardMedia：图片归属、路径、摘要、尺寸和卡片关联 |
 | 商家 | Merchant：官方点／用户点、坐标系、审核状态、地图资格与公开推荐计数 |
 | 卡片互动 | Report：举报；CardAction：旧 LIKE 与独立收藏；CardReaction：新赞踩；CardComment / CommentReaction：保留历史评论数据和旧接口 |
-| 版本/权限/任务 | FoodCardRevision：待审编辑版本；FriendContentAccessGrant：方向授权；PublishRequestRecord：请求回执；MaintenanceJob：迁移、会话及生命周期任务 |
+| 版本/权限/任务 | FoodCardRevision：待审编辑版本；PublishRequestRecord：请求回执；MaintenanceJob：迁移、会话及生命周期任务 |
 | 好友/私信 | Friendship：关系/申请；FriendReport：用户举报；Conversation：会话/未读；ChatMessage：TEXT/CARD/LINK |
 | 群聊 | GroupConversation：群资料/摘要；GroupMember：角色/未读；GroupMessage：文字/卡片 |
-| 个人内容 | TastePreference：口味偏好；FoodList / FoodListItem：私人清单；PersonalFoodState：个人食物状态 |
+| 个人内容 | TastePreference：口味偏好；FoodList / FoodListItem：私人清单；PersonalFoodState：个人食物状态；MealChoiceHistory：选择记录 |
 | 群投票 | MealPoll / MealPollOption / MealPollVote：投票、选项与投票记录 |
 | 通知/卡片 | NotificationEvent：站内事件；PushRegistration：系统通知设备登记；WidgetRegistration：桌面卡片实例登记 |
 
-**已有数据的项目：**保留历史 CardRating 及其数据。AppScope/schema.json 是平台生成的快照，客户端与云端快照可能处于不同代次；当前部署以 `clouddb/objecttype/` 的 32 个定义为准。已部署字段的类型、主键和敏感属性不能直接更改；新增结构先制定迁移方案，由管理员操作并导出核对。当前 FoodCard 定义含 16 个索引，Merchant 含 4 个索引，核对时包含字段顺序与 ASC/DESC。
+**已有数据的项目：**保留历史 CardRating 及其数据。AppScope/schema.json 是平台生成的快照，客户端与云端快照可能处于不同代次；当前部署以 `clouddb/objecttype/` 的 33 个定义为准。已部署字段的类型、主键和敏感属性不能直接更改；新增结构先制定迁移方案，由管理员操作并导出核对。当前 FoodCard 定义含 16 个索引，Merchant 含 4 个索引，核对时包含字段顺序与 ASC/DESC。
 
 String 字段有 200 字符上限，正文/长链接采用 Text。UserProfile.nickname/avatarUrl、CardMedia.objectKey/sha256、Report.reason、FriendReport.reason 保持已有敏感属性；查询用镜像字段依既有模型处理。消息正文、链接、摘要和 Token 的 Text 字段采用服务端 AES-256-GCM 密文，不改成明文或用 isSensitive 代替。对象定义与各 runtime 的 fieldTypes、主键、索引和销户清理必须同步。
 
@@ -120,11 +120,11 @@ String 字段有 200 字符上限，正文/长链接采用 Text。UserProfile.ni
 
 批量 `cloudfunctions > Deploy Cloud Functions`会部署目录内全部对象；`CloudProgram > Deploy Cloud Program`还涉及整套云资源。团队已有数据时优先有范围的单对象部署。**Sync '对象' / Sync Cloud Functions / Sync Cloud Program 是从云端下载，Overwrite 会覆盖本地源码并生成备份，不是上传发布。**确需同步时先保存 Git 改动、对比云端版本，再选择 Skip/Overwrite；同步 DB 当前支持对象类型，不是业务数据备份。
 
-**从旧版升级到本版：**核对 `clouddb/objecttype/` 当前 32 个对象及真实 AGC 导出，保留已有数据、主键、字段类型和索引排序。本地已移除 `MealChoiceHistory` 定义，但不能据此删除线上历史对象或数据。service 的 stage1–stage7、个人集合、审核、生命周期模块，以及共享 policy/read-errors/image-reader 均由统一打包器递归收集。service 导出或代理变动后仍应执行 **Generate Invoke Interface**；客户端新增动态调用走 `cloudFunction.call`。编译入口 JS/map 和函数内派生副本不随 Git 发布。
+**从旧版升级到本版：**核对 `clouddb/objecttype/` 当前 33 个对象及真实 AGC 导出，保留已有数据、主键、字段类型和索引排序。本地现有 `CardRating`、`MealChoiceHistory` 定义；`FriendContentAccessGrant` 已从当前源码移除，但不能据此删除线上历史对象或数据。service 的 stage1–stage7、个人集合、审核、生命周期模块，以及共享 policy/read-errors/image-reader 均由统一打包器递归收集。service 导出或代理变动后仍应执行 **Generate Invoke Interface**；客户端新增动态调用走 `cloudFunction.call`。编译入口 JS/map 和函数内派生副本不随 Git 发布。
 
 管理接口从 `SHIKE_ADMIN_UIDS` 读取受控管理员 canonical UID；迁移还需 `SHIKE_MIGRATION_ANCHOR_UID` 指定存在且活跃的共享管理员锚点。`SHIKE_INDEXED_QUERY_VERIFIED` 仅在历史迁移覆盖完成、实际索引查询验收后启用。秘密和项目身份仍通过团队安全渠道配置。
 
-本版标签为 **图片优化前版**。Stage 2、Stage 3 阶段验收此前已由负责人确认，Stage 4–9 运行验收待负责人完成；本次 Git 发布未执行构建、运行验证或 AGC 部署。源码已包含 30 天软删除恢复、持久生命周期任务和独立维护 Worker，实际开启仍受服务端开关与平台定时配置控制。服务卡片继续同步公开摘要与图片身份，应用前台准备封面缓存。
+本版标签为 **减负前版**。Stage 2、Stage 3 阶段验收此前已由负责人确认，Stage 4–9 运行验收待负责人完成；本次 Git 发布未执行构建、运行验证或 AGC 部署。源码已包含 30 天软删除恢复、持久生命周期任务和独立维护 Worker，实际开启仍受服务端开关与平台定时配置控制。服务卡片继续同步公开摘要与图片身份，应用前台准备封面缓存。
 
 地图／搜索门槛继续保留：`SHIKE_STAGE3_SEARCH_VERIFIED`、`SHIKE_STAGE3_MAP_VERIFIED` 分别控制开放，且仍须历史覆盖与索引条件就绪。地图首发要求 `SHIKE_STAGE3_MAP_COORDINATE_SYSTEM=GCJ02`；可靠可见商家混入 WGS84 时不开放地图。好友发布、选点坐标与官方 POI 仍按 `SHIKE_FRIENDS_PUBLISH_VERIFIED`、`SHIKE_MAP_PICKER_COORDINATE_SYSTEM`、`SHIKE_HUAWEI_POI_VERIFIED`、`SHIKE_HUAWEI_POI_COORDINATE_SYSTEM` 核对；官方查询密钥 `SHIKE_HUAWEI_SITE_API_KEY` 使用秘密变量。部署成员逐项确认环境资格，不能仅凭这次发布替生产环境开放门槛。
 

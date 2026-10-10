@@ -3,7 +3,7 @@ export type FoodCategory = 'staple' | 'bakery' | 'drink' | 'snack' | 'fresh' | '
 export type FoodConsumptionMode = 'UNSPECIFIED' | 'DELIVERY' | 'DINE_IN';
 export type FoodCategoryV2 = 'NOODLES' | 'RICE_SET' | 'HOT_POT' | 'GRILL_FRIED' | 'SNACK' |
   'FAST_WESTERN' | 'BREAKFAST_BAKERY' | 'DESSERT' | 'DRINK' | 'PACKAGED' | 'OTHER';
-export type FoodVisibility = 'PUBLIC' | 'FRIENDS';
+export type FoodVisibility = 'PUBLIC';
 export type CardReviewState = 'LEGACY_APPROVED' | 'PENDING_POST_REVIEW' | 'APPROVED' | 'TAKEN_DOWN' | 'REQUEST_CHANGE';
 export type CardReactionType = 'LIKE' | 'DISLIKE';
 export type CardRevisionStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'WITHDRAWN';
@@ -17,39 +17,6 @@ export interface CardReactionRecord {
   reaction: CardReactionType;
   createdAt: number;
   updatedAt: number;
-}
-
-/** Storage contract; public card responses never include the access-grant row. */
-export interface FriendContentAccessGrantRecord {
-  authorUid: string;
-  viewerUid: string;
-  accessThroughAt: number;
-  accessThroughSequence: number;
-  revoked: boolean;
-  revokedAt?: number;
-  updatedAt: number;
-}
-
-export interface SetCardVisibilityRequest {
-  cardId: string;
-  visibility: FoodVisibility;
-  expectedModifiedAt?: number;
-}
-
-export interface SetCardVisibilityResponse {
-  success: boolean;
-  cardId: string;
-  visibility: FoodVisibility;
-  modifiedAt: number;
-  publishedAt?: number;
-  friendVisibilitySince?: number;
-  friendVisibilitySequence?: number;
-  lifecycleGeneration?: number;
-  unchanged: boolean;
-}
-
-export interface RevokeFriendContentAccessRequest {
-  viewerUid: string;
 }
 
 export interface FriendCleanupJobRequest {
@@ -509,8 +476,6 @@ export interface FoodCard {
   publishedAt?: number;
   modifiedAt?: number;
   edited?: boolean;
-  friendVisibilitySince?: number;
-  friendVisibilitySequence?: number;
   reviewState?: CardReviewState;
   reviewReason?: string;
   deletedAt?: number;

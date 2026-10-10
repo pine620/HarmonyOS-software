@@ -1,6 +1,6 @@
 import { common } from '@kit.AbilityKit';
 import { CardEditContextResponse, CardIdRequest, CardRevisionIdRequest, CardRevisionResponse,
-  OperationResponse, SetCardVisibilityRequest, SetCardVisibilityResponse, SubmitCardRevisionRequest } from '../model/CloudContracts';
+  OperationResponse, SubmitCardRevisionRequest } from '../model/CloudContracts';
 import { AuthService } from '../service/AuthService';
 import { CloudGateway } from '../service/CloudGateway';
 
@@ -18,9 +18,5 @@ export class CardEditRepository {
     await AuthService.ensureSession(context);
     const request: CardRevisionIdRequest = { revisionId };
     return CloudGateway.callAuthenticated<OperationResponse>('withdraw-card-revision', request);
-  }
-  async narrow(context: common.Context, request: SetCardVisibilityRequest): Promise<SetCardVisibilityResponse> {
-    await AuthService.ensureSession(context);
-    return CloudGateway.callAuthenticated<SetCardVisibilityResponse>('set-card-visibility', request);
   }
 }

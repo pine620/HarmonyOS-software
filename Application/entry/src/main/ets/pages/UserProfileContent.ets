@@ -124,7 +124,7 @@ export struct UserProfileContent {
         Column({ space: 4 }) {
           Text(this.response === undefined ? '用户主页' : this.response.profile.nickname).fontSize(20)
             .fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'));
-          Text(this.response?.relationshipState === 'SELF' ? '我的主页' : this.response?.relationshipState === 'FRIEND' ? '好友 · 可查看好友可见内容' : '访客 · 公开推荐')
+          Text(this.response?.relationshipState === 'SELF' ? '我的主页' : '公开推荐')
             .fontSize(12).fontColor($r('app.color.muted'));
         }.layoutWeight(1).alignItems(HorizontalAlign.Start);
         if (this.response?.relationshipState === 'FRIEND') {

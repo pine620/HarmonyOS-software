@@ -83,7 +83,6 @@ function score(row,p,at) {
 }
 function coordinate(row) { return row && ['VERIFIED_PROVIDER','USER_CONFIRMED_APPROVED'].includes(row.verificationStatus) && row.coordinateSystem==='GCJ02' && Number.isSafeInteger(row.latitudeE6) && Math.abs(row.latitudeE6)<=90000000 && Number.isSafeInteger(row.longitudeE6) && Math.abs(row.longitudeE6)<=180000000; }
 function distance(lat,lon,row) { const rad=Math.PI/180,a=(row.latitudeE6/1e6-lat)*rad,b=(row.longitudeE6/1e6-lon)*rad;const h=Math.sin(a/2)**2+Math.cos(lat*rad)*Math.cos(row.latitudeE6/1e6*rad)*Math.sin(b/2)**2;return 6371000*2*Math.asin(Math.min(1,Math.sqrt(h))); }
-function friendsAllowed(env,row) { return currentVisibility(row)==='PUBLIC' || flag(env,'SHIKE_FRIENDS_PUBLISH_VERIFIED'); }
 function afterTuple(query,fields,row){
  query.and().beginGroup();
  for(let branch=0;branch<fields.length;branch++){
@@ -96,4 +95,4 @@ function afterTuple(query,fields,row){
  return query.endGroup();
 }
 
-module.exports={afterTuple,CATEGORIES,fail,hash,flag,id,uuid,int,version,token,encode,withCursorContext,timestampPage,preference,preferenceView,hasPreference,score,coordinate,distance,friendsAllowed};
+module.exports={afterTuple,CATEGORIES,fail,hash,flag,id,uuid,int,version,token,encode,withCursorContext,timestampPage,preference,preferenceView,hasPreference,score,coordinate,distance};
