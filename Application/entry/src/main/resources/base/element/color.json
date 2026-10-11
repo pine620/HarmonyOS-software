@@ -87,6 +87,114 @@
     {
       "name": "scrim",
       "value": "#66000000"
+    },
+    {
+      "name": "food_ranking_canvas",
+      "value": "#FFF5E8"
+    },
+    {
+      "name": "food_ranking_ink",
+      "value": "#39281F"
+    },
+    {
+      "name": "food_ranking_muted",
+      "value": "#78604F"
+    },
+    {
+      "name": "food_ranking_accent",
+      "value": "#AA411E"
+    },
+    {
+      "name": "food_ranking_rank_top",
+      "value": "#F4C35B"
+    },
+    {
+      "name": "food_ranking_rank",
+      "value": "#4D4138"
+    },
+    {
+      "name": "food_ranking_rank_text",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "food_ranking_placeholder",
+      "value": "#F2E6D9"
+    },
+    {
+      "name": "food_ranking_line",
+      "value": "#ECD9C5"
+    },
+    {
+      "name": "food_ranking_header",
+      "value": "#FFE1BF"
+    },
+    {
+      "name": "food_ranking_surface",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "food_ranking_tab_track",
+      "value": "#FFE6D0"
+    },
+    {
+      "name": "food_ranking_action",
+      "value": "#AA411E"
+    },
+    {
+      "name": "food_ranking_on_action",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "food_ranking_score_surface",
+      "value": "#FFEDDC"
+    },
+    {
+      "name": "food_ranking_rank_second",
+      "value": "#EDB07E"
+    },
+    {
+      "name": "food_ranking_rank_third",
+      "value": "#E6A78C"
+    },
+    {
+      "name": "food_ranking_rank_top_text",
+      "value": "#4B2B15"
+    },
+    {
+      "name": "food_ranking_top_line",
+      "value": "#EDAD71"
+    },
+    {
+      "name": "random_canvas",
+      "value": "#FAF7F2"
+    },
+    {
+      "name": "random_surface",
+      "value": "#FFFCF7"
+    },
+    {
+      "name": "random_ink",
+      "value": "#292622"
+    },
+    {
+      "name": "random_muted",
+      "value": "#6C6259"
+    },
+    {
+      "name": "random_accent",
+      "value": "#B8442F"
+    },
+    {
+      "name": "random_on_accent",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "random_soft",
+      "value": "#F0E8DE"
+    },
+    {
+      "name": "random_line",
+      "value": "#DCD2C6"
     }
   ]
 }

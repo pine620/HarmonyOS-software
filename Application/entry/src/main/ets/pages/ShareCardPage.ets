@@ -14,7 +14,7 @@ function emptyCard(): FoodCard {
     specification: '', shop: '', sellingPoints: [], publicOffers: [], reviewText: '', tasteScore: 0,
     sourceLink: '', category: 'other', photoUrl: '', photoPath: '', photoBucket: '', photoWidth: 0,
     photoHeight: 0, photos: [], viewerIsOwner: false, likeCount: 0, favoriteCount: 0,
-    viewerLiked: false, viewerFavorited: false, commentCount: 0, comments: [], district: '',
+    viewerLiked: false, viewerFavorited: false, district: '',
     distanceKm: 0, status: 'APPROVED', createdAt: 0
   };
 }

@@ -9,7 +9,7 @@ const jpeg = Buffer.from([255,216,255,224,255,217]);
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const id = number => '00000000-0000-4000-8000-' + String(number).padStart(12, '0');
 const relationshipId = (a,b) => digest('friend:' + [a,b].sort().join(':'));
-function fixture(count = 4, cover = true) {
+function fixture(count = 4, cover = true, overrides = {}) {
   const db = { IdentityBinding: [], CardMedia: [], FoodCard: [], FoodCardRevision: [],
     UserProfile: [{uid:'viewer',accountStatus:'ACTIVE'},{uid:'author',accountStatus:'ACTIVE'}], Friendship: [] };
   for (let n=1;n<=count;n++) {
@@ -18,10 +18,10 @@ function fixture(count = 4, cover = true) {
     db.FoodCard.push({id:'card-'+n,ownerUid:'author',status:'APPROVED',schemaVersion:0,updatedAt:1});
   }
   const calls = {db:0,storage:0,auth:0}, hook = {download:async()=>{}, query:async()=>{}};
-  const reader = createImageReader({adminUids:['admin'],verifyToken:async token=>{ calls.auth++; if(token==='bad')throw Object.assign(new Error('Bad token'),{code:'AUTH_REQUIRED'}); return 'viewer'; },
+  const reader = createImageReader({verifyToken:async token=>{ calls.auth++; if(token==='bad')throw Object.assign(new Error('Bad token'),{code:'AUTH_REQUIRED'}); return 'viewer'; },
     collection:name=>({query:()=>{let filters=[],size=100;const query={in:(field,values)=>{filters.push(row=>values.includes(row[field]));return query;},equalTo:(field,value)=>{filters.push(row=>row[field]===value);return query;},limit:value=>{size=value;return query;},
       get:async()=>{calls.db++;await hook.query(name);return db[name].filter(row=>filters.every(predicate=>predicate(row))).slice(0,size).map(row=>({...row}));}};return query;}}),
-    download:async()=>{calls.storage++;await hook.download();return jpeg;}});
+    download:async()=>{calls.storage++;await hook.download();return jpeg;}, ...overrides});
   const item = (n, values={}) => ({mediaId:id(n),mode:'PUBLIC',variant:'COVER_480',revisionId:'',wantBytes:true,...values});
   const read = (items, token='token') => reader.readBatch({protocolVersion:'image-read-v1',accessToken:token,items});
   return {db,calls,hook,read,item};
@@ -130,4 +130,19 @@ test('failed Storage attempts also consume the four-download admission budget',a
   const f=fixture(8);f.hook.download=async()=>{throw Object.assign(new Error('unavailable'),{code:'STORAGE_UNAVAILABLE'});};
   const response=await f.read(Array.from({length:8},(_,n)=>f.item(n+1)));
   assert.equal(f.calls.storage,4);assert.equal(response.items.filter(row=>row.status==='DEFERRED').length,4);
+});
+
+test('sampling suppresses successful reads while preserving denied item diagnostics', async () => {
+  const messages = [], original = console.info;
+  console.info = message => messages.push(message);
+  try {
+    const f = fixture(1, true, { shouldLogMetrics: () => false });
+    await f.read([f.item(1)]);
+    assert.equal(messages.length, 0);
+    f.db.FoodCard[0].deletedAt = new Date();
+    await f.read([f.item(1)]);
+    assert.equal(messages.length, 1);
+    assert.match(messages[0], /image\.read /);
+    assert.equal(JSON.parse(messages[0].slice('image.read '.length)).statusCounts.DENIED, 1);
+  } finally { console.info = original; }
 });

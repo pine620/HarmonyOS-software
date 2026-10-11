@@ -1,90 +1,23 @@
 'use strict';
 const crypto=require('crypto');
 const {dateMillis,currentVisibility,isAccountActive}=require('./shared/content-policy');
-const {fail,hash,id,uuid,int,version,token,encode,score,coordinate,distance}=require('./stages47-common');
+const {fail,hash,id,uuid,int,version,token,encode,coordinate,distance}=require('./stages47-common');
 function createStage6Services(ctx){
  const {collection,one,models}=ctx;const model=(n,r)=>Object.assign(new models[n](),r);
- async function personalCandidates(uid,p,env){
-  await ctx.contentPolicy(env).assertAccountActive(uid);
-  const excluded=p.excludedCardIds||[];
-  if(!Array.isArray(excluded)||excluded.length>1000||excluded.some(x=>typeof x!=='string'||x.length>128))throw fail('会话排除集合无效。');
-  const limit=1000;
-  const [wanted,favorites,items,ownedLists]=await ctx.withReadPhase('candidates',async()=>{
-  const migration=await ctx.collections().status(uid,env);
-  return migration.collectionReady?await Promise.all([
-   collection(env,'CardAction').query().equalTo('actorUid',uid).equalTo('kind','WANT_TO_EAT').orderByDesc('createdAt').orderByAsc('id').limit(limit).get(),
-   collection(env,'CardAction').query().equalTo('actorUid',uid).equalTo('kind','FAVORITE').orderByDesc('createdAt').orderByAsc('id').limit(limit).get(),
-   Promise.resolve([]),Promise.resolve([])
-  ]):await Promise.all([
-   collection(env,'PersonalFoodState').query().equalTo('ownerUid',uid).equalTo('state','WANT_TO_EAT').orderByDesc('updatedAt').orderByAsc('cardId').limit(limit).get(),
-   collection(env,'CardAction').query().equalTo('actorUid',uid).equalTo('kind','FAVORITE').orderByDesc('createdAt').orderByAsc('id').limit(limit).get(),
-   collection(env,'FoodListItem').query().equalTo('ownerUid',uid).orderByAsc('cardId').orderByAsc('listId').limit(limit).get(),
-   collection(env,'FoodList').query().equalTo('ownerUid',uid).orderByAsc('sortOrder').orderByAsc('listId').limit(limit).get()
-  ]);
-  });
-  ctx.recordReadCounts({sourceReferenceCount:wanted.length+favorites.length+items.length});
-  const activeLists=new Set(ownedLists.filter(list=>list.deletedAt==null).map(list=>list.listId));
-  const seen=new Set(excluded),pool=new Map(),sourceIds=new Set();
-  function entry(cardId){
-   if(typeof cardId!=='string'||!cardId)return null;
-   sourceIds.add(cardId);
-   if(seen.has(cardId))return null;
-   if(!pool.has(cardId))pool.set(cardId,{cardId,wanted:false,favorite:false,listIds:[]});
-   return pool.get(cardId);
-  }
-  for(const row of wanted){const item=entry(row.cardId);if(item)item.wanted=true;}
-  for(const row of favorites){const item=entry(row.cardId);if(item)item.favorite=true;}
-  for(const row of items){if(!activeLists.has(row.listId))continue;const item=entry(row.cardId);if(item&&!item.listIds.includes(row.listId))item.listIds.push(row.listId);}
-  const shuffled=[...pool.values()];
-  ctx.recordReadCounts({candidatePoolCount:shuffled.length});
-  for(let i=shuffled.length-1;i>0;i--){const j=crypto.randomInt(i+1);[shuffled[i],shuffled[j]]=[shuffled[j],shuffled[i]];}
-  let output=[];const sources=new Map(),fetchedIds=new Set();let scanned=0;
-  // Personal references need no public-search qualification or preference ranking.
-  // Bound stale-reference reads while drawing uniformly from the collected IDs.
-  while(scanned<shuffled.length&&scanned<60&&output.length<3){
-   await ctx.withReadPhase('assembly',async()=>{
-    while(scanned<shuffled.length&&scanned<60&&output.length<3){
-     const batch=shuffled.slice(scanned,scanned+Math.min(10,60-scanned));
-     for(const item of batch)fetchedIds.add(item.cardId);
-     ctx.recordReadCounts({fetchedCandidateCount:fetchedIds.size,scannedCandidateCount:scanned});
-     const byId=await ctx.readCardRowsByIds(batch.map(item=>item.cardId),env);
-     const rows=batch.map(item=>byId.get(item.cardId)).filter(row=>row);
-     const context=await ctx.createCardReadContext(rows,uid,env);
-     const readable=await ctx.readableCardRows(rows,uid,env,false,context);
-     await ctx.preparePrimaryPhotos(context,readable,env);
-     for(const item of batch){
-      if(output.length===3)break;
-      scanned++;const row=byId.get(item.cardId);if(!row)continue;
-      const card=await ctx.readCardIfAllowed(row,env,0,true,uid,false,1,null,context);if(!card)continue;
-      const reasons=[];if(item.wanted)reasons.push('来自我的想吃');if(item.favorite)reasons.push('来自我的收藏');if(item.listIds.length)reasons.push('来自待整理收藏');
-      output.push({card,reasons,distanceMeters:null});sources.set(card.id,row);
-     }
-     ctx.recordReadCounts({scannedCandidateCount:scanned});
-    }
-   });
-   const fresh=await ctx.withReadPhase('final-check',()=>ctx.finalizeCardReads(output.map(item=>item.card),[...sources.values()],uid,env));
-   const readable=new Map(fresh.map(card=>[card.id,card]));
-   output=output.filter(item=>readable.has(item.card.id)).map(item=>({...item,card:readable.get(item.card.id)}));
-  }
-  const candidates=output;
-  await ctx.contentPolicy(env).assertAccountActive(uid);
-  const complete=wanted.length<limit&&favorites.length<limit&&items.length<limit&&ownedLists.length<limit&&scanned===shuffled.length;
-  const sourcesBounded=wanted.length===limit||favorites.length===limit||items.length===limit||ownedLists.length===limit;
-  const emptyReason=candidates.length?'':sourceIds.size===0?'NO_SOURCES':pool.size===0?'EXCLUDED_EXHAUSTED':sourcesBounded||scanned<shuffled.length?'SCAN_LIMIT':'EXHAUSTED';
-  return {personalRandom:true,candidates,coverage:complete?'COMPLETE':'BOUNDED',scannedCandidateCount:scanned,fetchedCandidateCount:fetchedIds.size,insufficient:candidates.length<3,sessionExhausted:complete&&candidates.length===0,emptyReason};
- }
  async function candidates(uid,p,env){
-  if(p.personalRandom===true)return personalCandidates(uid,p,env);
   await ctx.contentPolicy(env).assertAccountActive(uid);const caps=await ctx.stage3().capabilities(env);if(!caps.searchEnabled)throw fail('选餐硬条件需先完成查询资格验证。','FEATURE_NOT_READY');
-  const spec=ctx.stage3().querySpec({...p,scope:'ALL_PUBLIC',sort:'LATEST'},env);const source=p.source||'ALL';if(!['ALL','MY_LISTS','FRIENDS_ONLY','PUBLIC_ONLY'].includes(source))throw fail('来源无效。');
+  const spec=ctx.stage3().querySpec({...p,scope:'ALL_PUBLIC',sort:'LATEST'},env);const source=p.source||'ALL';if(!['ALL','MY_COLLECTIONS','FRIENDS_ONLY','PUBLIC_ONLY'].includes(source))throw fail('来源无效。');
   const excluded=p.excludedCardIds||[];if(!Array.isArray(excluded)||excluded.length>1000||excluded.some(x=>typeof x!=='string'||x.length>128))throw fail('会话排除集合无效。');
   let point=null;if(p.nearby===true){if(!caps.mapEnabled)throw fail('附近选餐需先验证 Merchant 坐标。','FEATURE_NOT_READY');if(!Number.isFinite(p.lat)||Math.abs(p.lat)>90||!Number.isFinite(p.lon)||Math.abs(p.lon)>180||p.coordinateSystem!=='GCJ02')throw fail('附近需要本次可靠位置。','LOCATION_REQUIRED');point={lat:p.lat,lon:p.lon,radius:int(p.radiusMeters,100,20000)};}
-  const pref=await ctx.stage4().get(uid,env);const at=Date.now();const layers=[];let scanned=0;
-  if(source==='ALL'||source==='MY_LISTS'){
+  if(p.listId)throw fail('私人清单已退出，请更新客户端使用收藏。','CLIENT_UPDATE_REQUIRED');
+  const at=Date.now();const layers=[];let scanned=0;
+  if(source==='ALL'||source==='MY_COLLECTIONS'){
    const migration=await ctx.collections().status(uid,env);
-   const statesQuery=migration.collectionReady?collection(env,'CardAction').query().equalTo('actorUid',uid).equalTo('kind','WANT_TO_EAT').orderByDesc('createdAt').orderByAsc('id'):collection(env,'PersonalFoodState').query().equalTo('ownerUid',uid).equalTo('state','WANT_TO_EAT').orderByDesc('updatedAt').orderByAsc('cardId');
-   const [states,favorites]=await Promise.all([statesQuery.limit(100).get(),collection(env,'CardAction').query().equalTo('actorUid',uid).equalTo('kind','FAVORITE').orderByDesc('createdAt').orderByAsc('id').limit(100).get()]);scanned+=states.length+favorites.length;let refs=[...states,...favorites];
-   if(p.listId && p.listId!=='FAVORITES'){if(migration.collectionReady)throw fail('私人清单已合并到收藏，请更新客户端。','CLIENT_UPDATE_REQUIRED');await ctx.stage5().ownList(uid,p.listId,env);refs=await collection(env,'FoodListItem').query().equalTo('listId',p.listId).orderByAsc('sortKey').orderByAsc('cardId').limit(200).get();scanned+=refs.length;}
+   if(!migration.collectionReady)throw fail('请先在我的收藏中完成整理。','COLLECTION_MIGRATING');
+   const [states,favorites]=await Promise.all([
+    collection(env,'CardAction').query().equalTo('actorUid',uid).equalTo('kind','WANT_TO_EAT').orderByDesc('createdAt').orderByAsc('id').limit(100).get(),
+    collection(env,'CardAction').query().equalTo('actorUid',uid).equalTo('kind','FAVORITE').orderByDesc('createdAt').orderByAsc('id').limit(100).get()
+   ]);scanned+=states.length+favorites.length;const refs=[...states,...favorites];
    const rows=[];for(const ref of refs)rows.push(await one(collection(env,'FoodCard').query().equalTo('id',ref.cardId)));layers.push({rows:rows.filter(Boolean),reason:'来自我的想吃或收藏'});
   }
   if(source==='ALL'||source==='FRIENDS_ONLY'){
@@ -97,13 +30,13 @@ function createStage6Services(ctx){
    for(const row of layer.rows){if(seen.has(row.id)||!ctx.stage3().matchesHardFilters(row,spec,at)||!await ctx.contentPolicy(env).canReadCard(uid,row))continue;
     let meters=null;if(point){if(!merchants.has(row.merchantId))merchants.set(row.merchantId,await one(collection(env,'Merchant').query().equalTo('merchantId',row.merchantId||'')));const merchant=merchants.get(row.merchantId);if(!coordinate(merchant))continue;meters=distance(point.lat,point.lon,merchant);if(meters>point.radius)continue;}
     filtered.push({row,meters});}
-   filtered.sort((a,b)=>score(b.row,pref,at).value-score(a.row,pref,at).value || a.row.id.localeCompare(b.row.id));
+   filtered.sort((a,b)=>(dateMillis(b.row.publishedAt)||Number(b.row.createdAt))-(dateMillis(a.row.publishedAt)||Number(a.row.createdAt)) || a.row.id.localeCompare(b.row.id));
    // Each layer has a quota, so a single private candidate does not end ALL.
    const quota=source==='ALL'?Math.max(1,3-output.length):3;
-   for(const item of filtered){if(seen.has(item.row.id))continue;if(layer.reason==='来自当前好友推荐'){const relation=await ctx.friendshipBetween(uid,item.row.ownerUid,env);if(!relation||relation.status!=='ACCEPTED')continue;}const card=await ctx.readCardIfAllowed(item.row,env,item.meters===null?0:item.meters/1000,true,uid,false,1);if(!card)continue;seen.add(card.id);output.push({card,reasons:[layer.reason,...score(item.row,pref,at).reasons],distanceMeters:item.meters});if(output.length>=3 || output.filter(x=>x.reasons[0]===layer.reason).length>=quota)break;}
+   for(const item of filtered){if(seen.has(item.row.id))continue;if(layer.reason==='来自当前好友推荐'){const relation=await ctx.friendshipBetween(uid,item.row.ownerUid,env);if(!relation||relation.status!=='ACCEPTED')continue;}const card=await ctx.readCardIfAllowed(item.row,env,item.meters===null?0:item.meters/1000,true,uid,false,1);if(!card)continue;seen.add(card.id);output.push({card,reasons:[layer.reason],distanceMeters:item.meters});if(output.length>=3 || output.filter(x=>x.reasons[0]===layer.reason).length>=quota)break;}
    if(output.length>=3)break;
   }
-  const final=[],sources=[];for(const item of output){const row=await one(collection(env,'FoodCard').query().equalTo('id',item.card.id));if(!row||!ctx.stage3().matchesHardFilters(row,spec,at))continue;if(item.reasons[0]==='来自当前好友推荐'){const relation=await ctx.friendshipBetween(uid,row.ownerUid,env);if(!relation||relation.status!=='ACCEPTED')continue;}let meters=null;if(point){const merchant=await one(collection(env,'Merchant').query().equalTo('merchantId',row.merchantId||''));if(!coordinate(merchant))continue;meters=distance(point.lat,point.lon,merchant);if(meters>point.radius)continue;}const card=await ctx.readCardIfAllowed(row,env,meters===null?0:meters/1000,true,uid,false,1);if(card){final.push({card,reasons:[item.reasons[0],...score(row,pref,at).reasons],distanceMeters:meters});sources.push(row);}}
+  const final=[],sources=[];for(const item of output){const row=await one(collection(env,'FoodCard').query().equalTo('id',item.card.id));if(!row||!ctx.stage3().matchesHardFilters(row,spec,at))continue;if(item.reasons[0]==='来自当前好友推荐'){const relation=await ctx.friendshipBetween(uid,row.ownerUid,env);if(!relation||relation.status!=='ACCEPTED')continue;}let meters=null;if(point){const merchant=await one(collection(env,'Merchant').query().equalTo('merchantId',row.merchantId||''));if(!coordinate(merchant))continue;meters=distance(point.lat,point.lon,merchant);if(meters>point.radius)continue;}const card=await ctx.readCardIfAllowed(row,env,meters===null?0:meters/1000,true,uid,false,1);if(card){final.push({card,reasons:[item.reasons[0]],distanceMeters:meters});sources.push(row);}}
   const readable=await ctx.finalizeCardReads(final.map(x=>x.card),sources,uid,env);const candidates=final.filter(x=>readable.some(c=>c.id===x.card.id));
   return {candidates,coverage:'BOUNDED',scannedCandidateCount:scanned,insufficient:candidates.length<3,sessionExhausted:candidates.length===0};
  }

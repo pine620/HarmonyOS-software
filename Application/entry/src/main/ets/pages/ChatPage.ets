@@ -1,5 +1,5 @@
-import { FoodListRepository } from '../repository/FoodListRepository';
-import { FoodListItemsPage, FoodListItem } from '../model/FoodListModels';
+import { PersonalCollectionRepository } from '../repository/PersonalCollectionRepository';
+import { PersonalCollectionPage } from '../model/PersonalCollectionModels';
 import { AccountRequestGuard } from '../service/AccountRequestGuard';
 import { common } from '@kit.AbilityKit';
 import { FoodCard } from '../model/CloudContracts';
@@ -112,12 +112,13 @@ export struct ChatPage {
   private async loadCardCandidates(more: boolean = false): Promise<void> {
     if (this.cardsLoading) return; const generation: number = this.pageGeneration; this.cardsLoading = true;
     try { const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      const page: FoodListItemsPage = await new FoodListRepository().items('FAVORITES', more ? this.favoriteCursor : '');
+      const page: PersonalCollectionPage = await new PersonalCollectionRepository().list('FAVORITE', more ? this.favoriteCursor : '');
       if (generation !== this.pageGeneration) return;
       const combined: Array<FoodCard> = more ? this.cardCandidates.slice() : [];
       for (const item of page.items) { const card: FoodCard | null = item.card; if (card !== null && !this.containsCard(combined, card.id)) combined.push(card); }
       if (!more) { const own: Array<FoodCard> = await this.cardRepository.myCards(context); if (generation !== this.pageGeneration) return; for (const card of own) if (card.status === 'APPROVED' && !this.containsCard(combined, card.id)) combined.push(card); }
       this.cardCandidates = combined; this.favoriteCursor = page.nextCursor;
+      if (page.migration !== undefined && !page.migration.collectionReady) this.status = '收藏尚未整理，请先在我的收藏中继续；当前可分享自己发布的卡片。';
     } catch (error) { if (generation === this.pageGeneration) this.status = `卡片加载失败：${errorText(error as ErrorDetail)}`; }
     finally { if (generation === this.pageGeneration) this.cardsLoading = false; }
   }
@@ -372,7 +373,7 @@ export struct ChatPage {
               .accessibilityLevel('no');
             Text('从一条真诚推荐开始').fontSize(18).fontWeight(FontWeight.Bold)
               .fontColor($r('app.color.ink'));
-          Text('你可以发送文字，或分享一张公开食刻卡片。链接会作为普通文字发送。')
+            Text('好友消息会直接显示在这段私聊中。你可以发送文字或分享公开食刻卡片，链接会作为普通文字发送。')
               .fontSize(13).lineHeight(20).fontColor($r('app.color.muted')).textAlign(TextAlign.Center)
               .width('82%');
           }.width('100%').layoutWeight(1).justifyContent(FlexAlign.Center);

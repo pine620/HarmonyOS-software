@@ -3,9 +3,9 @@ import { pasteboard } from '@kit.BasicServicesKit';
 import { MerchantRepository } from '../repository/MerchantRepository';
 import { MerchantResponse } from '../model/MerchantModels';
 import { MerchantNavigationService } from '../service/MerchantNavigationService';
-import { PreferenceRepository } from '../repository/PreferenceRepository';
+import { FeatureRepository } from '../repository/FeatureRepository';
 import { SocialDiscoveryRepository } from '../repository/SocialDiscoveryRepository';
-import { Stage47Capabilities } from '../model/PreferenceModels';
+import { Stage47Capabilities } from '../model/FeatureModels';
 import { util } from '@kit.ArkTS';
 import { PersonalCollectionAction, PersonalCollectionMigration, PersonalCollectionKind, SetPersonalCollectionRequest } from '../model/PersonalCollectionModels';
 import { PersonalCollectionRepository } from '../repository/PersonalCollectionRepository';
@@ -14,7 +14,7 @@ import { common } from '@kit.AbilityKit';
 import { uniformTypeDescriptor as utd } from '@kit.ArkData';
 import { harmonyShare, systemShare } from '@kit.ShareKit';
 import {
-  CardReactionType, CardActionResponse, SetCardReactionRequest, CardComment, CardPhoto, CommentReactionType, FoodCard
+  CardReactionType, CardActionResponse, SetCardReactionRequest, CardPhoto, FoodCard
 } from '../model/CloudContracts';
 import { CardRepository } from '../repository/CardRepository';
 import { categoryLabel } from '../components/FoodCover';
@@ -45,7 +45,7 @@ function emptyCard(): FoodCard {
     photoUrl: '', photoPath: '', photoBucket: '', photoWidth: 0, photoHeight: 0,
     authorNickname: '食刻用户', authorAvatarUrl: '', authorAvatarPath: '', authorAvatarBucket: '',
     photos: [], viewerIsOwner: false, likeCount: 0, favoriteCount: 0, viewerLiked: false,
-    viewerFavorited: false, commentCount: 0, comments: [], district: '', distanceKm: 0,
+    viewerFavorited: false, district: '', distanceKm: 0,
     status: 'APPROVED', createdAt: 0
   };
 }
@@ -104,14 +104,6 @@ export struct CardDetailPage {
   @State favoriteCount: number = 0;
   @State viewerLiked: boolean = false;
   @State viewerFavorited: boolean = false;
-  @State commentCount: number = 0;
-  @State comments: Array<CardComment> = [];
-  @State visibleCommentCount: number = 3;
-  @State expandedReplyCommentIds: Array<string> = [];
-  @State commentInput: string = '';
-  @State replyToCommentId: string = '';
-  @State replyToNickname: string = '';
-  @State deletingCommentId: string = '';
   @State actionMenuVisible: boolean = false;
   @State reportOptionsVisible: boolean = false;
   @State reportReason: string = '信息不准确';
@@ -120,7 +112,6 @@ export struct CardDetailPage {
   private interactionQueue: Array<CardInteractionIntent> = [];
   private activeInteraction: CardInteractionIntent | undefined = undefined;
   private pendingReaction: SetCardReactionRequest | undefined = undefined;
-  @State commentBusy: boolean = false;
   @State status: string = '';
   @State knockShareEnabled: boolean = false;
   @State knockShareBusy: boolean = false;
@@ -129,7 +120,6 @@ export struct CardDetailPage {
   private primaryImageStarted: number = 0;
   private hydratingPhotoIndices: Set<number> = new Set<number>();
   private photoPrefetchIndex: number = -1;
-  private hydratingCommentIds: Set<string> = new Set<string>();
   private knockShareGeneration: number = 0;
   private knockSharePageVisible: boolean = false;
   private knockShareListener: (target: harmonyShare.SharableTarget) => void =
@@ -140,7 +130,6 @@ export struct CardDetailPage {
   aboutToAppear(): void {
     this.primaryImageStarted = Date.now();
     this.mediaServiceUnavailable = false;
-    this.visibleCommentCount = 3;
     this.clearDetailView();
   }
 
@@ -171,7 +160,7 @@ export struct CardDetailPage {
     this.primaryImageStarted = 0;
   }
 
-  private clearDetailView(): void { this.photoGeneration++; this.detailReady = false; this.viewerIsOwner = false; this.entryCoverUrl = ''; this.coverUrls = []; this.decodedPhotoUrls = []; this.photoPrefetchIndex = -1; this.interactionBusy = false; this.interactionQueue = []; this.activeInteraction = undefined; this.navigationAddress = ''; this.detailPhotos = []; this.detailAuthorAvatarUrl = ''; this.detailAuthorNickname = ''; this.photoPreviewVisible = false; this.closeActionMenu(); this.reactionsEnabled = false; this.collectionKnown = false; this.collectionReady = false; this.viewerWanted = false; this.comments = []; this.stopKnockShare(''); }
+  private clearDetailView(): void { this.photoGeneration++; this.detailReady = false; this.viewerIsOwner = false; this.entryCoverUrl = ''; this.coverUrls = []; this.decodedPhotoUrls = []; this.photoPrefetchIndex = -1; this.interactionBusy = false; this.interactionQueue = []; this.activeInteraction = undefined; this.navigationAddress = ''; this.detailPhotos = []; this.detailAuthorAvatarUrl = ''; this.detailAuthorNickname = ''; this.photoPreviewVisible = false; this.closeActionMenu(); this.reactionsEnabled = false; this.collectionKnown = false; this.collectionReady = false; this.viewerWanted = false; this.stopKnockShare(''); }
 
   private async showEntryCover(generation: number): Promise<void> {
     const photo: CardPhoto = this.card.photos?.[0] || fallbackPhoto(this.card);
@@ -275,7 +264,6 @@ export struct CardDetailPage {
       if (this.detailPhotos.length === 0) this.finishPrimaryImage('empty');
       this.photoIndex = 0;
       this.photoFailures = [];
-      this.hydratingCommentIds.clear();
       this.detailAuthorNickname = detail.authorNickname === undefined ? '' : detail.authorNickname;
       this.detailAuthorAvatarUrl = detail.authorAvatarUrl === undefined ? '' : detail.authorAvatarUrl;
       this.viewerIsOwner = detail.viewerIsOwner === true;
@@ -292,8 +280,6 @@ export struct CardDetailPage {
       this.favoriteCount = detail.favoriteCount === undefined ? 0 : detail.favoriteCount;
       this.viewerLiked = detail.viewerLiked === true;
       this.viewerFavorited = detail.viewerFavorited === true;
-      this.commentCount = 0;
-      this.comments = [];
       this.status = this.pendingCollection === undefined && this.pendingReaction === undefined ? '' : '上次操作结果待确认，请点原按钮重试。';
       void this.hydratePhotoAt(0, 'high', generation);
       void this.hydrateAuthorAvatar(generation);
@@ -376,32 +362,6 @@ export struct CardDetailPage {
     } catch (error) { if (generation === this.detailGeneration && error instanceof CloudBusinessError && ['CONTENT_ACCESS_DENIED', 'ACCOUNT_INACTIVE'].includes(error.code)) { this.clearDetailView(); this.status = '该作者当前不可访问。'; } }
   }
 
-  private withCommentAvatar(comment: CardComment, commentId: string, url: string): CardComment {
-    const replies: Array<CardComment> = comment.replies.map((reply: CardComment): CardComment =>
-      this.withCommentAvatar(reply, commentId, url));
-    const copy: CardComment = this.copyCommentWithReplies(comment, replies);
-    if (comment.id === commentId) copy.authorAvatarUrl = url;
-    return copy;
-  }
-
-  private async hydrateCommentAvatar(comment: CardComment, generation: number): Promise<void> {
-    if (comment.authorAvatarUrl.length > 0 || comment.authorAvatarPath.length === 0 ||
-      this.hydratingCommentIds.has(comment.id)) return;
-    this.hydratingCommentIds.add(comment.id);
-    try {
-      const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      const url: string = await this.repository.hydrateCommentAvatar(context, comment);
-      if (generation === this.detailGeneration && url.length > 0) {
-        this.comments = this.comments.map((root: CardComment): CardComment =>
-          this.withCommentAvatar(root, comment.id, url));
-      }
-    } catch (_error) {
-      // Keep the comment text available when its optional avatar fails.
-    } finally {
-      if (generation === this.detailGeneration) this.hydratingCommentIds.delete(comment.id);
-    }
-  }
-
   private authorName(): string {
     if (this.detailAuthorNickname.length > 0) return this.detailAuthorNickname;
     const value = this.card.authorNickname;
@@ -454,63 +414,6 @@ export struct CardDetailPage {
     return `${date.getMonth() + 1}月${date.getDate()}日`;
   }
 
-  private copyCommentWithReplies(comment: CardComment, replies: Array<CardComment>): CardComment {
-    const copy: CardComment = {
-      id: comment.id,
-      parentId: comment.parentId,
-      replyToNickname: comment.replyToNickname,
-      authorNickname: comment.authorNickname,
-      authorAvatarUrl: comment.authorAvatarUrl,
-      authorAvatarPath: comment.authorAvatarPath,
-      authorAvatarBucket: comment.authorAvatarBucket,
-      content: comment.content,
-      deleted: false,
-      likeCount: comment.likeCount,
-      dislikeCount: comment.dislikeCount,
-      viewerReaction: comment.viewerReaction,
-      viewerIsAuthor: comment.viewerIsAuthor,
-      viewerCanDelete: comment.viewerCanDelete === true,
-      createdAt: comment.createdAt,
-      replies
-    };
-    return copy;
-  }
-
-  private normalizeComments(source: Array<CardComment>): Array<CardComment> {
-    const visible: Array<CardComment> = [];
-    source.forEach((comment: CardComment): void => {
-      const replies: Array<CardComment> = this.normalizeComments(comment.replies);
-      if (comment.deleted) {
-        replies.forEach((reply: CardComment): void => {
-          visible.push(reply);
-        });
-      } else {
-        visible.push(this.copyCommentWithReplies(comment, replies));
-      }
-    });
-    return visible;
-  }
-
-  private visibleComments(): Array<CardComment> {
-    return this.comments.slice(0, this.visibleCommentCount);
-  }
-
-  private repliesExpanded(commentId: string): boolean {
-    return this.expandedReplyCommentIds.includes(commentId);
-  }
-
-  private visibleReplies(comment: CardComment): Array<CardComment> {
-    return this.repliesExpanded(comment.id) ? comment.replies : comment.replies.slice(0, 2);
-  }
-
-  private toggleReplies(commentId: string): void {
-    if (this.repliesExpanded(commentId)) {
-      this.expandedReplyCommentIds = this.expandedReplyCommentIds.filter((id: string): boolean => id !== commentId);
-    } else {
-      this.expandedReplyCommentIds = this.expandedReplyCommentIds.concat([commentId]);
-    }
-  }
-
   private reviewText(): string {
     const reviewText = typeof this.card.reviewText === 'string' ? this.card.reviewText.trim() : '';
     if (reviewText.length > 0) return reviewText;
@@ -529,7 +432,7 @@ export struct CardDetailPage {
 
   private async loadReactionGate(generation: number): Promise<void> {
     try {
-      const caps: Stage47Capabilities = await new PreferenceRepository().capabilities();
+      const caps: Stage47Capabilities = await new FeatureRepository().capabilities();
       if (generation !== this.detailGeneration) return;
       this.reactionsEnabled = caps.reactionsEnabled === true;
       this.reactionsReason = caps.protocolVersion === 2 ? caps.reactionsReason || '' : '服务版本较旧，请更新云端后刷新。';
@@ -763,7 +666,6 @@ export struct CardDetailPage {
   private dismissOverlay(): void {
     this.closeActionMenu();
     this.closePhotoPreview();
-    this.deletingCommentId = '';
   }
 
   private async report(): Promise<void> {
@@ -779,118 +681,6 @@ export struct CardDetailPage {
   }
 
   private async setCollection(kind: PersonalCollectionKind): Promise<void> { this.queueInteraction(kind); }
-
-  private replyTo(comment: CardComment): void {
-    if (!this.requireAccount()) return;
-    if (comment.deleted) {
-      this.status = '该评论已删除，不能回复。';
-      return;
-    }
-    if (comment.viewerIsAuthor) {
-      this.status = '这是你的评论；如需删除，请长按该评论。';
-      return;
-    }
-    if (comment.id.length === 0) {
-      this.status = '这条评论暂时无法回复，请刷新后重试。';
-      return;
-    }
-    this.replyToCommentId = comment.id;
-    this.replyToNickname = comment.authorNickname;
-    this.status = '';
-  }
-
-  private clearReply(): void {
-    this.replyToCommentId = '';
-    this.replyToNickname = '';
-  }
-
-  private async publishComment(): Promise<void> {
-    if (!this.requireAccount()) return;
-    if (this.commentBusy) return;
-    if (this.commentInput.trim().length === 0) {
-      this.status = '请输入评论内容后再发布。';
-      return;
-    }
-    this.commentBusy = true;
-    try {
-      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      await this.repository.createComment(context, {
-        cardId: this.card.id, parentCommentId: this.replyToCommentId, content: this.commentInput
-      });
-      this.commentInput = '';
-      this.clearReply();
-      await this.loadDetail();
-    } catch (error) {
-      this.status = `评论发布失败：${errorText(error as ErrorDetail)}`;
-    } finally {
-      this.commentBusy = false;
-    }
-  }
-
-  private async toggleCommentReaction(comment: CardComment, reaction: CommentReactionType): Promise<void> {
-    if (!this.requireAccount()) return;
-    if (this.commentBusy || comment.deleted) return;
-    this.commentBusy = true;
-    try {
-      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      await this.repository.toggleCommentReaction(context, { commentId: comment.id, reaction });
-      await this.loadDetail();
-    } catch (error) {
-      this.status = `评论互动未完成：${errorText(error as ErrorDetail)}`;
-    } finally {
-      this.commentBusy = false;
-    }
-  }
-
-  private async deleteComment(comment: CardComment): Promise<void> {
-    if (this.commentBusy || !this.canDeleteComment(comment)) return;
-    this.commentBusy = true;
-    try {
-      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      await this.repository.deleteComment(context, { commentId: comment.id });
-      this.deletingCommentId = '';
-      await this.loadDetail();
-    } catch (error) {
-      this.status = `删除评论失败：${errorText(error as ErrorDetail)}`;
-    } finally {
-      this.commentBusy = false;
-    }
-  }
-
-  private canDeleteComment(comment: CardComment): boolean {
-    return comment.viewerCanDelete === true || comment.viewerIsAuthor;
-  }
-
-  private requestDeleteComment(comment: CardComment): void {
-    if (!this.canDeleteComment(comment) || comment.deleted) return;
-    this.deletingCommentId = comment.id;
-  }
-
-  private findComment(comments: Array<CardComment>, commentId: string): CardComment | undefined {
-    for (const comment of comments) {
-      if (comment.id === commentId) return comment;
-      const reply = this.findComment(comment.replies, commentId);
-      if (reply !== undefined) return reply;
-    }
-    return undefined;
-  }
-
-  private async deletePendingComment(): Promise<void> {
-    const comment = this.findComment(this.comments, this.deletingCommentId);
-    if (comment === undefined) {
-      this.deletingCommentId = '';
-      return;
-    }
-    await this.deleteComment(comment);
-  }
-
-  private reactionCount(comment: CardComment, reaction: CommentReactionType): number {
-    return reaction === 'LIKE' ? comment.likeCount : comment.dislikeCount;
-  }
-
-  private reactionName(reaction: CommentReactionType): string {
-    return reaction === 'LIKE' ? '赞' : '踩';
-  }
 
   @Builder
   private authorHeader() {
@@ -1005,24 +795,6 @@ export struct CardDetailPage {
   }
 
   @Builder
-  private commentDeleteSheet() {
-    Column({ space: 12 }) {
-      Text('删除这条评论？').fontSize(18).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'));
-      Text('删除后正文和删除占位都不会显示；已经存在的有效回复会继续保留。').fontSize(13).lineHeight(20)
-        .fontColor($r('app.color.muted')).width('100%');
-      Button(this.commentBusy ? '正在删除…' : '删除评论').width('100%').height(48).enabled(!this.commentBusy)
-        .backgroundColor($r('app.color.danger_action')).fontColor($r('app.color.on_danger_action'))
-        .onClick(() => this.deletePendingComment());
-      Button('取消').width('100%').height(48).backgroundColor($r('app.color.surface'))
-        .fontColor($r('app.color.ink')).border({ width: 1, color: $r('app.color.line') })
-        .onClick(() => this.deletingCommentId = '');
-    }
-    .width('100%').constraintSize({ maxWidth: 560 }).padding({ left: 20, right: 20, top: 18, bottom: 20 })
-    .backgroundColor($r('app.color.surface')).borderRadius(24)
-    .border({ width: 1, color: $r('app.color.line') });
-  }
-
-  @Builder
   private photoCarousel() {
     if (this.detailPhotos.length > 0) {
       Swiper() {
@@ -1066,8 +838,8 @@ export struct CardDetailPage {
                   ? '这张实拍图暂不可用' : '正在加载这张实拍图')
                 .fontSize(15).fontWeight(FontWeight.Medium)
                 .fontColor($r('app.color.muted'));
-              Text(this.photoFailures.includes(index) ? '点评与评论仍可阅读，点下方重试。' :
-                '点评与评论已可阅读。').fontSize(12).fontColor($r('app.color.muted'));
+              Text(this.photoFailures.includes(index) ? '点评仍可阅读，点下方重试。' :
+                '点评已可阅读。').fontSize(12).fontColor($r('app.color.muted'));
               if (this.photoFailures.includes(index)) {
                 Button('重试实拍图').height(44).fontSize(13)
                   .backgroundColor($r('app.color.surface')).fontColor($r('app.color.accent_action'))
@@ -1268,184 +1040,6 @@ export struct CardDetailPage {
     .border({ width: 1, color: $r('app.color.line') });
   }
 
-  @Builder
-  private commentAvatar(comment: CardComment) {
-    if (comment.authorAvatarUrl.length > 0) {
-      Image(comment.authorAvatarUrl).width(32).height(32).borderRadius(16).objectFit(ImageFit.Cover)
-        .accessibilityText(`${comment.authorNickname}的头像`);
-    } else {
-      Image($r('app.media.app_icon')).width(32).height(32).borderRadius(12)
-        .accessibilityText('食刻默认头像');
-    }
-  }
-
-  @Builder
-  private commentReactionButton(comment: CardComment, reaction: CommentReactionType) {
-    Button(`${this.reactionName(reaction)} ${this.reactionCount(comment, reaction)}`)
-    .height(36).padding({ left: 10, right: 10 })
-    .backgroundColor(comment.viewerReaction === reaction ? $r('app.color.accent_soft') : $r('app.color.canvas')).borderRadius(18)
-    .border({ width: 1, color: comment.viewerReaction === reaction ? $r('app.color.accent_action') : $r('app.color.line') })
-    .fontSize(12)
-    .fontColor(comment.viewerReaction === reaction
-      ? (reaction === 'LIKE' ? $r('app.color.accent_action') : $r('app.color.danger'))
-      : $r('app.color.muted'))
-    .enabled(!this.commentBusy)
-    .accessibilityText(`${this.reactionName(reaction)}，${this.reactionCount(comment, reaction)} 次${comment.viewerReaction === reaction ? '，已选中' : ''}`)
-    .onClick(() => this.toggleCommentReaction(comment, reaction));
-  }
-
-  @Builder
-  private commentActions(comment: CardComment) {
-    if (!comment.deleted && !comment.viewerIsAuthor) {
-      Row({ space: 4 }) {
-        Blank().layoutWeight(1);
-        this.commentReactionButton(comment, 'LIKE');
-        this.commentReactionButton(comment, 'DISLIKE');
-      }.width('100%');
-    }
-  }
-
-  @Builder
-  private commentBody(comment: CardComment) {
-    Column({ space: 6 }) {
-      if (comment.replyToNickname.length > 0) {
-        Text(`回复 @${comment.replyToNickname}`).fontSize(12).fontColor($r('app.color.leaf')).width('100%');
-      }
-      Text(comment.content).fontSize(13).lineHeight(20).fontColor($r('app.color.ink')).width('100%');
-    }
-    .width('100%').padding({ top: 2, bottom: 2 });
-  }
-
-  private commentTapDescription(comment: CardComment): string {
-    return comment.viewerIsAuthor ? '这是你的评论；长按可删除' : '点击回复这条评论';
-  }
-
-  @Builder
-  private commentReplyTarget(comment: CardComment, nested: boolean) {
-    Button() {
-      Column({ space: 6 }) {
-        Row({ space: 8 }) {
-          this.commentAvatar(comment);
-          Column({ space: 2 }) {
-            Text(comment.authorNickname).fontSize(13).fontWeight(FontWeight.Medium)
-              .fontColor($r('app.color.ink')).width('100%').maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis });
-            Text(this.createdLabel(comment.createdAt)).fontSize(11).fontColor($r('app.color.muted'));
-          }.layoutWeight(1).alignItems(HorizontalAlign.Start);
-        }.width('100%');
-        this.commentBody(comment);
-        if (this.replyToCommentId === comment.id) {
-          Text(`正在回复 @${comment.authorNickname}`).fontSize(12).fontColor($r('app.color.leaf')).width('100%');
-        }
-      }
-      .width('100%').alignItems(HorizontalAlign.Start);
-    }
-    .width('100%').padding(0).backgroundColor(nested ? $r('app.color.canvas') : $r('app.color.surface'))
-    .borderRadius(nested ? 12 : 14)
-    .accessibilityText(`评论：${comment.authorNickname}，${comment.content}`)
-    .accessibilityDescription(this.commentTapDescription(comment))
-    .onAppear((): void => { void this.hydrateCommentAvatar(comment, this.detailGeneration); })
-    .onClick(() => this.replyTo(comment))
-    .gesture(
-      LongPressGesture({ fingers: 1, repeat: false, duration: 500 })
-        .onAction(() => this.requestDeleteComment(comment))
-    );
-  }
-
-  @Builder
-  private replyItem(comment: CardComment) {
-    Column({ space: 6 }) {
-      this.commentReplyTarget(comment, true);
-      this.commentActions(comment);
-    }
-    .width('100%').padding(8).backgroundColor($r('app.color.canvas')).borderRadius(12);
-  }
-
-  @Builder
-  private commentItem(comment: CardComment, nested: boolean) {
-    Column({ space: 6 }) {
-      this.commentReplyTarget(comment, nested);
-      this.commentActions(comment);
-      if (!nested && comment.replies.length > 0) {
-        Column({ space: 8 }) {
-          ForEach(this.visibleReplies(comment), (reply: CardComment) => {
-            this.replyItem(reply);
-          }, (reply: CardComment): string => `${reply.id}:${reply.authorAvatarUrl}`)
-          if (comment.replies.length > 2) {
-            Button(this.repliesExpanded(comment.id)
-              ? '收起回复'
-              : `展开其余 ${comment.replies.length - 2} 条回复`)
-              .width('100%').height(44).fontSize(12)
-              .backgroundColor($r('app.color.surface')).fontColor($r('app.color.accent_action'))
-              .border({ width: 1, color: $r('app.color.line') }).borderRadius(14)
-              .onClick((): void => {
-                this.toggleReplies(comment.id);
-              });
-          }
-        }
-        .width('100%').padding({ left: 8, right: 0, top: 8, bottom: 0 })
-        .border({ width: 1, color: $r('app.color.line') });
-      }
-    }
-    .width('100%').padding(nested ? 0 : 10).backgroundColor(nested ? $r('app.color.canvas') : $r('app.color.surface'))
-    .borderRadius(nested ? 0 : 16);
-  }
-
-  @Builder
-  private commentComposer() {
-    TextArea({ text: this.commentInput, placeholder: this.replyToNickname.length > 0
-      ? `回复 @${this.replyToNickname}` : '写下你的评论' })
-      .width('100%').height(68).backgroundColor($r('app.color.canvas')).borderRadius(14)
-      .onChange((value: string) => this.commentInput = value);
-    Button(this.commentBusy ? '正在发布…' : '发布评论').width('100%').height(44).enabled(!this.commentBusy)
-      .backgroundColor($r('app.color.accent')).onClick(() => this.publishComment());
-  }
-
-  @Builder
-  private commentsSection() {
-    Column({ space: 8 }) {
-      Row() {
-        Text('评论').fontSize(18).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'));
-        Blank();
-        Text(`${this.commentCount} 条讨论`).fontSize(13).fontColor($r('app.color.muted'));
-      }.width('100%');
-      if (this.replyToCommentId.length > 0) {
-        Row({ space: 8 }) {
-          Text(`正在回复 @${this.replyToNickname}`).fontSize(12).fontColor($r('app.color.leaf')).layoutWeight(1);
-          Button('取消回复').height(36).fontSize(12).backgroundColor($r('app.color.surface'))
-            .fontColor($r('app.color.ink')).border({ width: 1, color: $r('app.color.line') })
-            .onClick(() => this.clearReply());
-        }.width('100%').padding(10).backgroundColor($r('app.color.accent_soft')).borderRadius(12);
-        this.commentComposer();
-      }
-      if (this.comments.length === 0) {
-        Text('还没有评论，等第一位朋友分享看法。').fontSize(14).fontColor($r('app.color.muted'))
-          .width('100%').padding({ top: 8, bottom: 4 });
-      } else {
-        ForEach(this.visibleComments(), (comment: CardComment) => {
-          this.commentItem(comment, false);
-        }, (comment: CardComment): string => `${comment.id}:${comment.authorAvatarUrl}`);
-        if (this.comments.length > 3) {
-          Button(this.visibleCommentCount >= this.comments.length ? '收起评论' :
-            `再看 ${Math.min(8, this.comments.length - this.visibleCommentCount)} 条评论`)
-            .width('100%').height(48).fontSize(13).fontWeight(FontWeight.Medium)
-            .backgroundColor($r('app.color.canvas')).fontColor($r('app.color.accent_action'))
-            .border({ width: 1, color: $r('app.color.line') }).borderRadius(15)
-            .accessibilityText(this.visibleCommentCount >= this.comments.length ? '收起评论列表' : '加载更多评论')
-            .onClick((): void => {
-              this.visibleCommentCount = this.visibleCommentCount >= this.comments.length ? 3 :
-                Math.min(this.comments.length, this.visibleCommentCount + 8);
-            });
-        }
-      }
-      if (this.replyToCommentId.length === 0) {
-        this.commentComposer();
-      }
-    }
-    .width('100%').padding(12).backgroundColor($r('app.color.surface')).borderRadius(16)
-    .border({ width: 1, color: $r('app.color.line') });
-  }
-
   private editorUid(): string { const profile = AuthService.profile(); return profile === undefined ? '' : profile.uid; }
 
   build() {
@@ -1469,8 +1063,8 @@ export struct CardDetailPage {
           Column({ space: 12 }) {
             this.authorHeader();
             if (this.navigationAddress.length > 0) { Button('复制商家地址').height(48).onClick((): void => { void this.copyNavigationAddress(); }).attributeModifier(new SecondaryActionStyle()); }
-            // Keep one media/composer subtree while resizing, preserving photo
-            // index, pending comments and the existing async loading generation.
+            // Keep the media subtree while resizing, preserving the photo
+            // index and the existing async loading generation.
             Flex({ direction: this.isWideDetail() ? FlexDirection.Row : FlexDirection.Column,
               alignItems: ItemAlign.Start }) {
               Column({ space: 8 }) {
@@ -1499,15 +1093,11 @@ export struct CardDetailPage {
         .width('100%').height('100%').backgroundColor($r('app.color.canvas'));
         if (this.photoPreviewVisible) {
           this.photoPreview();
-        } else if (this.actionMenuVisible || this.deletingCommentId.length > 0) {
+        } else if (this.actionMenuVisible) {
           Column() {}
             .width('100%').height('100%').backgroundColor($r('app.color.scrim'))
             .onClick(() => this.dismissOverlay());
-          if (this.actionMenuVisible) {
-            this.actionMenu();
-          } else {
-            this.commentDeleteSheet();
-          }
+          this.actionMenu();
         }
       }
       .width('100%').height('100%').backgroundColor($r('app.color.canvas'))

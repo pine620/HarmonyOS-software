@@ -68,7 +68,7 @@ export struct FavoriteCardsPage {
           typeof page.migration.collectionReady !== 'boolean') throw new Error('收藏服务尚未更新，请稍后重试。');
       this.migration = page.migration;
       if (!page.migration.collectionReady) {
-        this.message = !page.migration.schemaReady ? '收藏服务尚未就绪，请稍后再试。' : '旧清单将合并到收藏，私人备注和吃过记录会保留。';
+        this.message = !page.migration.schemaReady ? '收藏服务尚未就绪，请稍后再试。' : '旧清单将合并到收藏；私人备注和吃过记录仅保留历史数据，编辑入口已下线。';
         return;
       }
       const rows: Array<PersonalPreviewRow> = more ? this.source.rows().slice() : [];

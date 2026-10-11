@@ -87,6 +87,114 @@
     {
       "name": "scrim",
       "value": "#99000000"
+    },
+    {
+      "name": "food_ranking_canvas",
+      "value": "#211912"
+    },
+    {
+      "name": "food_ranking_ink",
+      "value": "#FFF0E1"
+    },
+    {
+      "name": "food_ranking_muted",
+      "value": "#D2BAA6"
+    },
+    {
+      "name": "food_ranking_accent",
+      "value": "#FFB18B"
+    },
+    {
+      "name": "food_ranking_rank_top",
+      "value": "#EAB756"
+    },
+    {
+      "name": "food_ranking_rank",
+      "value": "#655044"
+    },
+    {
+      "name": "food_ranking_rank_text",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "food_ranking_placeholder",
+      "value": "#3F3025"
+    },
+    {
+      "name": "food_ranking_line",
+      "value": "#674C38"
+    },
+    {
+      "name": "food_ranking_header",
+      "value": "#4A2F1F"
+    },
+    {
+      "name": "food_ranking_surface",
+      "value": "#30251D"
+    },
+    {
+      "name": "food_ranking_tab_track",
+      "value": "#563524"
+    },
+    {
+      "name": "food_ranking_action",
+      "value": "#AF481F"
+    },
+    {
+      "name": "food_ranking_on_action",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "food_ranking_score_surface",
+      "value": "#513323"
+    },
+    {
+      "name": "food_ranking_rank_second",
+      "value": "#DF9C66"
+    },
+    {
+      "name": "food_ranking_rank_third",
+      "value": "#DA947E"
+    },
+    {
+      "name": "food_ranking_rank_top_text",
+      "value": "#4B2B15"
+    },
+    {
+      "name": "food_ranking_top_line",
+      "value": "#BC7D42"
+    },
+    {
+      "name": "random_canvas",
+      "value": "#211C19"
+    },
+    {
+      "name": "random_surface",
+      "value": "#2C2521"
+    },
+    {
+      "name": "random_ink",
+      "value": "#F4EBE1"
+    },
+    {
+      "name": "random_muted",
+      "value": "#C4B7AB"
+    },
+    {
+      "name": "random_accent",
+      "value": "#E59A7D"
+    },
+    {
+      "name": "random_on_accent",
+      "value": "#271B16"
+    },
+    {
+      "name": "random_soft",
+      "value": "#352D27"
+    },
+    {
+      "name": "random_line",
+      "value": "#5A4C42"
     }
   ]
 }

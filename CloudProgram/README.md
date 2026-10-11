@@ -1,6 +1,6 @@
 # 云端搭建与部署
 
-本目录包含 4 个 AGC 云对象、3 个独立云函数（图片读取 / 公开分享 HTTP / 定时维护）、33 个 Cloud DB 对象定义及环境变量配置说明。客户端第一次运行见 [项目 README](../README.md)，各文件职责见 [索引](../PROJECT_FILE_INDEX.md)。源码状态更新日期为 2026-10-10，官方操作资料核对日期仍为 2026-10-02。
+本目录包含 4 个 AGC 云对象、3 个独立云函数（图片读取 / 公开分享 HTTP / 定时维护）、33 个 Cloud DB 对象定义及环境变量配置说明。客户端第一次运行见 [项目 README](../README.md)，各文件职责见 [索引](../PROJECT_FILE_INDEX.md)。源码状态更新日期为 2026-10-11，官方操作资料核对日期仍为 2026-10-02。
 
 ## 0. 先确定团队、项目与分工
 
@@ -120,11 +120,11 @@ String 字段有 200 字符上限，正文/长链接采用 Text。UserProfile.ni
 
 批量 `cloudfunctions > Deploy Cloud Functions`会部署目录内全部对象；`CloudProgram > Deploy Cloud Program`还涉及整套云资源。团队已有数据时优先有范围的单对象部署。**Sync '对象' / Sync Cloud Functions / Sync Cloud Program 是从云端下载，Overwrite 会覆盖本地源码并生成备份，不是上传发布。**确需同步时先保存 Git 改动、对比云端版本，再选择 Skip/Overwrite；同步 DB 当前支持对象类型，不是业务数据备份。
 
-**从旧版升级到本版：**核对 `clouddb/objecttype/` 当前 33 个对象及真实 AGC 导出，保留已有数据、主键、字段类型和索引排序。本地现有 `CardRating`、`MealChoiceHistory` 定义；`FriendContentAccessGrant` 已从当前源码移除，但不能据此删除线上历史对象或数据。service 的 stage1–stage7、个人集合、审核、生命周期模块，以及共享 policy/read-errors/image-reader 均由统一打包器递归收集。service 导出或代理变动后仍应执行 **Generate Invoke Interface**；客户端新增动态调用走 `cloudFunction.call`。编译入口 JS/map 和函数内派生副本不随 Git 发布。
+**从旧版升级到本版：**核对 `clouddb/objecttype/` 当前 33 个对象及真实 AGC 导出，保留已有数据、主键、字段类型和索引排序。本地现有 `CardRating`、`MealChoiceHistory` 定义；`FriendContentAccessGrant` 已从当前源码移除，但不能据此删除线上历史对象或数据。service 的现有阶段模块、榜单、轮盘、本人内容状态、个人集合与生命周期模块，以及共享 policy/read-errors/image-reader 均由统一打包器递归收集。service 导出或代理变动后仍应执行 **Generate Invoke Interface**；客户端新增动态调用走 `cloudFunction.call`。编译入口 JS/map 和函数内派生副本不随 Git 发布。
 
 管理接口从 `SHIKE_ADMIN_UIDS` 读取受控管理员 canonical UID；迁移还需 `SHIKE_MIGRATION_ANCHOR_UID` 指定存在且活跃的共享管理员锚点。`SHIKE_INDEXED_QUERY_VERIFIED` 仅在历史迁移覆盖完成、实际索引查询验收后启用。秘密和项目身份仍通过团队安全渠道配置。
 
-本版标签为 **减负前版**。Stage 2、Stage 3 阶段验收此前已由负责人确认，Stage 4–9 运行验收待负责人完成；本次 Git 发布未执行构建、运行验证或 AGC 部署。源码已包含 30 天软删除恢复、持久生命周期任务和独立维护 Worker，实际开启仍受服务端开关与平台定时配置控制。服务卡片继续同步公开摘要与图片身份，应用前台准备封面缓存。
+本版标签为 **榜单/轮盘优化版**。本次榜单、轮盘与精简后的功能运行验收由负责人完成；本次 Git 发布未执行构建、运行验证或 AGC 部署。源码已包含 30 天软删除恢复、持久生命周期任务和独立维护 Worker，实际开启仍受服务端开关与平台定时配置控制。服务卡片继续同步公开摘要与图片身份，应用前台准备封面缓存。
 
 地图／搜索门槛继续保留：`SHIKE_STAGE3_SEARCH_VERIFIED`、`SHIKE_STAGE3_MAP_VERIFIED` 分别控制开放，且仍须历史覆盖与索引条件就绪。地图首发要求 `SHIKE_STAGE3_MAP_COORDINATE_SYSTEM=GCJ02`；可靠可见商家混入 WGS84 时不开放地图。好友发布、选点坐标与官方 POI 仍按 `SHIKE_FRIENDS_PUBLISH_VERIFIED`、`SHIKE_MAP_PICKER_COORDINATE_SYSTEM`、`SHIKE_HUAWEI_POI_VERIFIED`、`SHIKE_HUAWEI_POI_COORDINATE_SYSTEM` 核对；官方查询密钥 `SHIKE_HUAWEI_SITE_API_KEY` 使用秘密变量。部署成员逐项确认环境资格，不能仅凭这次发布替生产环境开放门槛。
 
@@ -156,14 +156,13 @@ String 字段有 200 字符上限，正文/长链接采用 Text。UserProfile.ni
 
 图片原图读取、上传和封面生成职责分离：`shared/image-reader.js` 读取并校验权限；media 的 `cover-converter.js` / `cover-worker.js` 处理封面；maintenance 保留回填与定时职责。Node.js 打包/源码检查、契约测试均由负责人执行，本次 Git 提交未执行这些脚本。
 
-### 本版已知问题
+### 榜单与轮盘更新
 
-本次按现有源码提交，以下两项静态问题尚未修改：
+当前 service 新增 `food-ranking-services.js`（高分/好友榜单）、`random-food-services.js`（轮盘候选、内容、选择回执/历史）和 `content-status-services.js`（本人内容状态）；旧 stage4/stage5 与 moderation 模块已移除。统一打包器从当前源码递归收集依赖，不能继续沿用旧部署包。
 
-- `shike-service/runtime.js` 的 `FriendReport.fieldTypes/indexes` 与 `clouddb/objecttype/FriendReport.json` 不一致：模型缺少业务写入的 `targetUid`，却包含卡片举报字段及索引。用户举报与相关账号清理需先对齐模型，再由负责人验证。
-- media/service runtime 的 `IdentityBinding.indexes` 是对象，而公共 `getIndexList()` 使用列表展开，会存在不可迭代的风险；统一的 `shared/content-policy.js` 对应索引列表还缺少 `canonicalUid,id`。应统一索引表示并对齐正式定义，验证登录、身份绑定、媒体读取与销户任务。
+榜单上线仍受 `SHIKE_FOOD_RANKINGS_VERIFIED` 与实际索引/数据覆盖门槛控制。负责人先核对 FoodCard、Merchant、MealChoiceHistory 的当前定义与云端真实导出，保留已有数据；再更新 service、图片共享链路及使用中的 maintenance/share 产物，验证榜单分页与快照准备态、轮盘来源/账号隔离、返回恢复和选择历史。Git 推送不自动部署或开放门槛。
 
-这些问题不改变 Git 源码归档的范围，但本标签不能作为生产就绪结论。
+此前 FriendReport 与 IdentityBinding 声明问题本次已按当前源码重新核对；静态声明对齐不等于云端已部署正确版本。运行验证由负责人完成。
 
 ### 独立分享服务与维护 Worker
 
@@ -180,7 +179,7 @@ String 字段有 200 字符上限，正文/长链接采用 Text。UserProfile.ni
 
 维护函数的 `function-config.json` 默认 `triggers=[]`。由部署负责人在平台设置定时器，按 `timer-contract.json` 配置事件，并将高熵 `SHIKE_MAINTENANCE_TRIGGER_KEY` 以秘密变量保存；事件中的 `workerToken` 必须匹配实际秘密，仓库占位值不可直接使用。建议间隔 5 分钟；单轮最多 3 个任务、每阶段最多 10 行、45 秒工作预算。`SHIKE_LIFECYCLE_VERIFIED` 与 `SHIKE_MAINTENANCE_ENABLED` 默认不启用，通过人工验收后才开启。认证用户清理还需 service 的 AGC 项目/客户端配置和受控授权，失效时进入 `AUTH_ACTION_REQUIRED`，不能仅删业务数据就宣布销户完成。
 
-部署及验收顺序：先修复已知模型问题并核对 DB → 更新云对象与必要变量 → 单独部署分享/维护函数和网页 → 由负责人验证游客公开可见性、私有内容拒绝、审核权限、30 天恢复和任务续跑 → 达到门槛后再开相应功能。Git 推送和打包脚本均不代替平台部署。
+部署及验收顺序：先核对模型与 DB → 更新云对象与必要变量 → 单独部署分享/维护函数和网页 → 由负责人验证游客公开可见性、私有内容拒绝、审核权限、30 天恢复和任务续跑 → 达到门槛后再开相应功能。Git 推送和打包脚本均不代替平台部署。
 
 ### 云对象断点与远程调用调试
 

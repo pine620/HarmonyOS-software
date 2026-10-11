@@ -20,7 +20,7 @@ export interface PersonalCollectionAction {
   viewerWanted?: boolean;
   collectionReady?: boolean;
 }
-export interface CardPreviewsRequest { cardIds: Array<string>; }
+export interface CardPreviewsRequest { cardIds: Array<string>; includeDetailPhotos?: boolean; }
 export interface CardPreviewItem { cardId: string; accessible: boolean; card: FoodCard | null; }
 export interface CardPreviewsResponse { items: Array<CardPreviewItem>; }
 export interface PersonalCollectionRequest { kind: PersonalCollectionKind; cursor: string; pageSize: number; }

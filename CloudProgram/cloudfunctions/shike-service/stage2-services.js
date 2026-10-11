@@ -13,7 +13,7 @@ const hash = (value) => crypto.createHash('sha256').update(value).digest('hex');
 const COUNTERS = ['publicRecommendationCount', 'publicDeliveryCount', 'publicDineInCount'];
 
 function createStage2Services(ctx) {
-  const { collection, one, models, profileForWrite, logicalWriteTime, assertAdmin } = ctx;
+  const { collection, one, models, profileForWrite, logicalWriteTime } = ctx;
   const model = (name, row) => Object.assign(new models[name](), row);
   const txOne = async (tx, env, name, field, value) =>
     (await tx.executeQuery(collection(env, name).query().equalTo(field, value).limit(1)))[0] || null;
@@ -159,8 +159,7 @@ function createStage2Services(ctx) {
     }
     return rows;
   }
-  async function reconcileMerchantPublicCounters(uid, payload, env) {
-    await assertAdmin(uid, env);
+  async function reconcileMerchantPublicCounters(payload, env) {
     let result = null;
     const committed = await collection(env, 'Merchant').runTransaction({ apply: async (tx) => {
       const merchant = await txOne(tx, env, 'Merchant', 'merchantId', text(payload.merchantId, 100, true));
@@ -281,45 +280,12 @@ function createStage2Services(ctx) {
     if (!row || (!canAssociate(row, uid) && row.createdByUid !== uid)) throw accessError('店铺不可访问。', 'NOT_FOUND');
     return { merchant: merchantView(row) };
   }
-  async function listModerationMerchants(uid, payload, env) {
-    await assertAdmin(uid, env);
-    const offset = Number(payload.pageToken || 0);
-    if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('分页参数无效。');
-    const rows = await collection(env, 'Merchant').query().equalTo('verificationStatus', 'USER_CONFIRMED_PENDING')
-      .orderByAsc('createdAt').orderByAsc('merchantId').limit(20, offset).get();
-    return { merchants: rows.map(merchantView), nextPageToken: rows.length === 20 ? String(offset + rows.length) : '' };
-  }
-  async function moderateMerchant(uid, payload, env) {
-    await assertAdmin(uid, env);
-    const action = String(payload.action || '');
-    if (!['APPROVE', 'REQUEST_CHANGE', 'REJECT'].includes(action)) throw new Error('店铺审核动作无效。');
-    const reason = text(payload.reason, 200, action !== 'APPROVE');
-    let result = null;
-    const committed = await collection(env, 'Merchant').runTransaction({ apply: async (tx) => {
-      const admin = await txOne(tx, env, 'UserProfile', 'uid', uid);
-      if (!isAccountActive(admin)) throw accessError('管理员账号已停用。', 'ACCOUNT_INACTIVE');
-      const row = await txOne(tx, env, 'Merchant', 'merchantId', text(payload.merchantId, 100, true));
-      if (!row || row.sourceType !== 'USER_CONFIRMED') throw accessError('店铺不存在或不是用户地点。', 'NOT_FOUND');
-      if (Number(payload.expectedUpdatedAt) !== dateMillis(row.updatedAt)) throw accessError('店铺已变化，请刷新审核。', 'CONFLICT');
-      if (row.verificationStatus !== 'USER_CONFIRMED_PENDING') throw accessError('店铺已审核。', 'CONFLICT');
-      const system = action === 'APPROVE' ? coordinateSystem(String(payload.coordinateSystem || row.coordinateSystem)) : row.coordinateSystem;
-      if (action === 'APPROVE' && system === 'UNKNOWN') throw accessError('审核前须核实选点坐标系。', 'COORDINATE_VERIFICATION_REQUIRED');
-      const now = logicalWriteTime(dateMillis(row.updatedAt), admin.updatedAt);
-      result = model('Merchant', { ...row, coordinateSystem: system,
-        verificationStatus: action === 'APPROVE' ? 'USER_CONFIRMED_APPROVED' : action === 'REJECT' ? 'REJECTED' : 'USER_CONFIRMED_PENDING',
-        reviewAction: action, reviewReason: reason, reviewedAt: new Date(now), updatedAt: new Date(now) });
-      result.mapVisible = mapEligible(result);
-      tx.executeUpsert([result]); tx.executeUpsert([profileForWrite(admin, now)]); return true;
-    } });
-    if (!committed || !result) throw new Error('店铺审核未保存。');
-    return { merchant: merchantView(result) };
-  }
   function capabilities(env) { return {
     pickerCoordinateSystem: coordinateSystem(setting(env, 'SHIKE_MAP_PICKER_COORDINATE_SYSTEM')),
     providerVerificationEnabled: !!setting(env, 'SHIKE_HUAWEI_SITE_API_KEY') && setting(env, 'SHIKE_HUAWEI_POI_VERIFIED') === 'true' }; }
   return { cardFields, storageFields, prepareCounterTransition, prepareAccountCounterRemoval,
     reconcileMerchantPublicCounters, resolveMerchant, createUserMerchant, updateUserMerchant, getMerchant,
-    listModerationMerchants, moderateMerchant, capabilities, normalize, mapEligible };
+    capabilities, normalize, mapEligible };
 }
 
 module.exports = { createStage2Services };

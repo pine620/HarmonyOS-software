@@ -41,7 +41,7 @@ export class ImageDiskCache {
       try {
         const raw: string = await fileIo.readText(directory + '/' + namespace + '.json');
         const index: ImageDiskIndex = JSON.parse(raw) as ImageDiskIndex;
-        if (raw.length <= 262144 && Array.isArray(index.entries)) entries = index.entries.slice(0, 64).filter((entry: ImageCacheEntry): boolean =>
+        if (raw.length <= 262144 && Array.isArray(index.entries)) entries = index.entries.slice(0, 128).filter((entry: ImageCacheEntry): boolean =>
           typeof entry.fileName === 'string' && /^[a-f0-9]{64}\.jpg$/.test(entry.fileName) && entry.descriptor !== undefined && /^[a-f0-9]{64}$/.test(entry.descriptor.sha256 || ''));
       } catch (_error) { }
       if (owner === ImageDiskCache.owner) {
@@ -164,7 +164,7 @@ export class ImageDiskCache {
       files.sort((a: LegacyImageFile, b: LegacyImageFile): number => b.modified - a.modified);
       for (const file of files) {
         if (owner !== ImageDiskCache.owner) return;
-        if (count < 64 && bytes + file.byteSize <= 48 * 1024 * 1024) { count++; bytes += file.byteSize; }
+        if (count < 128 && bytes + file.byteSize <= 96 * 1024 * 1024) { count++; bytes += file.byteSize; }
         else try { await fileIo.unlink(file.path); } catch (_error) { }
       }
     } catch (_error) { }
@@ -172,10 +172,12 @@ export class ImageDiskCache {
   private static async writeIndex(context: common.Context, owner: string): Promise<void> {
     if (owner !== ImageDiskCache.owner) return;
     const namespace: string = ImageDiskCache.namespace;
-    ImageDiskCache.entries.sort((a: ImageCacheEntry, b: ImageCacheEntry): number => b.lastAccess - a.lastAccess);
+    // Preserve list covers while background originals rotate through the bounded cache.
+    ImageDiskCache.entries.sort((a: ImageCacheEntry, b: ImageCacheEntry): number =>
+      Number(b.requestedVariant === 'COVER_480') - Number(a.requestedVariant === 'COVER_480') || b.lastAccess - a.lastAccess);
     let total: number = 0; const keep: Array<ImageCacheEntry> = []; const removed: Array<ImageCacheEntry> = [];
     for (const entry of ImageDiskCache.entries) {
-      if (keep.length < 64 && total + entry.descriptor.byteSize <= 48 * 1024 * 1024) { total += entry.descriptor.byteSize; keep.push(entry); }
+      if (keep.length < 128 && total + entry.descriptor.byteSize <= 96 * 1024 * 1024) { total += entry.descriptor.byteSize; keep.push(entry); }
       else removed.push(entry);
     }
     ImageDiskCache.entries = keep;
@@ -225,7 +227,7 @@ export class ImageDiskCache {
       const removed: Array<ImageCacheEntry> = ImageDiskCache.entries.slice();
       ImageDiskCache.entries = []; ImageDiskCache.verified.clear();
       for (const entry of removed) if (!ImageDiskCache.entries.some((value: ImageCacheEntry): boolean => value.fileName === entry.fileName)) try { await fileIo.unlink(ImageDiskCache.directory(context) + '/' + entry.fileName); } catch (_error) { }
-      await ImageDiskCache.pruneLegacy(context, owner, 64, 48 * 1024 * 1024);
+      await ImageDiskCache.pruneLegacy(context, owner, 128, 96 * 1024 * 1024);
       await ImageDiskCache.writeIndex(context, owner);
     });
   }

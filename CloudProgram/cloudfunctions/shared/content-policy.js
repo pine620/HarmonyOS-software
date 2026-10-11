@@ -10,10 +10,10 @@ class PolicyDbModel {
 }
 
 class FoodCard extends PolicyDbModel {}
-// Legacy CloudDB columns remain for deployed-schema compatibility; public reads ignore them.
+// Legacy CloudDB columns remain for deployed-schema compatibility; friend access checks are retired.
 FoodCard.fieldTypes = Object.freeze({"id": "String", "ownerUid": "String", "productName": "String", "brand": "String", "priceFen": "Integer", "priceLabel": "String", "originalPriceFen": "Integer", "specification": "String", "shop": "String", "sellingPointsJson": "Text", "publicOffersJson": "Text", "reviewText": "Text", "tasteScore": "Integer", "sourceLink": "Text", "category": "String", "mediaId": "String", "latE3": "Integer", "lonE3": "Integer", "district": "String", "geohash": "String", "status": "String", "createdAt": "Long", "updatedAt": "Long", "schemaVersion": "Integer", "migrationSource": "String", "consumptionMode": "String", "visibility": "String", "merchantId": "String", "merchantNameSnapshot": "String", "merchantAddressSnapshot": "Text", "categoryV2": "String", "categoryVersion": "Integer", "itemPriceFen": "Long", "dineInAvgFen": "Long", "orderTotalFen": "Long", "deliveryFeeFen": "Long", "queryPriceFen": "Long", "deliveryPlatformKey": "String", "deliveryPlatformLabelSnapshot": "String", "consumedAt": "Date", "publishedAt": "Date", "modifiedAt": "Date", "edited": "Boolean", "friendVisibilitySince": "Date", "friendVisibilitySequence": "Long", "reviewState": "String", "deletedAt": "Date", "purgeAt": "Date", "lifecycleGeneration": "Long", "searchTextNormalized": "Text", "reviewReason": "String"});
 FoodCard.primaryKeys = Object.freeze(['id']);
-FoodCard.indexes = Object.freeze(["status,createdAt,id", "status,category,createdAt,id", "ownerUid,createdAt", "ownerUid,status,createdAt", "status,latE3,lonE3,createdAt", "status,createdAt", "ownerUid,status,tasteScore,createdAt", "merchantId,id", "ownerUid,merchantId,id", "status,publishedAt,id", "status,queryPriceFen,publishedAt,id", "status,queryPriceFen,publishedAt,id", "merchantId,status,publishedAt,id", "status,tasteScore,publishedAt,id", "ownerUid,status,createdAt,id"]);
+FoodCard.indexes = Object.freeze(["status,createdAt,id", "status,category,createdAt,id", "ownerUid,createdAt", "ownerUid,status,createdAt", "status,latE3,lonE3,createdAt", "status,createdAt", "merchantId,id", "ownerUid,merchantId,id", "visibility,status,publishedAt,id", "visibility,status,queryPriceFen,publishedAt,id", "visibility,status,queryPriceFen,publishedAt,id", "merchantId,visibility,status,publishedAt,id", "visibility,status,tasteScore,publishedAt,id", "ownerUid,status,createdAt,id", "merchantId,status,tasteScore,publishedAt,id"]);
 
 class UserProfile extends PolicyDbModel {}
 UserProfile.fieldTypes = Object.freeze({"uid": "String", "nickname": "String", "avatarUrl": "String", "nicknameValue": "String", "avatarMediaId": "String", "avatarStorageUid": "String", "coverMediaId": "String", "coverStorageUid": "String", "friendCode": "String", "accountStatus": "String", "publishCount": "Integer", "createdAt": "Long", "updatedAt": "Long", "contentSequence": "Long", "deletionJobId": "String"});
@@ -31,7 +31,7 @@ IdentityBinding.fieldTypes = Object.freeze({
   updatedAt: 'Long'
 });
 IdentityBinding.primaryKeys = Object.freeze(['id']);
-IdentityBinding.indexes = Object.freeze(['provider,providerUid', 'canonicalUid']);
+IdentityBinding.indexes = Object.freeze(['provider,providerUid', 'canonicalUid', 'canonicalUid,id']);
 
 class FoodCardRevision extends PolicyDbModel {}
 FoodCardRevision.fieldTypes = Object.freeze({
@@ -89,7 +89,7 @@ function readableCardState(card) {
 function cardContentRevision(card) { return String(dateMillis(card && card.modifiedAt) ?? dateMillis(card && card.updatedAt) ?? dateMillis(card && card.createdAt) ?? 0) + ':' + String(card && card.lifecycleGeneration || 0); }
 
 function createContentPolicy(getCollection, readOne, initialState = null) {
-  // Only private operations need account checks; published content has no viewer permissions.
+  // Public content needs no viewer login; its author must still be active.
   const profiles = new Map();
   const cards = new Map((initialState && initialState.cards || []).map(row => [String(row.id), Promise.resolve(row)]));
   const revisions = new Map((initialState && initialState.revisions || []).map(row => [String(row.revisionId), Promise.resolve(row)]));
@@ -131,9 +131,10 @@ function createContentPolicy(getCollection, readOne, initialState = null) {
     return row;
   }
 
-  // Public reads depend on content state, never on the viewer or friendships.
-  function isCardPubliclyVisible(card) { return readableCardState(card); }
-  function canReadCard(_viewerUid, card) { return readableCardState(card); }
+  async function canReadCard(_viewerUid, card) {
+    return readableCardState(card) && isAccountActive(await profile(card.ownerUid));
+  }
+  async function isCardPubliclyVisible(card) { return canReadCard('', card); }
 
   async function assertProfileReadable(_viewerUid, authorUid) {
     await assertAccountActive(authorUid);
@@ -155,16 +156,16 @@ function createContentPolicy(getCollection, readOne, initialState = null) {
       return String(mediaId || '') === String(media.id || '');
     }
     const card = await readCard(cardId);
-    return !!card && String(card.ownerUid || '') === ownerUid && readableCardState(card);
+    return !!card && String(card.ownerUid || '') === ownerUid && await canReadCard('', card);
   }
 
-  async function canReadRevisionMedia(viewerUid, media, revisionId, administrator = false) {
+  async function canReadRevisionMedia(viewerUid, media, revisionId) {
     if (!viewerUid || !media || media.status !== 'APPROVED' || !isAccountActive(await profile(viewerUid))) return false;
     if (!revisionId && media.ownerUid === viewerUid) { const own = await readCard(media.cardId); if (own && own.ownerUid === viewerUid && own.reviewState === 'REQUEST_CHANGE' && own.deletedAt == null && own.purgeAt == null) return true; }
     const revision = await readRevision(revisionId);
     if (!revision || !isAccountActive(await profile(revision.authorUid)) || media.ownerUid !== revision.authorUid) return false;
     const author = viewerUid === revision.authorUid;
-    if (author ? !['PENDING', 'REJECTED'].includes(revision.status) : !administrator || revision.status !== 'PENDING') return false;
+    if (!author || !['PENDING', 'REJECTED'].includes(revision.status)) return false;
     const card = await readCard(revision.cardId);
     if (!card || card.ownerUid !== revision.authorUid || !(readableCardState(card) || card.reviewState === 'REQUEST_CHANGE' && card.deletedAt == null && card.purgeAt == null)) return false;
     let ids;
@@ -173,16 +174,16 @@ function createContentPolicy(getCollection, readOne, initialState = null) {
       [String(card.id), 'revision:' + String(revision.revisionId)].includes(String(media.cardId));
   }
 
-  async function canReadModerationMedia(viewerUid,media,administrator=false) {
+  async function canReadCorrectionMedia(viewerUid,media) {
     if (!viewerUid || !media || media.status !== 'APPROVED' || !isAccountActive(await profile(viewerUid))) return false;
     if (!isAccountActive(await profile(media.ownerUid))) return false;
     const card=await readCard(media.cardId);
     if (!card || card.ownerUid !== media.ownerUid || card.deletedAt != null || card.purgeAt != null) return false;
-    return administrator || viewerUid === card.ownerUid && card.reviewState === 'REQUEST_CHANGE';
+    return viewerUid === card.ownerUid && card.reviewState === 'REQUEST_CHANGE';
   }
 
   return { seedProfiles, assertAccountActive, assertProfileReadable, isCardPubliclyVisible, canReadCard,
-    assertCardReadable, canReadMedia, canReadRevisionMedia, canReadModerationMedia };
+    assertCardReadable, canReadMedia, canReadRevisionMedia, canReadCorrectionMedia };
 }
 
 module.exports = { createContentPolicy, policyModels, isAccountActive, readableCardState,

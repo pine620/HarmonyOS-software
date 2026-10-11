@@ -3,14 +3,15 @@ import { Want } from '@kit.AbilityKit';
 export const ENTRY_ROUTE_PARAMETER: string = 'shikeRoute';
 export const ENTRY_CARD_ID_PARAMETER: string = 'shikeCardId';
 export const ENTRY_FRIEND_UID_PARAMETER: string = 'shikeFriendUid';
+export const ENTRY_GROUP_ID_PARAMETER: string = 'shikeGroupId';
 export const ENTRY_TAB_PARAMETER: string = 'shikeTab';
-export const ENTRY_NOTIFICATION_ID_PARAMETER: string = 'shikeNotificationId';
 
 export const PENDING_ENTRY_ROUTE_KEY: string = 'pendingSystemEntryRoute';
 export const PENDING_ENTRY_CARD_ID_KEY: string = 'pendingSystemEntryCardId';
 export const PENDING_ENTRY_FRIEND_UID_KEY: string = 'pendingSystemEntryFriendUid';
 export const PENDING_ENTRY_TAB_KEY: string = 'pendingSystemEntryTab';
-export const PENDING_ENTRY_NOTIFICATION_ID_KEY: string = 'pendingSystemEntryNotificationId';
+
+export const PENDING_ENTRY_GROUP_ID_KEY: string = 'pendingSystemEntryGroupId';
 
 const CURRENT_ROUTE_KEY: string = 'continuationCurrentRoute';
 const CURRENT_CARD_ID_KEY: string = 'continuationCurrentCardId';
@@ -61,11 +62,11 @@ function storedTab(): number {
 
 export class ContinuationState {
   static initialize(): void {
+    if (!AppStorage.has(PENDING_ENTRY_GROUP_ID_KEY)) AppStorage.setOrCreate(PENDING_ENTRY_GROUP_ID_KEY, '');
     if (!AppStorage.has(PENDING_ENTRY_ROUTE_KEY)) AppStorage.setOrCreate(PENDING_ENTRY_ROUTE_KEY, '');
     if (!AppStorage.has(PENDING_ENTRY_CARD_ID_KEY)) AppStorage.setOrCreate(PENDING_ENTRY_CARD_ID_KEY, '');
     if (!AppStorage.has(PENDING_ENTRY_FRIEND_UID_KEY)) AppStorage.setOrCreate(PENDING_ENTRY_FRIEND_UID_KEY, '');
     if (!AppStorage.has(PENDING_ENTRY_TAB_KEY)) AppStorage.setOrCreate(PENDING_ENTRY_TAB_KEY, 0);
-    if (!AppStorage.has(PENDING_ENTRY_NOTIFICATION_ID_KEY)) AppStorage.setOrCreate(PENDING_ENTRY_NOTIFICATION_ID_KEY, '');
     if (!AppStorage.has(CURRENT_ROUTE_KEY)) AppStorage.setOrCreate(CURRENT_ROUTE_KEY, 'tab');
     if (!AppStorage.has(CURRENT_CARD_ID_KEY)) AppStorage.setOrCreate(CURRENT_CARD_ID_KEY, '');
     if (!AppStorage.has(CURRENT_FRIEND_UID_KEY)) AppStorage.setOrCreate(CURRENT_FRIEND_UID_KEY, '');
@@ -117,10 +118,18 @@ export class ContinuationState {
     const parameters: Record<string, Object> | undefined = want.parameters;
     const incomingRoute: string = parameterString(parameters, ENTRY_ROUTE_PARAMETER);
     if (incomingRoute === 'notification') {
-      const notificationId: string = parameterString(parameters, ENTRY_NOTIFICATION_ID_PARAMETER).trim();
-      if (!/^[0-9a-f]{64}$/.test(notificationId)) return false;
-      AppStorage.setOrCreate(PENDING_ENTRY_NOTIFICATION_ID_KEY, notificationId);
-      AppStorage.setOrCreate(PENDING_ENTRY_ROUTE_KEY, incomingRoute);
+      // Legacy inbox click payloads no longer trigger a database lookup.
+      ContinuationState.clearPending();
+      AppStorage.setOrCreate(PENDING_ENTRY_TAB_KEY, 2);
+      AppStorage.setOrCreate(PENDING_ENTRY_ROUTE_KEY, 'tab');
+      return true;
+    }
+    if (incomingRoute === 'group-chat') {
+      const groupId: string = parameterString(parameters, ENTRY_GROUP_ID_PARAMETER).trim();
+      if (!usableOpaqueId(groupId)) return false;
+      ContinuationState.clearPending();
+      AppStorage.setOrCreate(PENDING_ENTRY_GROUP_ID_KEY, groupId);
+      AppStorage.setOrCreate(PENDING_ENTRY_ROUTE_KEY, 'group-chat');
       return true;
     }
     const route: ContinuationRoute | undefined = routeFrom(incomingRoute);
@@ -129,19 +138,23 @@ export class ContinuationState {
     const friendUid: string = parameterString(parameters, ENTRY_FRIEND_UID_PARAMETER).trim();
     if (route === 'card' && !usableOpaqueId(cardId)) return false;
     if (route === 'friend-chat' && !usableOpaqueId(friendUid)) return false;
+    ContinuationState.clearPending();
     AppStorage.setOrCreate(PENDING_ENTRY_CARD_ID_KEY, route === 'card' ? cardId : '');
     AppStorage.setOrCreate(PENDING_ENTRY_FRIEND_UID_KEY, route === 'friend-chat' ? friendUid : '');
     AppStorage.setOrCreate(PENDING_ENTRY_TAB_KEY, parameterTab(parameters));
-    AppStorage.setOrCreate(PENDING_ENTRY_NOTIFICATION_ID_KEY, '');
+    if (route === 'tab' && parameterTab(parameters) === 2 &&
+      parameterString(parameters, 'shikeFriendSection') === 'requests') {
+      AppStorage.setOrCreate('requestedFriendSection', 1);
+    }
     AppStorage.setOrCreate(PENDING_ENTRY_ROUTE_KEY, route);
     return true;
   }
 
   static clearPending(): void {
+    AppStorage.setOrCreate(PENDING_ENTRY_GROUP_ID_KEY, '');
     AppStorage.setOrCreate(PENDING_ENTRY_CARD_ID_KEY, '');
     AppStorage.setOrCreate(PENDING_ENTRY_FRIEND_UID_KEY, '');
     AppStorage.setOrCreate(PENDING_ENTRY_TAB_KEY, 0);
-    AppStorage.setOrCreate(PENDING_ENTRY_NOTIFICATION_ID_KEY, '');
     AppStorage.setOrCreate(PENDING_ENTRY_ROUTE_KEY, '');
   }
 }

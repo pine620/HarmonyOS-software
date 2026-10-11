@@ -105,7 +105,7 @@ test('wrapped public image requests return verified bytes without validating a s
     UserProfile: [{ uid: 'author', accountStatus: 'ACTIVE' }, { uid: 'viewer', accountStatus: 'ACTIVE' }]
   };
   let downloads = 0, verified = 0;
-  const reader = createImageReader({ adminUids: [], verifyToken: async () => {
+  const reader = createImageReader({  verifyToken: async () => {
     verified++; throw Object.assign(new Error('stale public token'), { code: 'AUTH_REQUIRED' });
   }, collection: name => ({ query: () => {
     const filters = []; let size = 100;

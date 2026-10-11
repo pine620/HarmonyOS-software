@@ -1,3 +1,4 @@
+import { RandomFoodRoundStore } from './RandomFoodRoundStore';
 import { DraftStore } from './DraftStore';
 import { common } from '@kit.AbilityKit';
 import { authentication } from '@kit.AccountKit';
@@ -442,7 +443,15 @@ export class AuthService {
       throw new Error('云端未确认注销申请，请稍后重试。');
     }
     let draftCleanupPending: boolean = false;
-    try { if (draftOwnerUid.length > 0) await DraftStore.clearAccount(context, draftOwnerUid); } catch (_error) { draftCleanupPending = true; }
+    try {
+      if (draftOwnerUid.length > 0) {
+        await DraftStore.clearAccount(context, draftOwnerUid);
+      }
+    } catch (_error) { draftCleanupPending = true; }
+    let roundCleanupPending: boolean = false;
+    try {
+      if (draftOwnerUid.length > 0) RandomFoodRoundStore.clearAccount(context, draftOwnerUid);
+    } catch (_error) { roundCleanupPending = true; }
     DraftStore.flushHandler = undefined;
     let localServiceCardCleanupPending: boolean = false;
     if (serviceCardCleanupPending) {
@@ -470,6 +479,6 @@ export class AuthService {
     if (localPushCleanupPending || localServiceCardCleanupPending) {
       return `${accountMessage} 本机通知状态未能完全清理，请在系统设置中检查通知权限。`;
     }
-    return draftCleanupPending ? accountMessage + ' 本机草稿文件清理未完成，请清除应用数据。' : accountMessage;
+    return draftCleanupPending || roundCleanupPending ? accountMessage + ' 部分本机草稿或推荐进度清理未完成，请清除应用数据。' : accountMessage;
   }
 }

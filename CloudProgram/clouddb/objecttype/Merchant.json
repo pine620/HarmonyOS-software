@@ -168,6 +168,23 @@
           "sortType": "ASC"
         }
       ]
+    },
+    {
+      "indexName": "coordinate_latitude_id",
+      "indexList": [
+        {
+          "fieldName": "coordinateSystem",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "latitudeE6",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "merchantId",
+          "sortType": "ASC"
+        }
+      ]
     }
   ],
   "permissions": [

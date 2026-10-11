@@ -9,37 +9,53 @@ const reportPath=process.argv[2] ? resolve(process.argv[2]) : join(dirname(root)
 const results=[];
 function check(name,ok,detail=''){results.push({name,ok:Boolean(ok),detail});}
 function source(path){return readFileSync(join(root,path),'utf8');}
-// AGC's aggregate export includes explicit false flags and numeric defaults as
-// strings; objecttype files use omitted flags and JSON numbers. Compare their
+// AGC's aggregate export includes explicit false flags and numeric/Boolean defaults as
+// strings; objecttype files use omitted flags and JSON numbers/booleans. Compare their
 // meaning without reformatting or replacing the deployed schema definitions.
 function fieldShape(fields){return fields.map(field=>{
   const value={...field};
   for(const key of ['belongPrimaryKey','notNull','isNeedEncrypt','isSensitive'])value[key]=field[key]===true;
-  if(value.defaultValue!==undefined&&['Byte','Short','Integer','Long','Float','Double'].includes(value.fieldType))value.defaultValue=String(value.defaultValue);
+  if(value.defaultValue!==undefined&&['Byte','Short','Integer','Long','Float','Double','Boolean'].includes(value.fieldType))value.defaultValue=String(value.defaultValue);
   return Object.fromEntries(Object.keys(value).sort().map(key=>[key,value[key]]));
 }).sort((a,b)=>a.fieldName.localeCompare(b.fieldName));}
 function indexShape(indexes){return (indexes||[]).map(index=>({name:index.indexName,fields:index.indexList.map(field=>[field.fieldName,field.sortType||'ASC'])})).sort((a,b)=>a.name.localeCompare(b.name));}
 const schema=JSON.parse(source('CloudProgram/AppScope/resources/rawfile/schema.json'));
 check('schema version',Number.isSafeInteger(schema.schemaVersion)&&schema.schemaVersion>0,'Source version is recorded; compare the actual deployment export before changing it.');
+// This retired table stays in the deployment snapshot to preserve historical
+// data. Its removed permission feature must not be restored as an active model.
+const retiredSchemaObjects=new Set(['FriendContentAccessGrant']);
 for(const object of schema.objectTypes){
   const file=join(cloud,'clouddb/objecttype',object.objectTypeName+'.json');
+  if(!existsSync(file)&&retiredSchemaObjects.has(object.objectTypeName)){
+    check('retired schema compatibility '+object.objectTypeName,
+      !source('CloudProgram/cloudfunctions/shike-service/runtime.js').includes(object.objectTypeName)&&
+      !source('CloudProgram/cloudfunctions/shared/content-policy.js').includes(object.objectTypeName));
+    continue;
+  }
   check('schema file '+object.objectTypeName,existsSync(file));if(!existsSync(file))continue;
   const definition=JSON.parse(readFileSync(file,'utf8'));
   check('fields '+object.objectTypeName,JSON.stringify(fieldShape(object.fields))===JSON.stringify(fieldShape(definition.fields)));
   check('primary keys '+object.objectTypeName,JSON.stringify(object.fields.filter(field=>field.belongPrimaryKey).map(field=>field.fieldName))===JSON.stringify(definition.fields.filter(field=>field.belongPrimaryKey).map(field=>field.fieldName)));
   check('indexes '+object.objectTypeName,JSON.stringify(indexShape(object.indexes))===JSON.stringify(indexShape(definition.indexes)));
   const fields=new Set(object.fields.map(field=>field.fieldName));
+  const indexNames=(object.indexes||[]).map(index=>index.indexName);
+  check('index names '+object.objectTypeName,indexNames.every(name=>typeof name==='string'&&/^[A-Za-z][A-Za-z0-9_]{0,29}$/.test(name))&&new Set(indexNames.map(name=>String(name).toLowerCase())).size===indexNames.length,'Index names must contain 1-30 letters, digits or underscores, start with a letter and be unique ignoring case.');
   check('index shape '+object.objectTypeName,(object.indexes||[]).length<=16&&(object.indexes||[]).every(index=>index.indexList.length<=5&&index.indexList.every(field=>fields.has(field.fieldName))));
 }
-// Existing index definitions and sensitivity flags are immutable in deployed
-// schemas. Guard the known deployment baseline instead of rewriting them.
+// Keep shared deployed index definitions and require the new ranking indexes.
 for(const [name,indexName,expected] of [
-  ['FoodCard','status_score_published_id',[['status','ASC'],['tasteScore','DESC'],['publishedAt','DESC'],['id','ASC']]],
+  ['FoodCard','public_time',[['visibility','ASC'],['status','ASC'],['publishedAt','DESC'],['id','ASC']]],
+  ['FoodCard','public_price_asc',[['visibility','ASC'],['status','ASC'],['queryPriceFen','ASC'],['publishedAt','DESC'],['id','ASC']]],
+  ['FoodCard','public_price_desc',[['visibility','ASC'],['status','ASC'],['queryPriceFen','DESC'],['publishedAt','DESC'],['id','ASC']]],
+  ['FoodCard','public_score',[['visibility','ASC'],['status','ASC'],['tasteScore','DESC'],['publishedAt','DESC'],['id','ASC']]],
+  ['FoodCard','merchant_public_time',[['merchantId','ASC'],['visibility','ASC'],['status','ASC'],['publishedAt','DESC'],['id','ASC']]],
+  ['FoodCard','merchant_score_time_id',[['merchantId','ASC'],['status','ASC'],['tasteScore','DESC'],['publishedAt','DESC'],['id','ASC']]],
+  ['Merchant','coordinate_latitude_id',[['coordinateSystem','ASC'],['latitudeE6','ASC'],['merchantId','ASC']]],
   ['PersonalFoodState','index_1',[['ownerUid','ASC'],['state','ASC'],['updatedAt','DESC'],['cardId','ASC']]]
 ]){
   const object=schema.objectTypes.find(object=>object.objectTypeName===name);
   const index=object?.indexes?.find(index=>index.indexName===indexName);
-  check('preserve deployed index '+name+'.'+indexName,JSON.stringify(index?.indexList?.map(field=>[field.fieldName,field.sortType]))===JSON.stringify(expected));
+  check('required schema index '+name+'.'+indexName,JSON.stringify(index?.indexList?.map(field=>[field.fieldName,field.sortType]))===JSON.stringify(expected));
 }
 const cardMedia=schema.objectTypes.find(object=>object.objectTypeName==='CardMedia');
 for(const name of ['objectKey','sha256'])check('preserve sensitivity CardMedia.'+name,cardMedia?.fields?.find(field=>field.fieldName===name)?.isSensitive===true);
@@ -52,15 +68,23 @@ for(const [fieldName,fieldType] of [['friendVisibilitySince','Date'],['friendVis
   check('preserve deployed field FoodCard.'+fieldName,!!field&&JSON.stringify(fieldShape([field]))===JSON.stringify(fieldShape([expected])));
 }
 const service='CloudProgram/cloudfunctions/shike-service/';
-const modules=['runtime.js','stage1-services.js','stage2-services.js','stage3-services.js','stages47-common.js','stage4-services.js','stage5-services.js','stage6-services.js','stage7-services.js','personal-collections.js','moderation-services.js','lifecycle-services.js','authentication-cleanup.js'];
+const modules=['runtime.js','stage1-services.js','stage2-services.js','stage3-services.js','stages47-common.js','stage6-services.js','random-food-services.js','stage7-services.js','food-ranking-services.js','personal-collections.js','content-status-services.js','lifecycle-services.js','authentication-cleanup.js'];
 for(const module of modules){
   const file=join(root,service,module);check('module '+module,existsSync(file));if(!existsSync(file))continue;
   const result=spawnSync(process.execPath,['--check',file],{encoding:'utf8',shell:false});
   check('syntax '+module,!result.error&&result.status===0,(result.stderr||'').trim());
 }
-const methods={getStage89Capabilities:'get-stage89-capabilities',listModerationQueue:'list-moderation-queue',getModerationDetail:'get-moderation-detail',decideModeration:'decide-moderation',listMyReports:'list-my-reports',reportMerchant:'report-merchant',listOwnReviewRequests:'list-own-review-requests',listDeletedCards:'list-deleted-cards',restoreDeletedCard:'restore-deleted-card',listLifecycleJobs:'list-lifecycle-jobs',getLifecycleJob:'get-lifecycle-job',retryLifecycleJob:'retry-lifecycle-job',confirmAuthCleanup:'confirm-auth-cleanup',getReviewMedia:'get-review-media',runLifecycleJob:'run-lifecycle-job'};
-Object.assign(methods,{getCardPreviews:'get-card-previews',listPersonalCollection:'list-personal-collection',getPersonalCollectionMigration:'get-personal-collection-migration',startPersonalCollectionMigration:'start-personal-collection-migration',resumePersonalCollectionMigration:'resume-personal-collection-migration',setCardFavorite:'set-card-favorite',setCardWanted:'set-card-wanted',getStage47Capabilities:'get-stage47-capabilities',getTastePreference:'get-taste-preference',updateTastePreference:'update-taste-preference',clearTastePreference:'clear-taste-preference',listPersonalizedRecommendations:'list-personalized-recommendations',getMealCandidates:'get-meal-candidates',createMealPoll:'create-meal-poll',getMealPoll:'get-meal-poll',addMealPollOption:'add-meal-poll-option',voteMealPoll:'vote-meal-poll',closeMealPoll:'close-meal-poll',cancelMealPoll:'cancel-meal-poll',stopMealPollOptions:'stop-meal-poll-options',getUserPage:'get-user-page',listMerchantRankings:'list-merchant-rankings',setCardReactionV2:'set-card-reaction-v2'});
+const methods={listMyReports:'list-my-reports',reportMerchant:'report-merchant',listOwnReviewRequests:'list-own-review-requests',listDeletedCards:'list-deleted-cards',restoreDeletedCard:'restore-deleted-card',getReviewMedia:'get-review-media'};
+Object.assign(methods,{getRandomFoodPool:'get-random-food-pool',getRandomFoodCards:'get-random-food-cards',saveFoodChoice:'save-food-choice',listFoodChoices:'list-food-choices',deleteFoodChoice:'delete-food-choice'});
+Object.assign(methods,{getCardPreviews:'get-card-previews',listPersonalCollection:'list-personal-collection',getPersonalCollectionMigration:'get-personal-collection-migration',startPersonalCollectionMigration:'start-personal-collection-migration',resumePersonalCollectionMigration:'resume-personal-collection-migration',setCardFavorite:'set-card-favorite',setCardWanted:'set-card-wanted',getStage47Capabilities:'get-stage47-capabilities',getMealCandidates:'get-meal-candidates',createMealPoll:'create-meal-poll',getMealPoll:'get-meal-poll',addMealPollOption:'add-meal-poll-option',voteMealPoll:'vote-meal-poll',closeMealPoll:'close-meal-poll',cancelMealPoll:'cancel-meal-poll',stopMealPollOptions:'stop-meal-poll-options',getUserPage:'get-user-page',listFoodRankings:'list-food-rankings',setCardReactionV2:'set-card-reaction-v2'});
 const entry=source(service+'shikeService.ts'),runtime=source(service+'runtime.js'),gateway=source('Application/entry/src/main/ets/service/CloudGateway.ets');
+const retiredOperations=['get-stage89-capabilities','list-moderation-queue','get-moderation-detail','decide-moderation','list-lifecycle-jobs','get-lifecycle-job','retry-lifecycle-job','confirm-auth-cleanup','run-lifecycle-job','list-moderation-merchants','moderate-merchant','reconcile-merchant-counters','list-moderation-revisions','moderate-card-revision','start-migration-job','process-migration-job','get-migration-status','list-maintenance-jobs','get-maintenance-job','retry-maintenance-job','validate-lifecycle-job','process-friend-cleanup-job','list-moderation-cards','moderate-card','list-notifications','mark-notification-read','mark-all-notifications-read','open-notification','get-taste-preference','update-taste-preference','clear-taste-preference','list-personalized-recommendations',
+  'list-food-lists','create-food-list','update-food-list','delete-food-list','list-food-list-items','add-food-list-item','remove-food-list-item',
+  'reorder-food-list-items','get-personal-food-state','update-personal-food-state','list-friend-rankings','list-merchant-rankings','list-received-comments',
+  'create-card-comment','delete-card-comment','toggle-comment-reaction'];
+for(const operation of retiredOperations)check('retired contract '+operation,
+  !runtime.includes("'"+operation+"':")&&!entry.includes("executeCloudOperation('"+operation+"'")&&!gateway.includes("case '"+operation+"':"));
+for(const module of ['stage4-services.js','stage5-services.js'])check('retired module '+module,!existsSync(join(root,service,module)));
 for(const [method,operation]of Object.entries(methods))check('contract '+operation,entry.includes(method+'(input: CloudEnvelope)')&&entry.includes("executeCloudOperation('"+operation+"'")&&runtime.includes("'"+operation+"':")&&gateway.includes("case '"+operation+"':")&&gateway.includes("invokeStage47('"+method+"'"));
 for(const name of ['content-policy.js','media-descriptor.js','read-errors.js','release-info.js','image-models.js','image-reader.js']) {
   const path='CloudProgram/cloudfunctions/shared/'+name;
@@ -77,6 +101,13 @@ const worker='CloudProgram/cloudfunctions/shike-maintenance/';
 const config=JSON.parse(source(worker+'function-config.json')),contract=JSON.parse(source(worker+'timer-contract.json'));
 check('worker handler',config.handler==='shikeMaintenance.handler'&&config.functionType===0);
 check('timer contract',contract.httpTrigger===false&&contract.maximumJobsPerInvocation===3&&contract.rowsPerCleanupStep===10);
+check('card history maintenance contract',contract.cardHistoryBackfill?.defaultMode==='status'&&
+  contract.cardHistoryBackfill?.rowsPerInvocation===20&&contract.cardHistoryBackfill?.lifecycleDeletionRequired===false&&
+  contract.cardHistoryBackfill?.writeRequiredFlag==='SHIKE_MAINTENANCE_ENABLED'&&
+  JSON.stringify(contract.cardHistoryBackfill?.modes)===JSON.stringify(['status','initialize','run','retry']));
+check('worker-only card history entry',source(worker+'shikeMaintenance.js').includes("input.action==='card-history'")&&
+  runtime.includes('stage1.cardHistoryMaintenance(payload, source)')&&
+  !entry.includes('maintainCardHistory(')&&!gateway.includes("case 'card-history-maintenance':"));
 check('no shipped triggers',(config.triggers||[]).length===0,'AGC timer must be configured and verified separately; this file intentionally contains no provider-specific trigger definition.');
 for(const path of [worker+'shikeMaintenance.js','CloudProgram/cloudfunctions/shared/image-reader.js','CloudProgram/cloudfunctions/shared/content-policy.js','CloudProgram/cloudfunctions/shike-image/shikeImage.js','CloudProgram/cloudfunctions/shike-media/runtime.js','CloudProgram/cloudfunctions/shike-media/cover-converter.js','CloudProgram/cloudfunctions/shike-media/cover-worker.js','CloudProgram/cloudfunctions/shike-location/runtime.js','CloudProgram/scripts/package-functions.mjs','CloudProgram/scripts/check-artifact.mjs']){
   const result=spawnSync(process.execPath,['--check',join(root,path)],{encoding:'utf8',shell:false});check('syntax '+path,!result.error&&result.status===0,(result.stderr||'').trim());
@@ -85,7 +116,7 @@ const lifecycle=source(service+'lifecycle-services.js');
 check('worker gates',lifecycle.includes("'SHIKE_LIFECYCLE_VERIFIED'")&&lifecycle.includes("'SHIKE_MAINTENANCE_ENABLED'"));
 check('production recovery',runtime.includes('SHIKE_ENVIRONMENT')&&runtime.includes('SHIKE_TEST_RECOVERY_SECONDS'),'A source check cannot verify deployed environment values.');
 const trace=source('Application/entry/src/main/ets/service/FeaturePerformanceTrace.ets');
-for(const name of ['map_first_render','map_marker_query','search_first_result','today_eat_candidates','food_list_first_page','draft_restore','poll_refresh'])check('trace '+name,trace.includes("'"+name+"'"));
+for(const name of ['map_first_render','map_marker_query','search_first_result','random_food_pool','random_food_cards','food_choice_history','meal_poll_candidates','food_list_first_page','draft_restore','poll_refresh'])check('trace '+name,trace.includes("'"+name+"'"));
 const failed=results.filter(result=>!result.ok);
 const report={checkedAt:new Date().toISOString(),sourceVersion:'image-read-v1',metricsVersion:'o0-20261008-v1',schemaVersion:schema.schemaVersion,nodeVersion:process.version,checks:results,failedCount:failed.length,scope:'Source/schema/contracts/syntax only. ArkTS build, actual cloud configuration, timer delivery, Auth REST execution, runtime regression and performance are user validation tasks.'};
 mkdirSync(dirname(reportPath),{recursive:true});writeFileSync(reportPath,JSON.stringify(report,null,2)+'\n');

@@ -12,9 +12,6 @@ export struct NearbyPage {
   onOpenCard: (card: FoodCard) => void = (_card: FoodCard): void => {};
   @Prop revision: number = 0;
   @Prop @Watch('onAccountChanged') loggedIn: boolean = false;
-  @Prop showPreferencePrompt: boolean = false;
-  onSetupPreference: () => void = (): void => {};
-  onSkipPreference: () => void = (): void => {};
   onOpenMeal: () => void = (): void => {};
   @State capabilities: DiscoveryCapabilities = emptyCapabilities();
   @State ready: boolean = false;
@@ -56,8 +53,8 @@ export struct NearbyPage {
   }
   build() {
     if (this.ready) {
-      DiscoveryFeed({ capabilities: this.capabilities, revision: this.revision, showPreferencePrompt: this.showPreferencePrompt,
-        onSetupPreference: this.onSetupPreference, onSkipPreference: this.onSkipPreference, onOpenMeal: this.onOpenMeal,
+      DiscoveryFeed({ capabilities: this.capabilities, revision: this.revision,
+        onOpenMeal: this.onOpenMeal,
         onPrimaryCard: (card: FoodCard, remote: boolean): void => this.enqueueCard(card, remote), onOpenCard: this.onOpenCard,
         onUnavailable: (): void => { this.capabilities = emptyCapabilities(); } })
     } else { Column() { LoadingProgress().width(36).height(36) }.width('100%').height('100%').justifyContent(FlexAlign.Center) }

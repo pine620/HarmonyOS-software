@@ -1,6 +1,3 @@
-import { OperationsRepository } from '../repository/OperationsRepository';
-import { OperationsCapabilities } from '../model/OperationsModels';
-import { AuthSessionStore } from '../service/AuthSessionStore';
 import { UserProfile } from '../model/CloudContracts';
 import { AuthService } from '../service/AuthService';
 
@@ -16,36 +13,6 @@ export struct ProfilePage {
   @Consume('pathStack') pathStack: NavPathStack;
   @Prop @Watch('onRevisionChanged') revision: number = 0;
   @StorageLink('profileAvatarRevision') @Watch('onAvatarRevisionChanged') profileAvatarRevision: number = 0;
-  @State administrator: boolean = false;
-  @State operationsState: string = 'UNKNOWN';
-  private operationsOwner: string = '';
-  @StorageLink('operationsRoleRevision') @Watch('onOperationsRoleRejected') operationsRoleRevision: number = 0;
-  private onOperationsRoleRejected(): void { this.operationsGeneration++; this.administrator = false; this.operationsState = 'NON_ADMIN'; }
-  @StorageLink('stage47AppActive') @Watch('onOperationsEnvironment') appActive: boolean = true;
-  @StorageLink('authSessionRevision') @Watch('onOperationsEnvironment') sessionRevision: number = 0;
-  private operationsGeneration: number = 0;
-  private operationsVisible: boolean = false;
-  private onOperationsEnvironment(): void {
-    this.operationsGeneration++;
-    const owner: string = AuthService.profile()?.uid || '';
-    if (owner !== this.operationsOwner) { this.operationsOwner = owner; this.administrator = false; this.operationsState = 'UNKNOWN'; }
-    if (this.operationsVisible && this.appActive) void this.loadOperationsCapabilities();
-  }
-  private async loadOperationsCapabilities(): Promise<void> {
-    const generation: number = ++this.operationsGeneration;
-    const profile: UserProfile | undefined = AuthService.profile();
-    const session: number = AuthSessionStore.generation();
-    if (profile === undefined || !this.appActive) return;
-    this.operationsState = 'CHECKING';
-    try {
-      const capabilities: OperationsCapabilities = await new OperationsRepository().capabilities({ priority: 'metadata', mayContinue: async (): Promise<boolean> => this.operationsVisible && this.appActive && generation === this.operationsGeneration && session === AuthSessionStore.generation() });
-      if (this.operationsVisible && this.appActive && generation === this.operationsGeneration && session === AuthSessionStore.generation() && AuthService.profile()?.uid === profile.uid) {
-        this.administrator = capabilities.administrator;
-        this.operationsState = capabilities.administrator ? 'ADMIN' : 'NON_ADMIN';
-      }
-    } catch (_error) { if (generation === this.operationsGeneration && session === AuthSessionStore.generation()) this.operationsState = 'ERROR'; }
-  }
-  aboutToDisappear(): void { this.operationsVisible = false; this.onOperationsEnvironment(); }
   @State profile: UserProfile | undefined = undefined;
 
   aboutToAppear(): void {
@@ -200,20 +167,26 @@ export struct ProfilePage {
     Column({ space: 10 }) {
       Text('饮食与记录').fontSize(13).fontColor($r('app.color.muted')).width('100%')
       Column({ space: 0 }) {
-        this.planningRow('今天吃什么', $r('app.media.ic_planning_meal'), 'today-eat', true)
-        this.planningRow('主动偏好', $r('app.media.ic_planning_preference'), 'taste-preference', true)
+        Button() {
+          Row({ space: 12 }) {
+            Column({ space: 6 }) {
+              Text('今日篇 / FOOD MOMENTS').fontSize(11).fontColor($r('app.color.random_accent')).accessibilityLevel('no')
+              Text('今日吃什么').fontSize(21).fontWeight(FontWeight.Bold).fontColor($r('app.color.random_ink'))
+              Text('一次随机，三张灵感').fontSize(13).fontColor($r('app.color.random_muted'))
+            }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+            Text('翻开 ›').fontSize(16).fontWeight(FontWeight.Bold).fontColor($r('app.color.random_accent'))
+          }.width('100%')
+        }.type(ButtonType.Normal).width('100%').constraintSize({ minHeight: 104 }).padding(20).borderRadius(16)
+          .backgroundColor($r('app.color.random_surface')).accessibilityText('今日吃什么，翻三张选一个')
+          .onClick((): void => this.pathStack.pushPathByName('random-food', null))
+        this.planningRow('选择记录', $r('app.media.ic_profile_history'), 'food-choice-history', false)
       }.width('100%').backgroundColor($r('app.color.surface')).borderRadius(16)
         .border({ width: 1, color: $r('app.color.line') })
       Text('内容管理').fontSize(13).fontColor($r('app.color.muted')).width('100%').margin({ top: 8 })
       Column({ space: 0 }) {
         this.planningRow('待修改内容', $r('app.media.ic_profile_cards'), 'review-requests', true)
         this.planningRow('我的举报', $r('app.media.ic_profile_history'), 'my-reports', true)
-        this.planningRow('删除记录', $r('app.media.ic_profile_history'), 'deleted-cards', this.administrator)
-        if (this.administrator) { this.planningRow('审核中心', $r('app.media.ic_profile_settings'), 'moderation-center', false) }
-        if (this.operationsState === 'ERROR' || this.operationsState === 'CHECKING' || this.operationsState === 'UNKNOWN') {
-          Button(this.operationsState === 'ERROR' ? '审核身份检查失败 · 重试' : '正在确认审核身份…').fontSize(13).fontColor($r('app.color.muted')).backgroundColor(Color.Transparent).constraintSize({ minHeight: 48 }).width('100%')
-            .enabled(this.operationsState !== 'CHECKING').onClick((): void => { void this.loadOperationsCapabilities(); })
-        }
+        this.planningRow('删除记录', $r('app.media.ic_profile_history'), 'deleted-cards', false)
       }.width('100%').backgroundColor($r('app.color.surface')).borderRadius(16).border({ width: 1, color: $r('app.color.line') })
       Text('本机与隐私').fontSize(13).fontColor($r('app.color.muted')).width('100%').margin({ top: 8 })
       Column({ space: 0 }) {
@@ -245,6 +218,5 @@ export struct ProfilePage {
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
     }
     .width('100%').height('100%').backgroundColor($r('app.color.canvas'))
-      .onVisibleAreaChange([0, 1], (_visible: boolean, ratio: number): void => { const shown: boolean = ratio > 0; if (shown === this.operationsVisible) return; this.operationsVisible = shown; this.onOperationsEnvironment(); })
   }
 }

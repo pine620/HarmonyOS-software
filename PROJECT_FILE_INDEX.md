@@ -1,6 +1,6 @@
 # 项目文件索引
 
-按 2026-10-10 的现有发布文件结构整理，重点覆盖 `Application` 与 `CloudProgram`。先看下面的职责说明，完整文件清单在文末。首次运行见 [README](README.md)，后端操作见 [云端指南](CloudProgram/README.md)。
+按 2026-10-11 的现有发布文件结构整理，重点覆盖 `Application` 与 `CloudProgram`。先看下面的职责说明，完整文件清单在文末。首次运行见 [README](README.md)，后端操作见 [云端指南](CloudProgram/README.md)。
 
 路径从项目根目录起算。GitHub 仓库包含 Application 与 CloudProgram 的源码；三个不含签名的 build profile 随源码共享；本地签名、SDK 和云工程关联配置另列，不提交配置值。
 
@@ -67,7 +67,6 @@ CloudProgram/
 | `CreateCardPage.ets` | 外卖／到店发布和待审编辑、商家关联、金额、1–6 图、模式缓存、幂等重试与立即收窄 |
 | `CardDetailPage.ets` | 详情/图片/评价、点赞收藏、举报删除及系统/近场分享生命周期；评论入口已退场 |
 | `ShareCardPage.ets` | 单独的卡片分享页面和公开分享展示 |
-| `RankingPage.ets` | 附近/好友口味榜和分类筛选 |
 | `FriendsPage.ets` | 好友、申请、会话与群聊入口 |
 | `FriendSearchPage.ets` | 搜索食刻号与发起关系操作 |
 | `FriendProfilePage.ets` | 用户资料、公开卡片、关系操作与聊天入口 |
@@ -77,23 +76,17 @@ CloudProgram/
 | `ProfileSubPages.ets` | MyPublishedPage、PermissionsPrivacyPage、ProfileSettingsPage、ProfileEditPage 四个子页 |
 | `FavoriteCardsPage.ets` | 本人收藏的公开卡片 |
 | `CardHistoryPage.ets` | 本机访问历史及卡片打开 |
-| `ReceivedCommentsPage.ets` | 保留历史评论页面，当前导航入口已退场 |
-| `NotificationInboxPage.ets` | 通知分页、未读/已读、全部已读和目标跳转 |
 
 | `DeletedCardsPage.ets` | 软删除列表与恢复 |
-| `FoodListPicker.ets` | 选择加入的私人清单 |
-| `FoodListsPage.ets` | 私人清单管理与条目 |
-| `LifecycleJobPage.ets` | 生命周期任务详情与重试 |
-| `LifecycleJobsPage.ets` | 管理员任务列表 |
 | `MealPollPage.ets` | 群投票详情、选项和投票 |
-| `ModerationCenterPage.ets` | 管理员审核队列 |
-| `ModerationDetailPage.ets` | 审核详情、差异与决策 |
-| `PersonalFoodPage.ets` | 收藏、想吃与个人食物状态 |
-| `PreferenceSetupPage.ets` | 口味偏好配置 |
 | `ReportContentPage.ets` | 卡片/商家举报 |
 | `SocialDiscoveryPages.ets` | 社交发现导航页面 |
-| `TodayEatPage.ets` | 今天吃什么候选与选择记录 |
 | `UserProfileContent.ets` | 用户内容列表 |
+
+| `FoodRankingPage.ets` | 高分/好友榜单、快照准备态与分页 |
+| `RandomFoodPage.ets` | 随机吃什么轮盘、来源、轮次与选择 |
+| `FoodChoiceHistoryPage.ets` | 本人选择历史、内容读取与删除 |
+| `MyContentStatusPage.ets` | 本人内容状态与后续操作 |
 
 ## Application：业务封装、服务与模型
 
@@ -103,7 +96,6 @@ CloudProgram/
 | --- | --- |
 | `repository/CardRepository.ets` | 公开推荐/游客详情、卡片发布、附近/榜单、互动、举报/删除业务封装 |
 | `repository/FriendRepository.ets` | 用户搜索/资料、好友关系、私信与群聊业务封装 |
-| `repository/NotificationRepository.ets` | 通知列表、已读、全部已读和目标解析 |
 | `repository/CardEditRepository.ets` | 编辑上下文、Revision 提交／撤回及立即收窄 |
 | `repository/MerchantRepository.ets` | 商家能力、官方点解析、用户点创建／更新与读取 |
 | `repository/DiscoveryRepository.ets` | 地图商家、公开搜索、独立商家推荐和发现能力请求 |
@@ -115,7 +107,6 @@ CloudProgram/
 | `service/ImagePreparationService.ets` | JPEG 重编码、缩放、去 EXIF/GPS、摘要计算与头像裁剪 |
 | `service/PhotoUploadService.ets` | 鉴权媒体上传、游客/账号媒体读取、Base64 到本机文件、文件缓存与下载队列 |
 | `service/NearbyPerformanceTrace.ets` | 附近/详情的固定指标与 trace，供人工采样 |
-| `service/FriendRankingPreloadService.ets` | 好友榜短时缓存、请求复用与关系 revision 失效 |
 | `service/CardVisitStore.ets` | 按账号保存访问历史与数量控制 |
 | `service/CardAppLink.ets` | 受控 HTTPS 卡片链接生成/解析、cardId 校验、待处理状态 |
 | `service/ContinuationState.ets` | 最小接续上下文、Want 路由参数与待处理通知；不迁移 Token |
@@ -132,7 +123,6 @@ CloudProgram/
 | `service/SearchHistoryStore.ets` | 本机成功搜索历史，去重并限制为 20 条 |
 | `model/CloudContracts.ets` | 用户、认证、卡片、媒体、位置与服务卡片主要 DTO |
 | `model/FriendModels.ets` | 好友、会话、私信和群聊模型 |
-| `model/NotificationModels.ets` | 通知项、分页、已读和目标响应模型 |
 | `model/DiscoveryModels.ets` | 地图、区域、搜索、排序、分页和覆盖状态 DTO |
 | `model/MerchantModels.ets` | 商家、坐标系、审核状态、选点和外卖平台配置 DTO |
 | `model/PublishingModels.ets` | 11 分类、旧分类桥接、整数分／未知金额输入转换 |
@@ -145,25 +135,27 @@ CloudProgram/
 | `servicecard/ServiceCardFormAbility.ets`、`ServiceCardPresentation.ets`、`pages/ServiceCard.ets` | 卡片生命周期、尺寸回调、路由/展示格式和双规格布局 |
 | `servicecard/pages/ServiceCard.ets` | 桌面卡片布局、刷新与打开操作 |
 
-| `repository/PreferenceRepository.ets`、`model/PreferenceModels.ets` | 偏好与个性化推荐接口和 DTO |
-| `repository/FoodListRepository.ets`、`model/FoodListModels.ets` | 私人清单与条目 |
 | `repository/PersonalCollectionRepository.ets`、`model/PersonalCollectionModels.ets` | 收藏/想吃集合及历史数据迁移 |
 | `repository/MealRepository.ets`、`model/MealModels.ets` | 候选、选择历史与群投票 |
 | `repository/SocialDiscoveryRepository.ets`、`model/SocialDiscoveryModels.ets` | 用户内容、商家榜与关系授权 |
-| `repository/OperationsRepository.ets`、`model/OperationsModels.ets` | 审核举报、删除恢复和生命周期任务 |
 | `service/DraftStore.ets`、`model/DraftModels.ets` | 本机草稿保存/恢复及账号隔离 |
-| `service/AccountRequestGuard.ets`、`service/OperationsPageGuard.ets` | 账号、会话、页面代次与异步回写资格检查 |
 | `service/CloudReadErrors.ets`、`service/ReadScheduler.ets` | 结构化读取错误、受控只读重试、并发与请求去重 |
 | `service/PagedDataSource.ets`、`service/PersonalPreviewLoader.ets` | 稳定分页数据源与个人缩略图加载 |
 | `service/FeaturePerformanceTrace.ets` | 地图、搜索、清单、审核等固定性能 trace |
 | `service/MerchantNavigationService.ets` | 商家位置导航 |
-| `common/OperationsUi.ets`、`common/Stage47Ui.ets`、`components/PersonalPreviewTile.ets` | 管理/个人内容公共界面和预览单元 |
 
 | `model/ImageModels.ets`、`service/ImageDescriptors.ets` | 图片协议 DTO、响应描述符与会话内展示资格 |
 | `service/ImageRepository.ets`、`service/ImageReadConfig.ets` | BATCH 图片队列、合并/去重、传输选择与受控兼容 |
 | `service/ImageDiskCache.ets` | 文件摘要/长度校验、磁盘索引、预算与旧缓存迁移 |
 | `service/DiscoveryFeedState.ets` | 发现列表状态与返回复用 |
 | `service/SessionRestoreStore.ets` | 会话恢复状态 |
+
+| `repository/FoodRankingRepository.ets`、`model/FoodRankingModels.ets` | 榜单请求、快照与分页 DTO |
+| `repository/RandomFoodRepository.ets`、`model/RandomFoodModels.ets` | 候选池、轮盘内容、选择回执与历史 |
+| `service/RandomFoodRoundStore.ets` | 按账号/来源保存轮次，校验本机恢复数据 |
+| `repository/ContentStatusRepository.ets`、`model/ContentStatusModels.ets` | 本人内容状态 |
+| `repository/FeatureRepository.ets`、`model/FeatureModels.ets`、`service/ContentPageGuard.ets` | 功能能力与页面请求有效性 |
+| `components/FoodRankingTile.ets`、`common/RandomFoodUi.ets`、`common/ContentStatusUi.ets` | 榜单/轮盘/状态共用 UI |
 
 ## Application：代理、资源与脚本
 
@@ -202,7 +194,7 @@ CloudProgram/
 
 每个目录均有 `runtime.js`（实际 JS 实现）、`function-config.json`（类型/handler/超时/鉴权）、`package.json` 与 `package-lock.json`（该对象独立依赖）、`tsconfig.json`（CommonJS 入口编译）。TS 导出负责包装响应，部署包必须带相邻 runtime 和生产依赖。media 另有 `check-deployment.mjs`供成员预检源码包/解包产物。
 
-共享策略、错误与图片协议统一维护在 `cloudfunctions/shared/`；service 另带 `stage1-services.js` 至 `stage7-services.js`、`stages47-common.js`、`personal-collections.js`、`moderation-services.js`、`lifecycle-services.js`、`authentication-cleanup.js`。部署时必须随 runtime 同包，完整打包/已知问题见云端指南。`CloudProgram/scripts/package-cloud-object.mjs` 为部署成员准备编译入口、随包 JS 模块和独立依赖；不会自动部署 AGC。
+共享策略、错误与图片协议统一维护在 `cloudfunctions/shared/`；service 另带 当前保留的 `stage1-services.js`、`stage2-services.js`、`stage3-services.js`、`stage6-services.js`、`stage7-services.js`、`stages47-common.js`、`personal-collections.js`、`content-status-services.js`、`food-ranking-services.js`、`random-food-services.js`、`lifecycle-services.js`、`authentication-cleanup.js`。部署时必须随 runtime 同包，完整打包/已知问题见云端指南。`CloudProgram/scripts/package-cloud-object.mjs` 为部署成员准备编译入口、随包 JS 模块和独立依赖；不会自动部署 AGC。
 
 独立入口：`cloudfunctions/shike-share/shikeShare.js` 提供公开分享 HTTP，`cloudfunctions/shike-maintenance/shikeMaintenance.js` 提供受秘密校验的定时任务。`hosting/share/` 是分享页；`scripts/package-share-http.mjs`、`configure-share-hosting.mjs`、`package-maintenance.mjs` 准备部署产物，`check-release-source.mjs` 供负责人手动检查。部署约定 JSON 不表示平台已配置。
 
@@ -300,12 +292,14 @@ Application/entry/hvigorfile.ts
 Application/entry/oh-package-lock.json5
 Application/entry/oh-package.json5
 Application/entry/src/main/ets/common/BreakpointSystem.ets
+Application/entry/src/main/ets/common/ContentStatusUi.ets
 Application/entry/src/main/ets/common/ErrorKit.ets
-Application/entry/src/main/ets/common/OperationsUi.ets
+Application/entry/src/main/ets/common/RandomFoodUi.ets
 Application/entry/src/main/ets/common/Stage47Ui.ets
 Application/entry/src/main/ets/components/DiscoveryCard.ets
 Application/entry/src/main/ets/components/DiscoveryMap.ets
 Application/entry/src/main/ets/components/FoodCover.ets
+Application/entry/src/main/ets/components/FoodRankingTile.ets
 Application/entry/src/main/ets/components/MerchantRecommendationSheet.ets
 Application/entry/src/main/ets/components/PersonalPreviewTile.ets
 Application/entry/src/main/ets/components/review/ReviewDisplay.ets
@@ -314,18 +308,18 @@ Application/entry/src/main/ets/entryability/EntryAbility.ets
 Application/entry/src/main/ets/mapper/CloudCardViewMapper.ets
 Application/entry/src/main/ets/model/CardPrice.ets
 Application/entry/src/main/ets/model/CloudContracts.ets
+Application/entry/src/main/ets/model/ContentStatusModels.ets
 Application/entry/src/main/ets/model/DiscoveryModels.ets
 Application/entry/src/main/ets/model/DraftModels.ets
-Application/entry/src/main/ets/model/FoodListModels.ets
+Application/entry/src/main/ets/model/FeatureModels.ets
+Application/entry/src/main/ets/model/FoodRankingModels.ets
 Application/entry/src/main/ets/model/FriendModels.ets
 Application/entry/src/main/ets/model/ImageModels.ets
 Application/entry/src/main/ets/model/MealModels.ets
 Application/entry/src/main/ets/model/MerchantModels.ets
-Application/entry/src/main/ets/model/NotificationModels.ets
-Application/entry/src/main/ets/model/OperationsModels.ets
 Application/entry/src/main/ets/model/PersonalCollectionModels.ets
-Application/entry/src/main/ets/model/PreferenceModels.ets
 Application/entry/src/main/ets/model/PublishingModels.ets
+Application/entry/src/main/ets/model/RandomFoodModels.ets
 Application/entry/src/main/ets/model/SocialDiscoveryModels.ets
 Application/entry/src/main/ets/model/TasteScore.ets
 Application/entry/src/main/ets/pages/CardDetailPage.ets
@@ -335,42 +329,34 @@ Application/entry/src/main/ets/pages/CreateCardPage.ets
 Application/entry/src/main/ets/pages/DeletedCardsPage.ets
 Application/entry/src/main/ets/pages/DiscoveryFeed.ets
 Application/entry/src/main/ets/pages/FavoriteCardsPage.ets
-Application/entry/src/main/ets/pages/FoodListPicker.ets
-Application/entry/src/main/ets/pages/FoodListsPage.ets
+Application/entry/src/main/ets/pages/FoodChoiceHistoryPage.ets
+Application/entry/src/main/ets/pages/FoodRankingPage.ets
 Application/entry/src/main/ets/pages/FriendProfilePage.ets
 Application/entry/src/main/ets/pages/FriendSearchPage.ets
 Application/entry/src/main/ets/pages/FriendsPage.ets
 Application/entry/src/main/ets/pages/GroupChatPage.ets
 Application/entry/src/main/ets/pages/Index.ets
-Application/entry/src/main/ets/pages/LifecycleJobPage.ets
-Application/entry/src/main/ets/pages/LifecycleJobsPage.ets
 Application/entry/src/main/ets/pages/MealPollPage.ets
-Application/entry/src/main/ets/pages/ModerationCenterPage.ets
-Application/entry/src/main/ets/pages/ModerationDetailPage.ets
+Application/entry/src/main/ets/pages/MyContentStatusPage.ets
 Application/entry/src/main/ets/pages/NearbyPage.ets
-Application/entry/src/main/ets/pages/NotificationInboxPage.ets
-Application/entry/src/main/ets/pages/PersonalFoodPage.ets
-Application/entry/src/main/ets/pages/PreferenceSetupPage.ets
 Application/entry/src/main/ets/pages/ProfilePage.ets
 Application/entry/src/main/ets/pages/ProfileSubPages.ets
-Application/entry/src/main/ets/pages/RankingPage.ets
-Application/entry/src/main/ets/pages/ReceivedCommentsPage.ets
+Application/entry/src/main/ets/pages/RandomFoodPage.ets
 Application/entry/src/main/ets/pages/ReportContentPage.ets
 Application/entry/src/main/ets/pages/ShareCardPage.ets
 Application/entry/src/main/ets/pages/SocialDiscoveryPages.ets
-Application/entry/src/main/ets/pages/TodayEatPage.ets
 Application/entry/src/main/ets/pages/UserProfileContent.ets
 Application/entry/src/main/ets/repository/CardEditRepository.ets
 Application/entry/src/main/ets/repository/CardRepository.ets
+Application/entry/src/main/ets/repository/ContentStatusRepository.ets
 Application/entry/src/main/ets/repository/DiscoveryRepository.ets
-Application/entry/src/main/ets/repository/FoodListRepository.ets
+Application/entry/src/main/ets/repository/FeatureRepository.ets
+Application/entry/src/main/ets/repository/FoodRankingRepository.ets
 Application/entry/src/main/ets/repository/FriendRepository.ets
 Application/entry/src/main/ets/repository/MealRepository.ets
 Application/entry/src/main/ets/repository/MerchantRepository.ets
-Application/entry/src/main/ets/repository/NotificationRepository.ets
-Application/entry/src/main/ets/repository/OperationsRepository.ets
 Application/entry/src/main/ets/repository/PersonalCollectionRepository.ets
-Application/entry/src/main/ets/repository/PreferenceRepository.ets
+Application/entry/src/main/ets/repository/RandomFoodRepository.ets
 Application/entry/src/main/ets/repository/SocialDiscoveryRepository.ets
 Application/entry/src/main/ets/service/AccountRequestGuard.ets
 Application/entry/src/main/ets/service/AuthService.ets
@@ -379,12 +365,12 @@ Application/entry/src/main/ets/service/CardAppLink.ets
 Application/entry/src/main/ets/service/CardVisitStore.ets
 Application/entry/src/main/ets/service/CloudGateway.ets
 Application/entry/src/main/ets/service/CloudReadErrors.ets
+Application/entry/src/main/ets/service/ContentPageGuard.ets
 Application/entry/src/main/ets/service/ContinuationState.ets
 Application/entry/src/main/ets/service/DeliveryPlatformConfigService.ets
 Application/entry/src/main/ets/service/DiscoveryFeedState.ets
 Application/entry/src/main/ets/service/DraftStore.ets
 Application/entry/src/main/ets/service/FeaturePerformanceTrace.ets
-Application/entry/src/main/ets/service/FriendRankingPreloadService.ets
 Application/entry/src/main/ets/service/ImageDescriptors.ets
 Application/entry/src/main/ets/service/ImageDiskCache.ets
 Application/entry/src/main/ets/service/ImagePreparationService.ets
@@ -396,12 +382,12 @@ Application/entry/src/main/ets/service/MerchantLocationPicker.ets
 Application/entry/src/main/ets/service/MerchantNavigationService.ets
 Application/entry/src/main/ets/service/ModeFieldCache.ets
 Application/entry/src/main/ets/service/NearbyPerformanceTrace.ets
-Application/entry/src/main/ets/service/OperationsPageGuard.ets
 Application/entry/src/main/ets/service/PagedDataSource.ets
 Application/entry/src/main/ets/service/PersonalPreviewLoader.ets
 Application/entry/src/main/ets/service/PhotoUploadService.ets
 Application/entry/src/main/ets/service/PrivacyStore.ets
 Application/entry/src/main/ets/service/PushNotificationService.ets
+Application/entry/src/main/ets/service/RandomFoodRoundStore.ets
 Application/entry/src/main/ets/service/ReadScheduler.ets
 Application/entry/src/main/ets/service/SafeSourceLink.ets
 Application/entry/src/main/ets/service/SearchHistoryStore.ets
@@ -427,6 +413,7 @@ Application/entry/src/main/resources/base/media/food_bakery.png
 Application/entry/src/main/resources/base/media/food_drink.png
 Application/entry/src/main/resources/base/media/food_fresh.png
 Application/entry/src/main/resources/base/media/food_other.png
+Application/entry/src/main/resources/base/media/food_ranking_steam.svg
 Application/entry/src/main/resources/base/media/food_snack.png
 Application/entry/src/main/resources/base/media/food_staple.png
 Application/entry/src/main/resources/base/media/ic_action_dislike.svg
@@ -454,6 +441,8 @@ Application/entry/src/main/resources/base/media/ic_profile_privacy.svg
 Application/entry/src/main/resources/base/media/ic_profile_publish.svg
 Application/entry/src/main/resources/base/media/ic_profile_settings.svg
 Application/entry/src/main/resources/base/media/ic_profile_settings_light.svg
+Application/entry/src/main/resources/base/media/ic_random_food_back.svg
+Application/entry/src/main/resources/base/media/ic_random_food_delete.svg
 Application/entry/src/main/resources/base/media/ic_send.svg
 Application/entry/src/main/resources/base/media/ic_service_card_chevron.svg
 Application/entry/src/main/resources/base/media/ic_service_card_photo.svg
@@ -468,6 +457,7 @@ Application/entry/src/main/resources/base/media/nav_recommend.svg
 Application/entry/src/main/resources/base/profile/form_config.json
 Application/entry/src/main/resources/base/profile/main_pages.json
 Application/entry/src/main/resources/dark/element/color.json
+Application/entry/src/main/resources/dark/media/food_ranking_steam.svg
 Application/entry/src/main/resources/dark/media/ic_action_dislike.svg
 Application/entry/src/main/resources/dark/media/ic_action_dislike_on.svg
 Application/entry/src/main/resources/dark/media/ic_action_favorite.svg
@@ -484,6 +474,8 @@ Application/entry/src/main/resources/dark/media/ic_more.svg
 Application/entry/src/main/resources/dark/media/ic_profile_privacy.svg
 Application/entry/src/main/resources/dark/media/ic_profile_publish.svg
 Application/entry/src/main/resources/dark/media/ic_profile_settings.svg
+Application/entry/src/main/resources/dark/media/ic_random_food_back.svg
+Application/entry/src/main/resources/dark/media/ic_random_food_delete.svg
 Application/entry/src/main/resources/dark/media/ic_send.svg
 Application/entry/src/main/resources/dark/media/ic_service_card_chevron.svg
 Application/entry/src/main/resources/dark/media/ic_service_card_photo.svg
@@ -498,7 +490,7 @@ Application/scripts/summarize_preload_metrics.py
 </details>
 
 <details>
-<summary>CloudProgram：117 个文件</summary>
+<summary>CloudProgram：124 个文件</summary>
 
 ```text
 CloudProgram/AppScope/resources/rawfile/schema.json
@@ -575,19 +567,19 @@ CloudProgram/cloudfunctions/shike-media/runtime.js
 CloudProgram/cloudfunctions/shike-media/shikeMedia.ts
 CloudProgram/cloudfunctions/shike-media/tsconfig.json
 CloudProgram/cloudfunctions/shike-service/authentication-cleanup.js
+CloudProgram/cloudfunctions/shike-service/content-status-services.js
+CloudProgram/cloudfunctions/shike-service/food-ranking-services.js
 CloudProgram/cloudfunctions/shike-service/function-config.json
 CloudProgram/cloudfunctions/shike-service/lifecycle-services.js
-CloudProgram/cloudfunctions/shike-service/moderation-services.js
 CloudProgram/cloudfunctions/shike-service/package-lock.json
 CloudProgram/cloudfunctions/shike-service/package.json
 CloudProgram/cloudfunctions/shike-service/personal-collections.js
+CloudProgram/cloudfunctions/shike-service/random-food-services.js
 CloudProgram/cloudfunctions/shike-service/runtime.js
 CloudProgram/cloudfunctions/shike-service/shikeService.ts
 CloudProgram/cloudfunctions/shike-service/stage1-services.js
 CloudProgram/cloudfunctions/shike-service/stage2-services.js
 CloudProgram/cloudfunctions/shike-service/stage3-services.js
-CloudProgram/cloudfunctions/shike-service/stage4-services.js
-CloudProgram/cloudfunctions/shike-service/stage5-services.js
 CloudProgram/cloudfunctions/shike-service/stage6-services.js
 CloudProgram/cloudfunctions/shike-service/stage7-services.js
 CloudProgram/cloudfunctions/shike-service/stages47-common.js
@@ -614,9 +606,16 @@ CloudProgram/scripts/package-functions.mjs
 CloudProgram/scripts/package-maintenance.mjs
 CloudProgram/scripts/package-share-http.mjs
 CloudProgram/scripts/prepare-deveco.mjs
+CloudProgram/tests/admin-notification-removal.test.cjs
+CloudProgram/tests/author-direct-edit.test.cjs
+CloudProgram/tests/card-history-maintenance.test.cjs
+CloudProgram/tests/feature-reduction.test.cjs
+CloudProgram/tests/food-ranking-contracts.test.cjs
+CloudProgram/tests/home-detail-prefetch.test.cjs
 CloudProgram/tests/image-handler-contracts.test.cjs
 CloudProgram/tests/image-read-contracts.test.cjs
 CloudProgram/tests/optimization-contracts.test.cjs
+CloudProgram/tests/random-food.test.cjs
 CloudProgram/tests/repair-contracts.test.cjs
 ```
 

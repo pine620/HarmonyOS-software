@@ -1,11 +1,10 @@
 import { common } from '@kit.AbilityKit';
 import { ReadRequestOptions } from '../service/ReadScheduler';
 import {
-  CardActionResponse, CardComment, CardDetailRequest, CardIdRequest, CardPhoto, CommentReactionResponse, CreateCardCommentRequest,
-  DeleteCardCommentRequest, EmptyRequest, FoodCard, FriendRankingsResponse, MyCardsResponse, NearbyCardsRequest, NearbyCardsResponse,
-  OperationResponse, PrepareCardPhotoRequest, PrepareCardPhotoResponse, PublishCardRequest,
-  PublishCardResponse, PublicCardsRequest, ReceivedCommentItem, ReceivedCommentsRequest, ReceivedCommentsResponse, ReportCardRequest,
-  ToggleCardActionRequest, ToggleCommentReactionRequest
+  CardActionResponse, CardDetailRequest, CardIdRequest, CardPhoto, EmptyRequest, FoodCard,
+  MyCardsResponse, NearbyCardsRequest, NearbyCardsResponse, OperationResponse,
+  PrepareCardPhotoRequest, PrepareCardPhotoResponse, PublishCardRequest,
+  PublishCardResponse, PublicCardsRequest, ReportCardRequest, ToggleCardActionRequest
 } from '../model/CloudContracts';
 import { CloudBusinessError, ReadCancelledError } from '../service/CloudReadErrors';
 import { AuthService } from '../service/AuthService';
@@ -15,12 +14,12 @@ import { MediaPriority, MediaRequestGuard, ImageRepository } from '../service/Im
 
 export class CardRepository {
   async listRecommendationsMetadata(request: PublicCardsRequest,
-    mayContinue: () => boolean = (): boolean => true): Promise<NearbyCardsResponse> {
+    mayContinue: () => boolean = (): boolean => true, options: ReadRequestOptions = {}): Promise<NearbyCardsResponse> {
     if (!mayContinue()) throw new Error('推荐请求已失效。');
     const traceTaskId: number = NearbyPerformanceTrace.start('shike.nearby.cloud_list');
     try {
       // Reuse the generated method; scope=all selects the public feed server-side.
-      const response: NearbyCardsResponse = await CloudGateway.callPublic<NearbyCardsResponse>('list-nearby-cards', request);
+      const response: NearbyCardsResponse = await CloudGateway.callPublic<NearbyCardsResponse>('list-nearby-cards', request, options);
       if (!mayContinue()) throw new Error('推荐请求已失效。');
       return response;
     } finally {
@@ -63,30 +62,6 @@ export class CardRepository {
     return ImageRepository.getDownloadUrl(context, photo.bucket, photo.path, priority, mayContinue, photo, false);
   }
 
-  async hydrateCommentAvatar(context: common.Context, comment: CardComment): Promise<string> {
-    if (comment.authorAvatarPath.length === 0 || comment.authorAvatarBucket.length === 0) return '';
-    try {
-      return await ImageRepository.getDownloadUrl(context, comment.authorAvatarBucket,
-        comment.authorAvatarPath, 'low');
-    } catch (_error) {
-      return '';
-    }
-  }
-
-  private async resolveCommentAvatarUrls(context: common.Context, comments: Array<CardComment>): Promise<void> {
-    await Promise.all(comments.map(async (comment: CardComment): Promise<void> => {
-      if (comment.authorAvatarPath.length > 0 && comment.authorAvatarBucket.length > 0) {
-        try {
-          comment.authorAvatarUrl = await ImageRepository.getDownloadUrl(context,
-            comment.authorAvatarBucket, comment.authorAvatarPath);
-        } catch (_error) {
-          comment.authorAvatarUrl = '';
-        }
-      }
-      await this.resolveCommentAvatarUrls(context, comment.replies);
-    }));
-  }
-
   private async resolvePublicMediaUrls(context: common.Context, card: FoodCard): Promise<void> {
     let photos: Array<CardPhoto> = card.photos === undefined ? [] : card.photos;
     if (photos.length === 0) {
@@ -119,8 +94,6 @@ export class CardRepository {
         card.authorAvatarUrl = '';
       }
     }
-    const comments = card.comments;
-    if (comments !== undefined) await this.resolveCommentAvatarUrls(context, comments);
   }
 
   /**
@@ -141,28 +114,15 @@ export class CardRepository {
     }
   }
 
-  /** Legacy full-list caller; the visible ranking page now uses metadata first. */
+  /** Compatibility full-list caller for nearby cards. */
   async listNearby(context: common.Context, request: NearbyCardsRequest): Promise<NearbyCardsResponse> {
     const response: NearbyCardsResponse = await this.listNearbyMetadata(context, request);
     await this.hydrateNearbyPrimaryPhotoUrls(context, response.cards);
     return response;
   }
 
-  async listFriendRankingsMetadata(context: common.Context): Promise<Array<FoodCard>> {
-    await AuthService.ensureSession(context);
-    const request: EmptyRequest = {};
-    const response = await CloudGateway.callAuthenticated<FriendRankingsResponse>('list-friend-rankings', request);
-    return response.cards;
-  }
-
-  async listFriendRankings(context: common.Context): Promise<Array<FoodCard>> {
-    const cards: Array<FoodCard> = await this.listFriendRankingsMetadata(context);
-    await this.hydrateNearbyPrimaryPhotoUrls(context, cards, 0, cards.length, 'low');
-    return cards;
-  }
-
   async detail(context: common.Context, cardId: string, options: ReadRequestOptions = {}): Promise<FoodCard> {
-    const request: CardDetailRequest = { cardId, includeComments: false };
+    const request: CardDetailRequest = { cardId };
     const traceTaskId: number = NearbyPerformanceTrace.start('shike.detail.metadata');
     try {
       if (AuthService.profile() !== undefined && CloudGateway.hasSession()) {
@@ -191,23 +151,6 @@ export class CardRepository {
     return result.cards;
   }
 
-  async receivedComments(context: common.Context, pageToken: string): Promise<ReceivedCommentsResponse> {
-    await AuthService.ensureSession(context);
-    const request: ReceivedCommentsRequest = { pageToken, pageSize: 20 };
-    return CloudGateway.callAuthenticated<ReceivedCommentsResponse>('list-received-comments', request);
-  }
-
-  async hydrateReceivedCommentAvatar(context: common.Context, item: ReceivedCommentItem): Promise<string> {
-    const path: string = typeof item.authorAvatarPath === 'string' ? item.authorAvatarPath : '';
-    const bucket: string = typeof item.authorAvatarBucket === 'string' ? item.authorAvatarBucket : '';
-    if (path.length === 0 || bucket.length === 0) return '';
-    try {
-      return await ImageRepository.getDownloadUrl(context, bucket, path, 'low');
-    } catch (_error) {
-      return '';
-    }
-  }
-
   async preparePhoto(context: common.Context, request: PrepareCardPhotoRequest): Promise<PrepareCardPhotoResponse> {
     await AuthService.ensureSession(context);
     return CloudGateway.callAuthenticated<PrepareCardPhotoResponse>('prepare-card-photo', request);
@@ -227,22 +170,6 @@ export class CardRepository {
   async toggleCardAction(context: common.Context, request: ToggleCardActionRequest): Promise<CardActionResponse> {
     await AuthService.ensureSession(context);
     return CloudGateway.callAuthenticated<CardActionResponse>('toggle-card-action', request);
-  }
-
-  async createComment(context: common.Context, request: CreateCardCommentRequest): Promise<void> {
-    await AuthService.ensureSession(context);
-    await CloudGateway.callAuthenticated<OperationResponse>('create-card-comment', request);
-  }
-
-  async deleteComment(context: common.Context, request: DeleteCardCommentRequest): Promise<void> {
-    await AuthService.ensureSession(context);
-    await CloudGateway.callAuthenticated<OperationResponse>('delete-card-comment', request);
-  }
-
-  async toggleCommentReaction(context: common.Context,
-    request: ToggleCommentReactionRequest): Promise<CommentReactionResponse> {
-    await AuthService.ensureSession(context);
-    return CloudGateway.callAuthenticated<CommentReactionResponse>('toggle-comment-reaction', request);
   }
 
   async deleteOwn(context: common.Context, cardId: string): Promise<void> {

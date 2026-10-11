@@ -360,27 +360,6 @@
       ]
     },
     {
-      "indexName": "owner_status_score_time",
-      "indexList": [
-        {
-          "fieldName": "ownerUid",
-          "sortType": "ASC"
-        },
-        {
-          "fieldName": "status",
-          "sortType": "ASC"
-        },
-        {
-          "fieldName": "tasteScore",
-          "sortType": "DESC"
-        },
-        {
-          "fieldName": "createdAt",
-          "sortType": "DESC"
-        }
-      ]
-    },
-    {
       "indexName": "merchant_id",
       "indexList": [
         {
@@ -411,8 +390,12 @@
       ]
     },
     {
-      "indexName": "published_time",
+      "indexName": "public_time",
       "indexList": [
+        {
+          "fieldName": "visibility",
+          "sortType": "ASC"
+        },
         {
           "fieldName": "status",
           "sortType": "ASC"
@@ -428,35 +411,43 @@
       ]
     },
     {
-      "indexName": "published_price_asc",
+      "indexName": "public_price_asc",
       "indexList": [
         {
-          "fieldName": "status",
+          "fieldName": "visibility",
           "sortType": "ASC"
         },
-        {
-          "fieldName": "queryPriceFen",
-          "sortType": "ASC"
-        },
-        {
-          "fieldName": "publishedAt",
-          "sortType": "DESC"
-        },
-        {
-          "fieldName": "id",
-          "sortType": "ASC"
-        }
-      ]
-    },
-    {
-      "indexName": "published_price_desc",
-      "indexList": [
         {
           "fieldName": "status",
           "sortType": "ASC"
         },
         {
           "fieldName": "queryPriceFen",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "publishedAt",
+          "sortType": "DESC"
+        },
+        {
+          "fieldName": "id",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "public_price_desc",
+      "indexList": [
+        {
+          "fieldName": "visibility",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "status",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "queryPriceFen",
           "sortType": "DESC"
         },
         {
@@ -470,13 +461,17 @@
       ]
     },
     {
-      "indexName": "merchant_published_time",
+      "indexName": "merchant_public_time",
       "indexList": [
         {
           "fieldName": "merchantId",
           "sortType": "ASC"
         },
         {
+          "fieldName": "visibility",
+          "sortType": "ASC"
+        },
+        {
           "fieldName": "status",
           "sortType": "ASC"
         },
@@ -491,8 +486,12 @@
       ]
     },
     {
-      "indexName": "status_score_published_id",
+      "indexName": "public_score",
       "indexList": [
+        {
+          "fieldName": "visibility",
+          "sortType": "ASC"
+        },
         {
           "fieldName": "status",
           "sortType": "ASC"
@@ -524,6 +523,31 @@
         },
         {
           "fieldName": "createdAt",
+          "sortType": "DESC"
+        },
+        {
+          "fieldName": "id",
+          "sortType": "ASC"
+        }
+      ]
+    },
+    {
+      "indexName": "merchant_score_time_id",
+      "indexList": [
+        {
+          "fieldName": "merchantId",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "status",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "tasteScore",
+          "sortType": "DESC"
+        },
+        {
+          "fieldName": "publishedAt",
           "sortType": "DESC"
         },
         {

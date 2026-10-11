@@ -82,7 +82,17 @@ function createLifecycleServices(ctx){
       next=changed(fresh,cp,cp.complete?'DONE':'RUNNING');save(tx,[next]);return true;
     }});if(!ok||!next)throw fail('任务进度未保存。','CONFLICT');return next;
   }
-  async function deleteRows(job,env,name,field,value,nextPhase,extra=null){return transition(job,env,async(tx,cp)=>{let query=collection(env,name).query().equalTo(field,value);if(extra)query=query.equalTo(extra[0],extra[1]);const rows=await tx.executeQuery(query.limit(BATCH));if(rows.length)tx.executeDelete(rows);cp.processed=Number(cp.processed||0)+rows.length;if(rows.length<BATCH)cp.phase=nextPhase;});}
+  // Drain retired comment reactions before deleting their parent IDs. Each
+  // transaction remains bounded and resumes on the same comments until drained.
+  async function deleteLegacyComments(tx,rows,env){
+    if(!rows.length)return {deleted:0,drained:true};
+    const reactions=await tx.executeQuery(collection(env,'CommentReaction').query().in('commentId',rows.map(row=>row.id)).limit(BATCH));
+    if(reactions.length){tx.executeDelete(reactions);return {deleted:reactions.length,drained:false};}
+    tx.executeDelete(rows);return {deleted:rows.length,drained:true};
+  }
+  async function deleteRows(job,env,name,field,value,nextPhase,extra=null){return transition(job,env,async(tx,cp)=>{let query=collection(env,name).query().equalTo(field,value);if(extra)query=query.equalTo(extra[0],extra[1]);const rows=await tx.executeQuery(query.limit(BATCH));
+    const result=name==='CardComment'?await deleteLegacyComments(tx,rows,env):{deleted:rows.length,drained:true};
+    if(name!=='CardComment'&&rows.length)tx.executeDelete(rows);cp.processed=Number(cp.processed||0)+result.deleted;if(result.drained&&rows.length<BATCH)cp.phase=nextPhase;});}
   async function mediaBatch(job,env,field,value,nextPhase,deadline){const fresh=await one(collection(env,'MaintenanceJob').query().equalTo('jobId',job.jobId));if(!fresh||fresh.leaseOwner!==job.leaseOwner)throw fail('租约已变化。','LEASE_LOST');
     const rows=await collection(env,'CardMedia').query().equalTo(field,value).limit(BATCH).get();
     for(const row of rows){if(Date.now()+20000>=deadline)return job;if(row.ownerUid!==job.ownerUid)throw fail('媒体归属无效。','INVALID_STATE');await transition(job,env,async()=>{});
@@ -97,7 +107,8 @@ function createLifecycleServices(ctx){
     const steps={REACTIONS:['CardReaction','cardId',cardId,'LIKES'],LIKES:['CardAction','cardId',cardId,'COMMENTS',['kind','LIKE']],COMMENTS:['CardComment','cardId',cardId,'REPORTS'],REPORTS:['Report','cardId',cardId,'FINISH']};
     if(steps[cp.phase])return deleteRows(job,env,...steps[cp.phase]);
     if(cp.phase==='FINISH')return transition(job,env,async(tx,c)=>{const card=await txOne(tx,env,'FoodCard','id',cardId);if(card)tx.executeDelete([card]);c.complete=true;c.phase='DONE';});throw fail('卡片任务阶段无效。','INVALID_STATE');}
-  const accountSteps=[['FoodCardRevision','authorUid'],['PublishRequestRecord','uid'],['CardAction','actorUid'],['CardReaction','uid'],['FoodListItem','ownerUid'],['FoodList','ownerUid'],['PersonalFoodState','ownerUid'],['TastePreference','uid'],['CardComment','authorUid'],['Report','reporterUid'],['FriendReport','reporterUid'],['FriendReport','targetUid'],['Friendship','memberAUid'],['Friendship','memberBUid'],['ChatMessage','senderUid'],['ChatMessage','recipientUid'],['Conversation','memberAUid'],['Conversation','memberBUid'],['NotificationEvent','recipientUid'],['NotificationEvent','actorUid'],['PushRegistration','ownerUid'],['WidgetRegistration','ownerUid'],['AuthMigrationTicket','canonicalUid'],['MealPollVote','voterUid'],['MealPollOption','addedByUid'],['GroupMessage','senderUid']];
+  // Append cleanup steps so persisted numeric checkpoints keep their original meaning.
+  const accountSteps=[['FoodCardRevision','authorUid'],['PublishRequestRecord','uid'],['CardAction','actorUid'],['CardReaction','uid'],['FoodListItem','ownerUid'],['FoodList','ownerUid'],['PersonalFoodState','ownerUid'],['TastePreference','uid'],['CardComment','authorUid'],['Report','reporterUid'],['FriendReport','reporterUid'],['FriendReport','targetUid'],['Friendship','memberAUid'],['Friendship','memberBUid'],['ChatMessage','senderUid'],['ChatMessage','recipientUid'],['Conversation','memberAUid'],['Conversation','memberBUid'],['NotificationEvent','recipientUid'],['NotificationEvent','actorUid'],['PushRegistration','ownerUid'],['WidgetRegistration','ownerUid'],['AuthMigrationTicket','canonicalUid'],['MealPollVote','voterUid'],['MealPollOption','addedByUid'],['GroupMessage','senderUid'],['CommentReaction','actorUid'],['MealChoiceHistory','uid']];
   async function account(job,env,deadline){const cp=progress(job),uid=job.entityId;
     if(cp.phase==='CARDS'){const rows=await collection(env,'FoodCard').query().equalTo('ownerUid',uid).limit(1).get();if(!rows.length)return transition(job,env,async(_tx,c)=>{c.phase='MEDIA';});
       const card=rows[0];return transition(job,env,async(tx,c,fresh)=>{const current=await txOne(tx,env,'FoodCard','id',card.id),owner=await txOne(tx,env,'UserProfile','uid',uid);if(!current)return;
@@ -113,7 +124,7 @@ function createLifecycleServices(ctx){
         const others=members.filter(m=>m.memberUid!==uid).sort((a,b)=>String(a.memberUid).localeCompare(String(b.memberUid))),now=Date.now();if(group&&others.length){const lastMessage=group.lastMessageId ? await txOne(tx,env,'GroupMessage','id',group.lastMessageId) : null;if(lastMessage&&lastMessage.senderUid===uid){group.lastMessageId='';group.lastMessagePreview='';group.lastMessageKind='';group.lastMessageAt=0;}const nextOwner=group.ownerUid===uid?others[0].memberUid:group.ownerUid;save(tx,[model('GroupConversation',{...group,ownerUid:nextOwner,memberCount:others.length,updatedAt:now})]);if(group.ownerUid===uid)save(tx,[model('GroupMember',{...others[0],role:'OWNER',updatedAt:now})]);}
         if(group&&!others.length){save(tx,[ctx.stage1().jobRow('PURGE_GROUP',group.id,uid,now,now,now,{phase:'MESSAGES'})]);tx.executeDelete([group]);}tx.executeDelete([member]);c.processed=Number(c.processed||0)+1;});}
     if(cp.phase==='DATA'){const index=Number(cp.step||0),step=accountSteps[index];if(!step)return transition(job,env,async(_tx,c)=>{c.phase='MERCHANTS';});
-      return transition(job,env,async(tx,c)=>{const rows=await tx.executeQuery(collection(env,step[0]).query().equalTo(step[1],uid).limit(BATCH));if(['MealPollVote','MealPollOption'].includes(step[0])){for(const pollId of [...new Set(rows.map(r=>r.pollId))]){const poll=await txOne(tx,env,'MealPoll','pollId',pollId);if(poll)save(tx,[model('MealPoll',{...poll,updatedAt:Date.now(),version:Number(poll.version||0)+1})]);}}if(rows.length)tx.executeDelete(rows);c.processed=Number(c.processed||0)+rows.length;if(rows.length<BATCH)c.step=index+1;});}
+      return transition(job,env,async(tx,c)=>{const rows=await tx.executeQuery(collection(env,step[0]).query().equalTo(step[1],uid).limit(BATCH));if(['MealPollVote','MealPollOption'].includes(step[0])){for(const pollId of [...new Set(rows.map(r=>r.pollId))]){const poll=await txOne(tx,env,'MealPoll','pollId',pollId);if(poll)save(tx,[model('MealPoll',{...poll,updatedAt:Date.now(),version:Number(poll.version||0)+1})]);}}const result=step[0]==='CardComment'?await deleteLegacyComments(tx,rows,env):{deleted:rows.length,drained:true};if(step[0]!=='CardComment'&&rows.length)tx.executeDelete(rows);c.processed=Number(c.processed||0)+result.deleted;if(result.drained&&rows.length<BATCH)c.step=index+1;});}
     if(cp.phase==='MERCHANTS')return transition(job,env,async(tx,c)=>{const rows=await tx.executeQuery(collection(env,'Merchant').query().equalTo('createdByUid',uid).limit(BATCH));if(rows.length)save(tx,rows.map(r=>model('Merchant',{...r,createdByUid:'',updatedAt:new Date()})));c.processed=Number(c.processed||0)+rows.length;if(rows.length<BATCH)c.phase='POLLS';});
     if(cp.phase==='POLLS'){const rows=await collection(env,'MealPoll').query().equalTo('creatorUid',uid).limit(BATCH).get();if(!rows.length)return transition(job,env,async(_tx,c)=>{c.phase='AUTH';});
       return transition(job,env,async(tx,c)=>{for(const row of rows){const poll=await txOne(tx,env,'MealPoll','pollId',row.pollId);if(poll&&poll.creatorUid===uid)save(tx,[model('MealPoll',{...poll,creatorUid:'',status:poll.status==='OPEN'?'CANCELLED':poll.status,acceptingOptions:false,closeReason:poll.status==='OPEN'?'ACCOUNT_DELETED':poll.closeReason,updatedAt:Date.now(),version:Number(poll.version||0)+1})]);}c.processed=Number(c.processed||0)+rows.length;});}
@@ -166,29 +177,6 @@ function createLifecycleServices(ctx){
     }
   }
 
-  async function jobs(uid,payload,env){
-    await ctx.assertAdmin(uid,env);const state=String(payload.status||'FAILED');
-    if(!['PENDING','RUNNING','RETRY_WAIT','FAILED','DONE','CANCELLED'].includes(state))throw fail('任务状态无效。');
-    const signature=hash(['jobs8',uid,state]),saved=token(payload.cursor,signature);
-    let query=collection(env,'MaintenanceJob').query().equalTo('status',state).orderByAsc('runAfterAt').orderByAsc('jobId');
-    if(saved){const last=await one(collection(env,'MaintenanceJob').query().equalTo('jobId',id(saved.lastId)));
-      if(!last||last.status!==state||dateMillis(last.updatedAt)!==saved.lastVersion||dateMillis(last.runAfterAt)!==saved.lastStamp)throw fail('任务队列已变化，请刷新。','CURSOR_STALE');
-      query=query.startAfter(model('MaintenanceJob',last));}
-    const rows=await query.limit(12).get();await ctx.assertAdmin(uid,env);const last=rows[rows.length-1];
-    return {items:rows.map(view),nextCursor:rows.length===12?encode(signature,saved?saved.at:Date.now(),
-      {lastId:last.jobId,lastStamp:dateMillis(last.runAfterAt),lastVersion:dateMillis(last.updatedAt)}):''};
-  }
-
-  async function jobDetail(uid,payload,env){await ctx.assertAdmin(uid,env);const job=await one(collection(env,'MaintenanceJob').query().equalTo('jobId',id(payload.jobId)));if(!job)throw fail('任务不存在。','NOT_FOUND');const signature=hash(['identities',uid,job.jobId,dateMillis(job.updatedAt)]),saved=token(payload.identityCursor,signature),offset=saved?int(saved.offset,0,10000000):0;const identities=job.jobType==='DELETE_ACCOUNT'&&job.lastErrorCode==='AUTH_ACTION_REQUIRED'?await collection(env,'IdentityBinding').query().equalTo('canonicalUid',job.entityId).orderByAsc('id').limit(10,offset).get():[];
-    const fresh=await one(collection(env,'MaintenanceJob').query().equalTo('jobId',job.jobId));await ctx.assertAdmin(uid,env);if(!fresh||dateMillis(fresh.updatedAt)!==dateMillis(job.updatedAt))throw fail('任务已变化，请刷新。','CONFLICT');const cp=progress(job),audit=job.jobType==='MODERATION_AUDIT'?{kind:String(cp.kind||''),action:String(cp.action||''),reason:String(cp.reason||''),requestId:String(cp.requestId||''),operatorUid:String(job.ownerUid||'')}:null;return {job:view(job),audit,authIdentities:identities.filter(x=>x.provider==='AGC').map(x=>({provider:'AGC',providerUid:x.providerUid})),hasMoreIdentities:identities.length===10,nextIdentityCursor:identities.length===10?encode(signature,saved?saved.at:Date.now(),{offset:offset+10}):''};}
-  async function retry(uid,payload,env,confirmAuth=false){await ctx.assertAdmin(uid,env);enabled(env);const jobId=id(payload.jobId),requestId=uuid(payload.requestId),expected=int(payload.expectedVersion,0,Number.MAX_SAFE_INTEGER),receiptId=hash(['job8',uid,requestId]),payloadHash=hash([jobId,expected,confirmAuth]);
-    const committed=await collection(env,'MaintenanceJob').runTransaction({apply:async tx=>{await ctx.assertAdmin(uid,env);const admin=await ctx.stage1().activeProfile(tx,uid,env),receipt=await txOne(tx,env,'PublishRequestRecord','requestId',receiptId);if(receipt){if(receipt.uid!==uid||receipt.payloadHash!==payloadHash||receipt.operationType!=='RETRY_LIFECYCLE')throw fail('请求标识冲突。','CONFLICT');return true;}
-      const job=await txOne(tx,env,'MaintenanceJob','jobId',jobId);if(!job||![...TYPES,...LEGACY_TYPES].includes(job.jobType)||!['FAILED','RETRY_WAIT'].includes(job.status)||dateMillis(job.updatedAt)!==expected)throw fail('任务已变化或不能重试。','CONFLICT');const cp=progress(job);
-      if(['BACKFILL_CARD','MIGRATE_REACTION'].includes(job.jobType)){cp.failures=0;cp.failedEntityId='';if(job.lastErrorCode==='COVERAGE_INCOMPLETE'){cp.phase='MIGRATE';cp.verificationCursor='';cp.verificationScanned=0;cp.verificationMissing=0;cp.coverageComplete=false;job.cursor='';}}
-      if(confirmAuth){if(job.jobType!=='DELETE_ACCOUNT'||job.lastErrorCode!=='AUTH_ACTION_REQUIRED'||payload.confirmDeleted!==true)throw fail('请先在 AGC 控制台核实认证身份均已删除。');cp.authConfirmed=true;}
-      const now=ctx.logicalWriteTime(admin.updatedAt,dateMillis(job.updatedAt));save(tx,[model('MaintenanceJob',{...job,status:'PENDING',attemptCount:0,lastErrorCode:'',leaseOwner:'',leaseUntilAt:null,runAfterAt:new Date(now),updatedAt:new Date(now),checkpointJson:JSON.stringify(cp)}),ctx.profileForWrite(admin,now),
-        model('PublishRequestRecord',{requestId:receiptId,uid,operationType:'RETRY_LIFECYCLE',payloadHash,resultEntityId:jobId,status:'COMMITTED',createdAt:new Date(now),expiresAt:new Date(now+30*DAY)})]);if(confirmAuth){const audit=ctx.stage1().jobRow('MODERATION_AUDIT',jobId,uid,now,now,now,{kind:'AUTH_CLEANUP',action:'CONFIRM_DELETED',reason:'管理员已核实 AGC 认证身份均已删除',requestId});audit.status='DONE';save(tx,[audit]);}return true;
-    }});if(!committed)throw fail('重试未保存。','CONFLICT');return {success:true};}
-  return {deleted,restore,process,tick,jobs,jobDetail,retry,view};
+  return {deleted,restore,process,tick,view};
 }
 module.exports={createLifecycleServices};

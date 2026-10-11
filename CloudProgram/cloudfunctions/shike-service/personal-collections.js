@@ -46,24 +46,9 @@ function createPersonalCollections(ctx) {
     const job = await txOne(tx, env, 'MaintenanceJob', 'jobId', jobId(uid));
     if (!job || job.status !== 'DONE') throw fail('收藏正在整理，请在我的收藏中继续。', 'COLLECTION_MIGRATING');
   }
-  async function assertLegacyListWritable(tx, uid, env) {
+  async function assertLegacyFavoriteWritable(tx, uid, env) {
     const job = await txOne(tx, env, 'MaintenanceJob', 'jobId', jobId(uid));
     if (job) throw fail('私人清单已合并到收藏，请更新客户端。', 'CLIENT_UPDATE_REQUIRED');
-  }
-  async function syncLegacyWanted(tx, uid, cardId, wanted, now, env) {
-    const job = await txOne(tx, env, 'MaintenanceJob', 'jobId', jobId(uid));
-    if (!job) return; // The first migration still owns the legacy source.
-    if (job.status !== 'DONE') throw fail('收藏正在整理，请稍后修改。', 'COLLECTION_MIGRATING');
-    requireEnabled(env);
-    const key = ctx.actionId('card:WANT_TO_EAT', uid, cardId);
-    const old = await txOne(tx, env, 'CardAction', 'id', key);
-    if (wanted && !old) {
-      const card = await txOne(tx, env, 'FoodCard', 'id', cardId);
-      await ctx.transactionPolicy(tx, env).assertCardReadable(uid, card);
-      upsert(tx, [model('CardAction', { id: key, actorUid: uid,
-      cardId, kind: 'WANT_TO_EAT', createdAt: now })]);
-    }
-    if (!wanted && old) tx.executeDelete([model('CardAction', old)]);
   }
   async function start(uid, env) {
     requireEnabled(env);
@@ -143,10 +128,9 @@ function createPersonalCollections(ctx) {
         }
         while (saved.phase === 'LISTS' && consumed < BATCH && directoryReads < BATCH) {
           if (!saved.activeList) {
-            let query = collection(env, 'FoodList').query().equalTo('ownerUid', uid)
-              .orderByAsc('sortOrder').orderByAsc('listId');
+            let query = collection(env, 'FoodList').query().equalTo('ownerUid', uid);
             if (saved.listBoundary) query = afterTuple(query,[['sortOrder','ASC'],['listId','ASC']],saved.listBoundary);
-            const lists = await tx.executeQuery(query.limit(1)); directoryReads++;
+            const lists = await tx.executeQuery(query.orderByAsc('sortOrder').orderByAsc('listId').limit(1)); directoryReads++;
             if (!lists.length) { saved.phase = 'WANTED'; break; }
             const list = lists[0];
             saved.listBoundary = { listId: list.listId, sortOrder: Number(list.sortOrder) };
@@ -157,11 +141,10 @@ function createPersonalCollections(ctx) {
           if (!list || list.ownerUid !== uid || list.deletedAt != null) {
             saved.activeList = null; saved.itemBoundary = null; continue;
           }
-          let query = collection(env, 'FoodListItem').query().equalTo('listId', list.listId)
-            .orderByAsc('sortKey').orderByAsc('cardId');
+          let query = collection(env, 'FoodListItem').query().equalTo('listId', list.listId);
           if (saved.itemBoundary) query = afterTuple(query,[['sortKey','ASC'],['cardId','ASC']],saved.itemBoundary);
           const remaining = BATCH - consumed;
-          const rows = await tx.executeQuery(query.limit(remaining));
+          const rows = await tx.executeQuery(query.orderByAsc('sortKey').orderByAsc('cardId').limit(remaining));
           for (const row of rows) {
             consumed++; saved.scanned++;
             saved.itemBoundary = { listId: list.listId, cardId: row.cardId, sortKey: Number(row.sortKey) };
@@ -273,13 +256,20 @@ function createPersonalCollections(ctx) {
     return { viewerWanted: !!wanted, collectionReady: view.collectionReady,
       collectionStatus: enabled(env) ? view.status : 'FEATURE_NOT_READY', collectionReason: !enabled(env)?'收藏服务尚未完成上线验证':view.collectionReady?'':view.status==='FAILED'?'旧收藏整理失败，可继续整理':'旧收藏尚未整理完成' };
   }
-  async function assemble(uid, ids, env) {
+  async function assemble(uid, ids, env, includeDetailPhotos = false) {
     const byId = await ctx.readCardRowsByIds(ids, env);
     const rows = ids.map(key => byId.get(key)).filter(row => row);
     const context = await ctx.createCardReadContext(rows, uid, env);
     const readable = await ctx.readableCardRows(rows, uid, env, false, context);
     await ctx.preparePrimaryPhotos(context, readable, env);
     const cards = readable.map(row => ctx.previewCard(row, context, env));
+    // Optional manifests omit detail fields/actions and retain the final access check.
+    // Serial queries bound DB concurrency; ordinary previews keep the primary-only path.
+    if (includeDetailPhotos) {
+      for (let index = 0; index < readable.length; index++) {
+        cards[index].photos = await ctx.publicPhotos(readable[index], env, true);
+      }
+    }
     const fresh = await ctx.withReadPhase('final-check', () => ctx.finalizeCardReads(cards, readable, uid, env));
     const allowed = new Map(fresh.map(card => [card.id, card]));
     if (uid) await ctx.contentPolicy(env).assertAccountActive(uid);
@@ -289,7 +279,7 @@ function createPersonalCollections(ctx) {
     if (uid) await ctx.contentPolicy(env).assertAccountActive(uid);
     if (!Array.isArray(payload.cardIds) || payload.cardIds.length > BATCH) throw fail('预览每批最多 10 张。');
     const ids = [...new Set(payload.cardIds.map(value => id(value)))];
-    return assemble(uid, ids, env);
+    return assemble(uid, ids, env, payload.includeDetailPhotos === true);
   }
   async function list(uid, payload, env) {
     const migration = await status(uid, env);
@@ -309,6 +299,6 @@ function createPersonalCollections(ctx) {
     return { items, nextCursor: page.next ? encode(signature, at, page.next) : '', migration };
   }
   return { enabled, status, start, resume, set, flags, previews, list, assertWritable,
-    assertLegacyListWritable, syncLegacyWanted };
+    assertLegacyFavoriteWritable };
 }
 module.exports = { createPersonalCollections };

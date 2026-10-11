@@ -54,18 +54,6 @@ async function executeCloudOperation(
 }
 
 export class ShikeService {
-  getStage89Capabilities(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('get-stage89-capabilities', input);
-  }
-  listModerationQueue(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('list-moderation-queue', input);
-  }
-  getModerationDetail(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('get-moderation-detail', input);
-  }
-  decideModeration(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('decide-moderation', input);
-  }
   listMyReports(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('list-my-reports', input);
   }
@@ -81,23 +69,8 @@ export class ShikeService {
   restoreDeletedCard(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('restore-deleted-card', input);
   }
-  listLifecycleJobs(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('list-lifecycle-jobs', input);
-  }
-  getLifecycleJob(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('get-lifecycle-job', input);
-  }
-  retryLifecycleJob(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('retry-lifecycle-job', input);
-  }
-  confirmAuthCleanup(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('confirm-auth-cleanup', input);
-  }
   getReviewMedia(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('get-review-media', input);
-  }
-  runLifecycleJob(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('run-lifecycle-job', input);
   }
   getCardPreviews(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('get-card-previews', input);
@@ -123,51 +96,15 @@ export class ShikeService {
   getStage47Capabilities(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('get-stage47-capabilities', input);
   }
-  getTastePreference(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('get-taste-preference', input);
-  }
-  updateTastePreference(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('update-taste-preference', input);
-  }
-  clearTastePreference(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('clear-taste-preference', input);
-  }
-  listPersonalizedRecommendations(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('list-personalized-recommendations', input);
-  }
-  listFoodLists(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('list-food-lists', input);
-  }
-  createFoodList(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('create-food-list', input);
-  }
-  updateFoodList(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('update-food-list', input);
-  }
-  deleteFoodList(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('delete-food-list', input);
-  }
-  listFoodListItems(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('list-food-list-items', input);
-  }
-  addFoodListItem(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('add-food-list-item', input);
-  }
-  removeFoodListItem(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('remove-food-list-item', input);
-  }
-  reorderFoodListItems(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('reorder-food-list-items', input);
-  }
-  getPersonalFoodState(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('get-personal-food-state', input);
-  }
-  updatePersonalFoodState(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('update-personal-food-state', input);
-  }
+
   getMealCandidates(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('get-meal-candidates', input);
   }
+  getRandomFoodPool(input: CloudEnvelope): Promise<CloudResponse> { return executeCloudOperation('get-random-food-pool', input); }
+  getRandomFoodCards(input: CloudEnvelope): Promise<CloudResponse> { return executeCloudOperation('get-random-food-cards', input); }
+  saveFoodChoice(input: CloudEnvelope): Promise<CloudResponse> { return executeCloudOperation('save-food-choice', input); }
+  listFoodChoices(input: CloudEnvelope): Promise<CloudResponse> { return executeCloudOperation('list-food-choices', input); }
+  deleteFoodChoice(input: CloudEnvelope): Promise<CloudResponse> { return executeCloudOperation('delete-food-choice', input); }
   createMealPoll(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('create-meal-poll', input);
   }
@@ -192,8 +129,8 @@ export class ShikeService {
   getUserPage(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('get-user-page', input);
   }
-  listMerchantRankings(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('list-merchant-rankings', input);
+  listFoodRankings(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('list-food-rankings', input);
   }
 
   setCardReactionV2(input: CloudEnvelope): Promise<CloudResponse> {
@@ -231,22 +168,12 @@ export class ShikeService {
     return executeCloudOperation('get-merchant', input);
   }
 
-  listModerationMerchants(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('list-moderation-merchants', input);
-  }
 
-  moderateMerchant(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('moderate-merchant', input);
-  }
 
-  reconcileMerchantCounters(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('reconcile-merchant-counters', input);
-  }
 
   getCardEditContext(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('get-card-edit-context', input);
   }
-
 
   getRevisionMedia(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('get-revision-media', input);
@@ -268,55 +195,17 @@ export class ShikeService {
     return executeCloudOperation('withdraw-card-revision', input);
   }
 
-  listModerationRevisions(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('list-moderation-revisions', input);
-  }
-
-  moderateCardRevision(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('moderate-card-revision', input);
-  }
-
-  startMigrationJob(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('start-migration-job', input);
-  }
-
-  processMigrationJob(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('process-migration-job', input);
-  }
-
-  getMigrationStatus(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('get-migration-status', input);
-  }
-
-  listMaintenanceJobs(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('list-maintenance-jobs', input);
-  }
-
-  getMaintenanceJob(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('get-maintenance-job', input);
-  }
-
-  retryMaintenanceJob(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('retry-maintenance-job', input);
-  }
-
-  validateLifecycleJob(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('validate-lifecycle-job', input);
-  }
 
 
 
-  processFriendCleanupJob(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('process-friend-cleanup-job', input);
-  }
 
-  listModerationCards(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('list-moderation-cards', input);
-  }
 
-  moderateCard(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('moderate-card', input);
-  }
+
+
+
+
+
+
 
   completeLegacyLogin(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('complete-legacy-login', input);
@@ -354,10 +243,6 @@ export class ShikeService {
     return executeCloudOperation('list-nearby-cards', input);
   }
 
-  listFriendRankings(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('list-friend-rankings', input);
-  }
-
   getFriendProfile(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('get-friend-profile', input);
   }
@@ -372,10 +257,6 @@ export class ShikeService {
 
   listMyFavoriteCards(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('list-my-favorite-cards', input);
-  }
-
-  listReceivedComments(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('list-received-comments', input);
   }
 
   searchUsers(input: CloudEnvelope): Promise<CloudResponse> {
@@ -454,21 +335,9 @@ export class ShikeService {
     return executeCloudOperation('remove-group-member', input);
   }
 
-  listNotifications(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('list-notifications', input);
-  }
 
-  markNotificationRead(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('mark-notification-read', input);
-  }
 
-  markAllNotificationsRead(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('mark-all-notifications-read', input);
-  }
 
-  openNotification(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('open-notification', input);
-  }
 
   registerPushDevice(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('register-push-device', input);
@@ -496,18 +365,6 @@ export class ShikeService {
 
   toggleCardAction(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('toggle-card-action', input);
-  }
-
-  createCardComment(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('create-card-comment', input);
-  }
-
-  deleteCardComment(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('delete-card-comment', input);
-  }
-
-  toggleCommentReaction(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('toggle-comment-reaction', input);
   }
 
   deleteOwnCard(input: CloudEnvelope): Promise<CloudResponse> {

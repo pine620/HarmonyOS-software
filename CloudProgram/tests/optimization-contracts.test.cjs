@@ -67,11 +67,11 @@ function policyFixture() {
   return {records, calls, create, card};
 }
 
-test('published reads for guests and signed-in viewers perform no profile or friendship query', async () => {
+test('published reads cache the active author and perform no viewer or friendship query', async () => {
   const fixture = policyFixture(), policy = fixture.create();
   assert.equal(await policy.canReadCard('', fixture.card), true);
   assert.equal(await policy.canReadCard('viewer', fixture.card), true);
-  assert.deepEqual(fixture.calls, {UserProfile: 0, Friendship: 0});
+  assert.deepEqual(fixture.calls, {UserProfile: 1, Friendship: 0});
 });
 
 test('historical FRIENDS cards remain public after removing or blocking a friend', async () => {
@@ -79,7 +79,7 @@ test('historical FRIENDS cards remain public after removing or blocking a friend
   fixture.records.Friendship = [{id: 'old-relationship', status: 'BLOCKED'}];
   assert.equal(await fixture.create().canReadCard('', fixture.card), true);
   assert.equal(await fixture.create().canReadCard('viewer', fixture.card), true);
-  assert.deepEqual(fixture.calls, {UserProfile: 0, Friendship: 0});
+  assert.deepEqual(fixture.calls, {UserProfile: 2, Friendship: 0});
 });
 
 test('deletion and takedown still remove content independently of friendships', async () => {
@@ -105,4 +105,14 @@ test('timestamp continuation survives deletion before the frontier and equal tim
   assert.deepEqual(second.rows.map(row => row.id), ['c', 'd']);
   const third = await timestampPage(query(), second.next, at, 2, 'id', 'createdAt');
   assert.deepEqual(third.rows.map(row => row.id), ['e']); assert.equal(third.next, null);
+});
+
+
+test('inactive authors immediately lose public card and media eligibility for guests', async () => {
+  const fixture = policyFixture();
+  fixture.records.UserProfile.find(row => row.uid === 'author').accountStatus = 'DELETION_IN_PROGRESS';
+  const policy = createContentPolicy(() => { throw new Error('seeded authority must not query'); }, async () => null,
+    { profiles: fixture.records.UserProfile, cards: [fixture.card] });
+  assert.equal(await policy.canReadCard('', fixture.card), false);
+  assert.equal(await policy.canReadMedia('', { id: 'photo', ownerUid: 'author', cardId: 'card', status: 'APPROVED' }), false);
 });

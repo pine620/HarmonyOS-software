@@ -1,5 +1,5 @@
 import { QuietActionStyle, SecondaryActionStyle } from '../common/Stage47Ui';
-import { ReportRoute } from '../model/OperationsModels';
+import { ReportRoute } from '../model/ContentStatusModels';
 import { AuthService } from '../service/AuthService';
 import { FoodCard } from '../model/CloudContracts';
 import { MapMerchant } from '../model/DiscoveryModels';

@@ -11,7 +11,7 @@ const CATEGORY_MAP = Object.freeze({ staple: 'RICE_SET', bakery: 'NOODLES', drin
 // executes on import, creates another SDK client, or trusts a payload UID.
 function createStage1Services(ctx) {
   const { collection, one, transactionPolicy, profileForWrite, logicalWriteTime,
-    assertAdmin, validateCard, uniqueMediaIds, promotePendingMedia, refreshPublishCount, models } = ctx;
+    validateCard, uniqueMediaIds, promotePendingMedia, refreshPublishCount, models } = ctx;
   const model = (name, row) => Object.assign(new models[name](), row);
   const hash = (value) => crypto.createHash('sha256').update(value).digest('hex');
   function upsertRows(tx, rows) {
@@ -172,7 +172,7 @@ function createStage1Services(ctx) {
     let active = false;
     const committed = await collection(env, 'CardAction').runTransaction({ apply: async (tx) => {
       const profile = await activeProfile(tx, uid, env);
-      await ctx.collections().assertLegacyListWritable(tx, uid, env);
+      await ctx.collections().assertLegacyFavoriteWritable(tx, uid, env);
       const card = await txOne(tx, env, 'FoodCard', 'id', cardId);
       await transactionPolicy(tx, env, [profile]).assertCardReadable(uid, card);
       const old = await txOne(tx, env, 'CardAction', 'id', id);
@@ -264,6 +264,12 @@ function createStage1Services(ctx) {
   async function editFields(card, changes, uid, env, read) {
     if (!changes || typeof changes !== 'object' || Array.isArray(changes)) throw new Error('编辑内容无效。');
     if (Object.keys(changes).some((key) => !EDIT_FIELDS.includes(key))) throw new Error('包含本阶段不支持的编辑字段。');
+    if (changes.priceFen !== undefined) {
+      const price = Number(changes.priceFen);
+      if (!Number.isSafeInteger(price) || price < 0 || price > 100000000) {
+        throw accessError('商品价格无效。', 'VALIDATION_ERROR');
+      }
+    }
     const base = { ...card, sellingPoints: ctx.safeArray(card.sellingPointsJson), publicOffers: ctx.safeArray(card.publicOffersJson),
       visibility: currentVisibility(card) };
     const candidate = { ...base, consumedAt: dateMillis(card.consumedAt), ...changes };
@@ -313,12 +319,33 @@ function createStage1Services(ctx) {
     // Replay is compared to immutable input before deriving fields from a card
     // or Merchant that may have changed since submission/approval.
     const saved = await one(collection(env, 'FoodCardRevision').query().equalTo('revisionId', revisionId));
+    const matchesInput = (row) => row.authorUid === uid && row.cardId === cardId && dateMillis(row.baseModifiedAt) === baseTime &&
+      Number(row.baseLifecycleGeneration) === baseGeneration && row.mediaManifestJson === JSON.stringify(mediaIds) &&
+      row.requestPayloadHash === requestPayloadHash;
+    const concurrentReplay = async () => {
+      const receipt = await one(collection(env, 'FoodCardRevision').query().equalTo('revisionId', revisionId));
+      if (!receipt || !receipt.requestPayloadHash) return null;
+      if (!matchesInput(receipt)) throw accessError('请求标识已经用于其他编辑。', 'CONFLICT');
+      return receipt.status === 'PENDING' ? null : { success: true, revision: revisionView(receipt), alreadyProcessed: true };
+    };
     if (saved && saved.requestPayloadHash) {
-      if (saved.authorUid !== uid || saved.requestPayloadHash !== requestPayloadHash) throw accessError('请求标识已经用于其他编辑。', 'CONFLICT');
-      return { success: true, revision: revisionView(saved), alreadyProcessed: true };
+      if (!matchesInput(saved)) throw accessError('请求标识已经用于其他编辑。', 'CONFLICT');
+      if (saved.status !== 'PENDING') return { success: true, revision: revisionView(saved), alreadyProcessed: true };
     }
     const initial = await one(collection(env, 'FoodCard').query().equalTo('id', cardId));
-    if (!initial || initial.ownerUid !== uid || !editableState(initial)) throw accessError('内容不存在、已失效或无权编辑。');
+    if (!initial || initial.ownerUid !== uid || !editableState(initial)) {
+      const replay = await concurrentReplay();
+      if (replay) return replay;
+      throw accessError('内容不存在、已失效或无权编辑。');
+    }
+    if ((!saved || saved.requestPayloadHash || saved.status === 'PENDING') &&
+        (cardTime(initial) !== baseTime || generation(initial) !== baseGeneration)) {
+      // Another invocation may have committed between the receipt read and
+      // the card read. Return that immutable result instead of a false conflict.
+      const replay = await concurrentReplay();
+      if (replay) return replay;
+      throw accessError('内容版本已变化，请刷新后重建编辑。', 'CONFLICT');
+    }
     const fields = await editFields(initial, payload.changes, uid, env);
     const matches = (row) => row.authorUid === uid && row.cardId === cardId && dateMillis(row.baseModifiedAt) === baseTime &&
       Number(row.baseLifecycleGeneration) === baseGeneration && (row.requestPayloadHash
@@ -326,7 +353,10 @@ function createStage1Services(ctx) {
       row.mediaManifestJson === JSON.stringify(mediaIds);
     if (saved) {
       if (!matches(saved)) throw accessError('请求标识已经用于其他编辑。', 'CONFLICT');
-      return { success: true, revision: revisionView(saved), alreadyProcessed: true };
+      if (saved.status !== 'PENDING') return { success: true, revision: revisionView(saved), alreadyProcessed: true };
+    }
+    if (cardTime(initial) !== baseTime || generation(initial) !== baseGeneration) {
+      throw accessError('内容版本已变化，请刷新后重建编辑。', 'CONFLICT');
     }
     for (const id of mediaIds) {
       const media = await one(collection(env, 'CardMedia').query().equalTo('id', id));
@@ -336,22 +366,28 @@ function createStage1Services(ctx) {
       if (!media.cardId) await promotePendingMedia(media, env);
     }
     let result = null;
+    let alreadyProcessed = false;
+    let publishCountChanged = false;
     const committed = await collection(env, 'FoodCardRevision').runTransaction({ apply: async (tx) => {
-      result = null;
+      result = null; alreadyProcessed = false; publishCountChanged = false;
       const owner = await activeProfile(tx, uid, env);
       const card = await txOne(tx, env, 'FoodCard', 'id', cardId);
       const existing = await txOne(tx, env, 'FoodCardRevision', 'revisionId', revisionId);
       if (existing) {
         if (!matches(existing)) throw accessError('请求标识已使用。', 'CONFLICT');
-        result = existing; return true;
+        if (existing.status !== 'PENDING') { result = existing; alreadyProcessed = true; return true; }
       }
       if (!card || card.ownerUid !== uid || !editableState(card) || cardTime(card) !== baseTime || generation(card) !== baseGeneration) {
-        throw accessError('公开版本已变化，请刷新后重建编辑。', 'CONFLICT');
+        throw accessError('内容版本已变化，请刷新后重建编辑。', 'CONFLICT');
       }
       const currentFields = await editFields(card, payload.changes, uid, env, (name, field, value) => txOne(tx, env, name, field, value));
       if (JSON.stringify(currentFields) !== JSON.stringify(fields)) throw accessError('店铺或内容已变化，请刷新。', 'CONFLICT');
       const pending = await tx.executeQuery(collection(env, 'FoodCardRevision').query().equalTo('cardId', cardId).equalTo('status', 'PENDING').limit(20));
-      if (pending.length === 20) throw accessError('待审版本数量异常。', 'INVALID_STATE');
+      if (pending.length === 20 || pending.some(row => row.authorUid !== uid)) throw accessError('历史编辑版本状态异常。', 'INVALID_STATE');
+      const previousMedia = await tx.executeQuery(collection(env, 'CardMedia').query().equalTo('cardId', cardId).limit(20));
+      if (previousMedia.length === 20 || previousMedia.some(media => media.ownerUid !== uid)) {
+        throw accessError('原图片关联状态异常。', 'INVALID_STATE');
+      }
       const medias = [];
       for (const id of mediaIds) {
         const media = await txOne(tx, env, 'CardMedia', 'id', id);
@@ -361,26 +397,44 @@ function createStage1Services(ctx) {
         medias.push(media);
       }
       const now = logicalWriteTime(owner.updatedAt, cardTime(card));
+      const updated = model('FoodCard', { ...card, ...ctx.stage2().storageFields(currentFields),
+        mediaId: mediaIds[0], status: 'APPROVED', schemaVersion: 2, migrationSource: 'SERVER',
+        // Keep the existing readable publication state without claiming an
+        // administrator reviewed this author save. Do not boost publication time.
+        reviewState: 'PENDING_POST_REVIEW', reviewReason: '', edited: true,
+        modifiedAt: new Date(now), updatedAt: now, lifecycleGeneration: baseGeneration + 1 });
+      const counters = await ctx.stage2().prepareCounterTransition(tx, card, updated, owner, env, now);
+      publishCountChanged = !readableCardState(card);
+      // APPROVED is the legacy revision enum for an applied receipt. reviewedAt
+      // records completion; neither field represents an administrator decision.
       result = model('FoodCardRevision', { revisionId, cardId, authorUid: uid, baseModifiedAt: new Date(baseTime),
         baseLifecycleGeneration: baseGeneration, requestPayloadHash, payloadJson: JSON.stringify(fields), mediaManifestJson: JSON.stringify(mediaIds),
-        status: 'PENDING', submittedAt: new Date(now), reviewedAt: null, reviewReason: '' });
-      if (pending.length > 0) upsertRows(tx, pending.map((row) => model('FoodCardRevision', {
+        status: 'APPROVED', submittedAt: existing ? existing.submittedAt : new Date(now), reviewedAt: new Date(now), reviewReason: '' });
+      const superseded = pending.filter(row => row.revisionId !== revisionId);
+      // No reads after this point: card, receipt, profile, counters and media
+      // associations commit or roll back together in one SDK transaction.
+      if (superseded.length > 0) upsertRows(tx, superseded.map((row) => model('FoodCardRevision', {
         ...row, status: 'WITHDRAWN', reviewedAt: new Date(now), reviewReason: 'SUPERSEDED'
       })));
-      upsertRows(tx, [result, model('FoodCard', card), profileForWrite(owner, now)]);
-      for (const media of medias) if (media.cardId !== cardId) upsertRows(tx, [model('CardMedia', {
-        ...media, cardId: 'revision:' + revisionId, status: 'APPROVED'
-      })]);
+      upsertRows(tx, [result, updated, profileForWrite(owner, now), ...counters]);
+      upsertRows(tx, medias.map(media => model('CardMedia', { ...media, cardId, status: 'APPROVED' })));
+      const retired = previousMedia.filter(media => !mediaIds.includes(media.id));
+      if (retired.length > 0) upsertRows(tx, retired.map(media => model('CardMedia', {
+        ...media, cardId: 'revision:' + revisionId, status: 'RETIRED'
+      })));
       return true;
     } });
-    if (!committed || !result) throw new Error('待审编辑未保存，请重试。');
-    return { success: true, revision: revisionView(result), alreadyProcessed: false };
+    if (!committed || !result) throw new Error('编辑未保存，请重试。');
+    // Ordinary edits do not change the owner's publish count. Historical
+    // REQUEST_CHANGE recovery does; refresh only that derived profile count.
+    if (publishCountChanged) await refreshPublishCount(uid, env);
+    return { success: true, revision: revisionView(result), alreadyProcessed };
   }
   async function getRevision(uid, payload, env) {
     const row = await one(collection(env, 'FoodCardRevision').query().equalTo('revisionId', String(payload.revisionId || '')));
     if (!row) throw accessError('编辑版本不存在。', 'NOT_FOUND');
     await ctx.contentPolicy(env).assertAccountActive(uid);
-    if (row.authorUid !== uid) await assertAdmin(uid, env);
+    if (row.authorUid !== uid) throw accessError('版本不存在或无权查看。', 'FORBIDDEN');
     return { revision: revisionView(row) };
   }
   async function getEditContext(uid, payload, env) {
@@ -397,165 +451,91 @@ function createStage1Services(ctx) {
     if (!fresh || fresh.ownerUid !== uid || !editableState(fresh) || cardTime(fresh) !== cardTime(card)) throw accessError('编辑内容已变化，请刷新。', 'CONFLICT');
     return result;
   }
-  async function listRevisions(uid, payload, env) {
-    await assertAdmin(uid, env);
-    const offset = Number(payload.pageToken || 0);
-    if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('分页参数无效。');
-    const rows = await collection(env, 'FoodCardRevision').query().equalTo('status', 'PENDING')
-      .orderByAsc('submittedAt').orderByAsc('revisionId').limit(BATCH, offset).get();
-    return { revisions: rows.map(revisionView), nextPageToken: rows.length === BATCH ? String(offset + rows.length) : '' };
-  }
-  async function decideRevision(uid, payload, env, withdraw = false) {
-    if (!withdraw) await assertAdmin(uid, env);
-    const action = withdraw ? 'WITHDRAW' : String(payload.action || '');
-    if (!['APPROVE', 'REJECT', 'WITHDRAW'].includes(action)) throw new Error('审核动作无效。');
-    let output = null;
-    const committed = await collection(env, 'FoodCardRevision').runTransaction({ apply: async (tx) => {
-      output = null;
-      await activeProfile(tx, uid, env);
-      const revision = await txOne(tx, env, 'FoodCardRevision', 'revisionId', String(payload.revisionId || ''));
-      if (!revision || (withdraw && revision.authorUid !== uid)) throw accessError('版本不存在或无权操作。');
-      if (revision.status !== 'PENDING') {
-        const terminal = action === 'APPROVE' ? 'APPROVED' : action === 'REJECT' ? 'REJECTED' : 'WITHDRAWN';
-        if (revision.status !== terminal) throw accessError('编辑版本已处理或失效。', 'CONFLICT');
-        output = { success: true, status: terminal, unchanged: true }; return true;
-      }
-      const card = await txOne(tx, env, 'FoodCard', 'id', revision.cardId);
-      const owner = await txOne(tx, env, 'UserProfile', 'uid', revision.authorUid);
-      const fresh = card && card.ownerUid === revision.authorUid && editableState(card) && isAccountActive(owner) &&
-        cardTime(card) === dateMillis(revision.baseModifiedAt) && generation(card) === Number(revision.baseLifecycleGeneration);
-      if (action === 'APPROVE' && !fresh) {
-        upsertRows(tx, [model('FoodCardRevision', { ...revision, status: 'REJECTED', reviewedAt: new Date(), reviewReason: 'BASE_CHANGED' })]);
-        output = { success: false, stale: true }; return true;
-      }
-      const ids = JSON.parse(revision.mediaManifestJson);
-      const medias = [];
-      if (action === 'APPROVE') {
-        uniqueMediaIds({ mediaIds: ids });
-        for (const id of ids) {
-          const media = await txOne(tx, env, 'CardMedia', 'id', id);
-          if (!media || media.ownerUid !== revision.authorUid || media.status !== 'APPROVED' ||
-            ![revision.cardId, 'revision:' + revision.revisionId].includes(media.cardId)) throw accessError('版本图片已失效。', 'CONFLICT');
-          medias.push(media);
-        }
-      }
-      const oldMedias = action === 'APPROVE' ? await tx.executeQuery(collection(env, 'CardMedia').query().equalTo('cardId', revision.cardId).limit(50)) : [];
-      if (oldMedias.length === 50) throw accessError('卡片图片数量异常。', 'INVALID_STATE');
-      let appliedFields = null;
-      if (action === 'APPROVE') {
-        const storedFields = JSON.parse(revision.payloadJson);
-        appliedFields = await ctx.stage2().cardFields(storedFields, revision.authorUid, env,
-          (name, field, value) => txOne(tx, env, name, field, value), true);
-        if (appliedFields.merchantNameSnapshot !== String(storedFields.merchantNameSnapshot || '') ||
-          appliedFields.merchantAddressSnapshot !== String(storedFields.merchantAddressSnapshot || '')) {
-          throw accessError('待审店铺资料已变化，请作者重新提交。', 'CONFLICT');
-        }
-      }
-      const now = logicalWriteTime(dateMillis(revision.submittedAt), card && cardTime(card), owner && owner.updatedAt);
-      const status = action === 'APPROVE' ? 'APPROVED' : action === 'REJECT' ? 'REJECTED' : 'WITHDRAWN';
-      if (action === 'APPROVE') {
-        const fields = JSON.parse(revision.payloadJson);
-        // Each edit still validates its content version.
-        const updated = model('FoodCard', { ...card, ...fields, ...ctx.stage2().storageFields(appliedFields), schemaVersion: 2,
-          migrationSource: 'SERVER', status: 'APPROVED', reviewState: 'APPROVED', reviewReason: '',
-          edited: true, publishedAt: new Date(now), modifiedAt: new Date(now), updatedAt: now,
-          lifecycleGeneration: generation(card) + 1, mediaId: ids[0] || '' });
-        const counters = await ctx.stage2().prepareCounterTransition(tx, card, updated, owner, env, now);
-        upsertRows(tx, [updated, profileForWrite(owner, now), ...counters]);
-        if (medias.length > 0) upsertRows(tx, medias.map((media) => model('CardMedia', { ...media, cardId: card.id })));
-        const removed = oldMedias.filter((media) => !ids.includes(media.id));
-        if (removed.length > 0) upsertRows(tx, removed.map((media) => model('CardMedia', {
-          ...media, cardId: 'revision:' + revision.revisionId, status: 'RETIRED'
-        })));
-      }
-      upsertRows(tx, [model('FoodCardRevision', { ...revision, status, reviewedAt: new Date(now),
-        reviewReason: String(payload.reason || '').trim().slice(0, 200) })]);
-      output = { success: true, status, unchanged: false }; return true;
-    } });
-    if (!committed || !output) throw new Error('审核未保存，请重试。');
-    if (output.stale) throw accessError('编辑基准已变化，版本已退回，请作者刷新重建。', 'CONFLICT');
-    return output;
+  async function withdrawRevision(uid, payload, env) {
+    let output=null;
+    const committed=await collection(env,'FoodCardRevision').runTransaction({apply:async tx=>{
+      output=null;await activeProfile(tx,uid,env);
+      const revision=await txOne(tx,env,'FoodCardRevision','revisionId',String(payload.revisionId||''));
+      if(!revision||revision.authorUid!==uid)throw accessError('版本不存在或无权操作。','FORBIDDEN');
+      if(revision.status==='WITHDRAWN'){output={success:true,status:'WITHDRAWN',unchanged:true};return true;}
+      if(revision.status!=='PENDING')throw accessError('编辑版本已处理或失效。','CONFLICT');
+      const now=logicalWriteTime(dateMillis(revision.submittedAt));
+      upsertRows(tx,[model('FoodCardRevision',{...revision,status:'WITHDRAWN',reviewedAt:new Date(now),reviewReason:''})]);
+      output={success:true,status:'WITHDRAWN',unchanged:false};return true;
+    }});
+    if(!committed||!output)throw new Error('撤回未保存，请重试。');return output;
   }
 
   const MIGRATION_TYPES = Object.freeze(['BACKFILL_CARD', 'MIGRATE_REACTION']);
-  async function startMigration(uid, payload, env) {
-    await assertAdmin(uid, env);
-    const type = String(payload.jobType || '');
-    if (!MIGRATION_TYPES.includes(type)) throw new Error('迁移类型无效。');
-    // One durable baseline per type/version. Restarting an API request cannot
-    // silently move the historical approval cutoff forward.
-    const jobId = hash(type + ':stage1-v1:1');
-    const admins = String(env.SHIKE_ADMIN_UIDS || process.env.SHIKE_ADMIN_UIDS || '').split(',').map((value) => value.trim()).filter(Boolean).sort();
-    const anchorUid = String(env.SHIKE_MIGRATION_ANCHOR_UID || process.env.SHIKE_MIGRATION_ANCHOR_UID || admins[0] || uid).trim();
-    if (!admins.includes(anchorUid)) throw accessError('迁移锚点必须是已配置的管理员账号。', 'INVALID_STATE');
-    let result = null;
-    const committed = await collection(env, 'MaintenanceJob').runTransaction({ apply: async (tx) => {
-      const admin = await activeProfile(tx, uid, env);
-      const anchor = anchorUid === uid ? admin : await activeProfile(tx, anchorUid, env);
-      const existing = await txOne(tx, env, 'MaintenanceJob', 'jobId', jobId);
-      if (existing) { result = existing; return true; }
-      const now = logicalWriteTime(admin.updatedAt, anchor.updatedAt);
-      result = jobRow(type, 'stage1-v1', uid, 1, now, now, { baselineAt: now, scanned: 0, migrated: 0,
-        skipped: 0, failures: 0, failedEntityId: '', coverageComplete: false, verificationCursor: '',
-        verificationScanned: 0, verificationMissing: 0, phase: 'MIGRATE', anchorUid });
-      upsertRows(tx, [result, profileForWrite(admin, now)]);
-      if (anchorUid !== uid) upsertRows(tx, [profileForWrite(anchor, now)]);
-      return true;
-    } });
-    if (!committed || !result) throw new Error('迁移任务未保存。');
-    return { job: jobView(result, true) };
+  const CARD_HISTORY_JOB_ID = hash('BACKFILL_CARD:stage1-v1:1');
+  function cardHistoryCheckpoint(job) {
+    let checkpoint;
+    try { checkpoint = JSON.parse(String(job.checkpointJson || '{}')); }
+    catch (_error) { throw accessError('卡片回填检查点无效，请核对维护记录。', 'INVALID_STATE'); }
+    if (!checkpoint || typeof checkpoint !== 'object' || Array.isArray(checkpoint)) {
+      throw accessError('卡片回填检查点无效，请核对维护记录。', 'INVALID_STATE');
+    }
+    return checkpoint;
   }
-  async function listJobs(uid, payload, env) {
-    await assertAdmin(uid, env);
-    const offset = Number(payload.pageToken || 0);
-    const status = String(payload.status || '');
-    if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('分页参数无效。');
-    let query = collection(env, 'MaintenanceJob').query();
-    if (status) {
-      if (!['PENDING', 'RUNNING', 'RETRY_WAIT', 'DONE', 'CANCELLED', 'FAILED'].includes(status)) throw new Error('任务状态无效。');
-      query = query.equalTo('status', status).orderByAsc('runAfterAt').orderByAsc('jobId');
-    } else query = query.orderByAsc('jobId');
-    const rows = await query.limit(BATCH, offset).get();
-    return { jobs: rows.map((row) => jobView(row)), nextPageToken: rows.length === BATCH ? String(offset + rows.length) : '' };
+  function cardHistoryState(job) {
+    if (!job) return { initialized: false, ready: false, batchSize: BATCH, job: null };
+    if (job.jobType !== 'BACKFILL_CARD' || Number(job.generation) !== 1 ||
+      (job.entityId && job.entityId !== 'stage1-v1')) throw accessError('卡片回填任务标识冲突。', 'INVALID_STATE');
+    const checkpoint = cardHistoryCheckpoint(job);
+    const ready = job.status === 'DONE' && checkpoint.coverageComplete === true &&
+      Number(checkpoint.failures) === 0 && Number(checkpoint.verificationMissing) === 0;
+    return { initialized: true, ready, batchSize: BATCH, job: { ...jobView(job), checkpoint } };
   }
-  async function getJob(uid, payload, env) {
-    await assertAdmin(uid, env);
-    const job = await one(collection(env, 'MaintenanceJob').query().equalTo('jobId', String(payload.jobId || '')));
-    if (!job) throw accessError('任务不存在。', 'NOT_FOUND');
-    return { job: jobView(job, true) };
-  }
-  async function retryJob(uid, payload, env) {
-    await assertAdmin(uid, env);
-    let output = null;
-    const committed = await collection(env, 'MaintenanceJob').runTransaction({ apply: async (tx) => {
-      const job = await txOne(tx, env, 'MaintenanceJob', 'jobId', String(payload.jobId || ''));
-      if (!job) throw accessError('任务不存在。', 'NOT_FOUND');
-      if (!MIGRATION_TYPES.includes(job.jobType) && job.jobType !== 'PURGE_CONVERSATION') throw accessError('该清理类型在 Stage 8 接入 Worker。', 'WORKER_REQUIRED');
-      const lease = dateMillis(job.leaseUntilAt);
-      if (job.status === 'RUNNING' && lease !== null && lease > Date.now()) throw accessError('任务仍在执行。', 'CONFLICT');
-      if (!['FAILED', 'RETRY_WAIT', 'RUNNING'].includes(job.status)) throw accessError('当前任务不需要重试。', 'CONFLICT');
-      const checkpoint = JSON.parse(String(job.checkpointJson || '{}'));
-      const restartCoverage = job.lastErrorCode === 'COVERAGE_INCOMPLETE';
-      if (MIGRATION_TYPES.includes(job.jobType)) {
-        checkpoint.failures = 0; checkpoint.failedEntityId = '';
-        if (restartCoverage) {
-          checkpoint.phase = 'MIGRATE'; checkpoint.verificationCursor = ''; checkpoint.verificationScanned = 0;
-          checkpoint.verificationMissing = 0; checkpoint.coverageComplete = false;
+  // Worker-only adapter for the fixed card-history task. It cannot select an
+  // arbitrary job/table or schedule account deletion and other maintenance.
+  async function cardHistoryMaintenance(payload = {}, env = {}) {
+    const mode = payload.mode === undefined ? 'status' : payload.mode;
+    if (!['status', 'initialize', 'run', 'retry'].includes(mode)) throw accessError('卡片回填维护模式无效。', 'VALIDATION_ERROR');
+    const jobs = collection(env, 'MaintenanceJob');
+    if (mode === 'status') return cardHistoryState(await one(jobs.query().equalTo('jobId', CARD_HISTORY_JOB_ID)));
+    const enabled = env.SHIKE_MAINTENANCE_ENABLED === undefined ? process.env.SHIKE_MAINTENANCE_ENABLED : env.SHIKE_MAINTENANCE_ENABLED;
+    if (String(enabled || '') !== 'true') throw accessError('请先启用维护写入开关。', 'FEATURE_NOT_READY');
+    if (mode === 'initialize' || mode === 'retry') {
+      const committed = await jobs.runTransaction({ apply: async tx => {
+        const current = await txOne(tx, env, 'MaintenanceJob', 'jobId', CARD_HISTORY_JOB_ID);
+        if (current) cardHistoryState(current);
+        const now = Date.now();
+        if (mode === 'initialize') {
+          if (!current) upsertRows(tx, [jobRow('BACKFILL_CARD', 'stage1-v1', '', 1, now, now,
+            { phase: 'MIGRATE', baselineAt: now, scanned: 0, migrated: 0, skipped: 0, failures: 0,
+              verificationCursor: '', verificationScanned: 0, verificationMissing: 0, coverageComplete: false })]);
+          return true;
         }
-      }
-      output = model('MaintenanceJob', { ...job, cursor: restartCoverage ? '' : job.cursor,
-        status: 'PENDING', runAfterAt: new Date(), leaseOwner: '', leaseUntilAt: null,
-        checkpointJson: JSON.stringify(checkpoint), lastErrorCode: '', updatedAt: new Date() });
-      upsertRows(tx, [output]); return true;
-    } });
-    if (!committed || !output) throw new Error('重试状态未保存。');
-    return { job: jobView(output, true) };
+        if (!current) throw accessError('请先初始化卡片回填任务。', 'NOT_FOUND');
+        if (!['FAILED', 'RETRY_WAIT', 'DONE'].includes(current.status)) throw accessError('任务尚在处理或已取消，请查看进度后再操作。', 'CONFLICT');
+        const checkpoint = cardHistoryCheckpoint(current);
+        if (!Number.isSafeInteger(checkpoint.baselineAt) || checkpoint.baselineAt <= 0 || checkpoint.baselineAt > now) {
+          throw accessError('卡片回填基线无效，请核对维护记录。', 'INVALID_STATE');
+        }
+        if (checkpoint.phase === 'VERIFY' || current.status === 'DONE') {
+          checkpoint.phase = 'VERIFY'; checkpoint.verificationCursor = ''; checkpoint.verificationScanned = 0;
+        }
+        checkpoint.failures = 0; checkpoint.failedEntityId = ''; checkpoint.verificationMissing = 0;
+        checkpoint.verificationMissingEntityId = ''; checkpoint.coverageComplete = false;
+        upsertRows(tx, [model('MaintenanceJob', { ...current, status: 'PENDING', attemptCount: 0,
+          checkpointJson: JSON.stringify(checkpoint), lastErrorCode: '', leaseOwner: '', leaseUntilAt: null,
+          runAfterAt: new Date(now), updatedAt: new Date(now) })]);
+        return true;
+      } });
+      if (!committed) throw accessError('卡片回填任务未保存，请重试。', 'CONFLICT');
+    }
+    const current = await one(jobs.query().equalTo('jobId', CARD_HISTORY_JOB_ID));
+    const state = cardHistoryState(current);
+    if (!current) throw accessError('请先初始化卡片回填任务。', 'NOT_FOUND');
+    if (mode !== 'run' || state.ready || ['FAILED', 'CANCELLED', 'DONE'].includes(current.status)) return state;
+    const checkpoint = cardHistoryCheckpoint(current);
+    if (!Number.isSafeInteger(checkpoint.baselineAt) || checkpoint.baselineAt <= 0 || checkpoint.baselineAt > Date.now()) {
+      throw accessError('卡片回填基线无效，请核对维护记录。', 'INVALID_STATE');
+    }
+    await processMigration({ jobId: CARD_HISTORY_JOB_ID }, env);
+    return cardHistoryState(await one(jobs.query().equalTo('jobId', CARD_HISTORY_JOB_ID)));
   }
-  async function migrationStatus(uid, env) {
-    await assertAdmin(uid, env);
-    return migrationReadiness(env, true);
-  }
-  // Internal Stage 3 gate: no admin task payload is exposed to public callers.
+  // Internal query-coverage gate; task processing is worker-only.
   async function migrationReadiness(env, includeJobs = false) {
     const ids = MIGRATION_TYPES.map(type => hash(type + ':stage1-v1:1'));
     const rows = await collection(env, 'MaintenanceJob').query().in('jobId', ids).limit(ids.length).get();
@@ -599,8 +579,7 @@ function createStage1Services(ctx) {
     if (!job || job.status !== 'RUNNING' || job.leaseOwner !== leaseOwner || dateMillis(job.leaseUntilAt) === null ||
       dateMillis(job.leaseUntilAt) <= Date.now()) throw accessError('任务租约已失效。', 'CONFLICT');
   }
-  async function processMigration(uid, payload, env) {
-    await assertAdmin(uid, env);
+  async function processMigration(payload, env) {
     const jobId = String(payload.jobId || '');
     const claimed = await claimMigration(jobId, env);
     if (claimed.job.status !== 'RUNNING' || claimed.job.leaseOwner !== claimed.leaseOwner) return { job: jobView(claimed.job, true) };
@@ -628,13 +607,17 @@ function createStage1Services(ctx) {
           if (object === 'FoodCard' && current) {
             const created = Number(current.createdAt || 0);
             const legacy = Number(current.schemaVersion || 0) === 0 && !String(current.reviewState || '');
+            const pendingLegacy = legacy && current.status === 'PENDING';
             const historical = Number.isSafeInteger(created) && created > 0 && created <= Number(progress.baselineAt);
             const modified = Number(current.updatedAt || created);
-            if (legacy && (!historical || !Number.isSafeInteger(modified) || modified < 0 || !['APPROVED', 'REMOVED'].includes(current.status))) {
+            if (legacy && (!historical || !Number.isSafeInteger(modified) || modified < 0 || !['APPROVED', 'REMOVED', 'PENDING'].includes(current.status))) {
               throw accessError('历史卡片不符合确定性迁移基线。', 'INVALID_STATE');
             }
-            if (verify) missing = legacy;
-            else if (legacy && historical) {
+            // Unpublished legacy cards remain untouched. They count as scanned
+            // and skipped, and are outside published-card timestamp coverage.
+            // Keep the same exception in verification without approving them.
+            if (verify) missing = (legacy && !pendingLegacy) || (readableCardState(current) && dateMillis(current.publishedAt) === null);
+            else if (legacy && historical && !pendingLegacy) {
               upsertRows(tx, [model('FoodCard', { ...current, ...derived(current), schemaVersion: 1, migrationSource: 'LEGACY',
                 consumptionMode: 'UNSPECIFIED', visibility: 'PUBLIC', reviewState: current.status === 'APPROVED' ? 'LEGACY_APPROVED' : 'TAKEN_DOWN',
                 publishedAt: new Date(created), modifiedAt: new Date(modified), lifecycleGeneration: generation(current), edited: false })]);
@@ -663,7 +646,10 @@ function createStage1Services(ctx) {
           if (verify) {
             progress.verificationCursor = lastId;
             progress.verificationScanned = Number(progress.verificationScanned || 0) + 1;
-            if (missing) progress.verificationMissing = Number(progress.verificationMissing || 0) + 1;
+            if (missing) {
+              progress.verificationMissing = Number(progress.verificationMissing || 0) + 1;
+              progress.verificationMissingEntityId = lastId;
+            }
           } else {
             progress.scanned = Number(progress.scanned || 0) + 1;
             progress[changed ? 'migrated' : 'skipped'] = Number(progress[changed ? 'migrated' : 'skipped'] || 0) + 1;
@@ -713,34 +699,9 @@ function createStage1Services(ctx) {
     }
   }
 
-  async function validateLifecycleJob(uid, payload, env) {
-    await assertAdmin(uid, env);
-    let result = null;
-    const committed = await collection(env, 'MaintenanceJob').runTransaction({ apply: async (tx) => {
-      const job = await txOne(tx, env, 'MaintenanceJob', 'jobId', String(payload.jobId || ''));
-      if (!job || !['PURGE_CARD', 'DELETE_ACCOUNT'].includes(job.jobType)) throw accessError('生命周期任务不存在。', 'NOT_FOUND');
-      let obsolete = false;
-      if (job.jobType === 'PURGE_CARD') {
-        const card = await txOne(tx, env, 'FoodCard', 'id', job.entityId);
-        obsolete = !card || card.deletedAt == null || card.purgeAt == null || generation(card) !== Number(job.generation);
-      } else {
-        const profile = await txOne(tx, env, 'UserProfile', 'uid', job.entityId);
-        if (!profile || isAccountActive(profile)) throw accessError('注销账号状态无效，拒绝清理。', 'INVALID_STATE');
-      }
-      if (obsolete && ['PENDING', 'RETRY_WAIT'].includes(job.status)) {
-        const cancelled = model('MaintenanceJob', { ...job, status: 'CANCELLED', lastErrorCode: 'STALE_GENERATION', updatedAt: new Date() });
-        upsertRows(tx, [cancelled]); result = cancelled;
-      } else result = job;
-      return true;
-    } });
-    if (!committed || !result) throw new Error('任务资格检查未完成。');
-    return { job: jobView(result, true), eligibleAt: dateMillis(result.runAfterAt),
-      physicalWorkerImplemented: true, executionEnabled: String(env.SHIKE_LIFECYCLE_VERIFIED || '') === 'true' && String(env.SHIKE_MAINTENANCE_ENABLED || '') === 'true' };
-  }
-
   return { editableState, reactionSummary, mutateReaction, toggleFavorite, softDelete, beginAccountDeletion, derived,
-    submitRevision, getRevision, getEditContext, listRevisions, decideRevision, startMigration, listJobs, getJob, retryJob,
-    migrationStatus, migrationReadiness, processMigration, validateLifecycleJob, jobRow, jobView, txOne, activeProfile, model, hash, cardTime,
+    submitRevision, getRevision, getEditContext, withdrawRevision,
+    migrationReadiness, cardHistoryMaintenance, processMigration, jobRow, jobView, txOne, activeProfile, model, hash, cardTime,
     publishReceiptSpec, checkPublishReceipt, readPublishReceipt, upsertRows };
 }
 

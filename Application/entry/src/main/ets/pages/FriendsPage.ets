@@ -3,8 +3,6 @@ import {
   ConversationSummary, FriendRequestItem, GroupConversationSummary, SocialUser
 } from '../model/FriendModels';
 import { FriendRepository } from '../repository/FriendRepository';
-import { NotificationRepository } from '../repository/NotificationRepository';
-import { NotificationsResponse } from '../model/NotificationModels';
 import { SocialAvatar } from '../components/social/SocialDisplay';
 import { ErrorDetail, errorText } from '../common/ErrorKit';
 import { ReadRequestOptions, ReadScheduler } from '../service/ReadScheduler';
@@ -49,10 +47,8 @@ export struct FriendsPage {
   onOpenProfile: (friend: SocialUser) => void = (_friend: SocialUser): void => {};
   onOpenGroup: (group: GroupConversationSummary) => void = (_group: GroupConversationSummary): void => {};
   onOpenAddFriend: () => void = (): void => {};
-  onOpenNotifications: () => void = (): void => {};
   @StorageLink('socialForegroundRevision') @Watch('onSocialForegroundChanged') socialForegroundRevision: number = 0;
   @StorageLink('requestedFriendSection') @Watch('onRequestedFriendSectionChanged') requestedFriendSection: number = 0;
-  @StorageLink('notificationForegroundRevision') @Watch('onNotificationForegroundChanged') notificationForegroundRevision: number = 0;
   @State selectedSection: number = 0;
   @State friends: Array<SocialUser> = [];
   @State blockedUsers: Array<SocialUser> = [];
@@ -62,7 +58,6 @@ export struct FriendsPage {
   @State groupConversations: Array<GroupConversationSummary> = [];
   @State unreadCount: number = 0;
   @State groupUnreadCount: number = 0;
-  @State notificationUnreadCount: number = 0;
   @State friendsNextPageToken: string = '';
   @State conversationsNextPageToken: string = '';
   @State groupsNextPageToken: string = '';
@@ -81,7 +76,6 @@ export struct FriendsPage {
   @State groupMemberUids: Array<string> = [];
   @State groupCreating: boolean = false;
   private repository: FriendRepository = new FriendRepository();
-  private notificationRepository: NotificationRepository = new NotificationRepository();
 
   aboutToAppear(): void {
     this.mounted = true;
@@ -98,10 +92,6 @@ export struct FriendsPage {
       this.selectedSection = 1;
       this.requestedFriendSection = 0;
     }
-  }
-
-  private onNotificationForegroundChanged(): void {
-    if (this.active && this.notificationForegroundRevision > 0) void this.loadNotificationCount();
   }
 
   private onSocialForegroundChanged(): void {
@@ -185,24 +175,11 @@ export struct FriendsPage {
     }
   }
 
-  private async loadNotificationCount(): Promise<void> {
-    if (!this.active) return;
-    const generation: number = this.readGeneration;
-    try {
-      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      const response: NotificationsResponse = await this.notificationRepository.list(context, '', 1, this.readOptions(generation));
-      if (this.current(generation)) this.notificationUnreadCount = response.unreadCount;
-    } catch (_error) {
-      // The inbox remains usable from the button even while the badge cannot refresh.
-    }
-  }
-
   private async refreshAll(force: boolean = true): Promise<void> {
     if (!this.active || this.friendsLoading || this.conversationsLoading || this.groupsLoading ||
       !force && Date.now() - this.lastRefreshedAt < SECONDARY_DATA_REUSE_MS) return;
     const generation: number = this.readGeneration;
-    await Promise.all([this.loadFriends(true), this.loadConversations(true), this.loadGroups(true),
-      this.loadNotificationCount()]);
+    await Promise.all([this.loadFriends(true), this.loadConversations(true), this.loadGroups(true)]);
     if (this.current(generation) && this.friendError.length === 0 && this.conversationError.length === 0 && this.groupError.length === 0)
       this.lastRefreshedAt = Date.now();
   }
@@ -377,13 +354,6 @@ export struct FriendsPage {
         Text('把真实好味道，发给认识的人').fontSize(13).fontColor($r('app.color.leaf'));
       }.alignItems(HorizontalAlign.Start);
       Blank();
-      Button(this.notificationUnreadCount > 0
-        ? '通知 ' + (this.notificationUnreadCount > 99 ? '99+' : this.notificationUnreadCount.toString()) : '通知')
-        .height(48).fontSize(13).backgroundColor($r('app.color.accent_soft'))
-        .fontColor($r('app.color.ink')).borderRadius(16)
-        .accessibilityText(this.notificationUnreadCount > 0
-          ? '通知，' + this.notificationUnreadCount.toString() + ' 条未读' : '打开通知')
-        .onClick((): void => this.onOpenNotifications());
       Button() {
         SymbolGlyph($r('sys.symbol.plus')).fontSize(23).fontColor([$r('app.color.ink')]);
       }

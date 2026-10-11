@@ -1,6 +1,6 @@
 import { SecondaryActionStyle } from '../common/Stage47Ui';
-import { FoodListRepository } from '../repository/FoodListRepository';
-import { FoodListItemsPage, FoodListItem } from '../model/FoodListModels';
+import { PersonalCollectionRepository } from '../repository/PersonalCollectionRepository';
+import { PersonalCollectionPage } from '../model/PersonalCollectionModels';
 import { AccountRequestGuard } from '../service/AccountRequestGuard';
 import { MealPollPage } from './MealPollPage';
 import { common } from '@kit.AbilityKit';
@@ -146,12 +146,13 @@ export struct GroupChatPage {
   private async loadCardCandidates(more: boolean = false): Promise<void> {
     if (this.cardsLoading) return; const generation: number = this.pageGeneration; this.cardsLoading = true;
     try { const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      const page: FoodListItemsPage = await new FoodListRepository().items('FAVORITES', more ? this.favoriteCursor : '');
+      const page: PersonalCollectionPage = await new PersonalCollectionRepository().list('FAVORITE', more ? this.favoriteCursor : '');
       if (generation !== this.pageGeneration) return;
       const combined: Array<FoodCard> = more ? this.cardCandidates.slice() : [];
       for (const item of page.items) { const card: FoodCard | null = item.card; if (card !== null && !this.containsCard(combined, card.id)) combined.push(card); }
       if (!more) { const own: Array<FoodCard> = await this.cardRepository.myCards(context); if (generation !== this.pageGeneration) return; for (const card of own) if (card.status === 'APPROVED' && !this.containsCard(combined, card.id)) combined.push(card); }
       this.cardCandidates = combined; this.favoriteCursor = page.nextCursor;
+      if (page.migration !== undefined && !page.migration.collectionReady) this.status = '收藏尚未整理，请先在我的收藏中继续；当前可分享自己发布的卡片。';
     } catch (error) { if (generation === this.pageGeneration) this.status = `卡片加载失败：${errorText(error as ErrorDetail)}`; }
     finally { if (generation === this.pageGeneration) this.cardsLoading = false; }
   }

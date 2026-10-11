@@ -32,7 +32,7 @@ IdentityBinding.fieldTypes = Object.freeze({
   status: 'String', createdAt: 'Long', updatedAt: 'Long'
 });
 IdentityBinding.primaryKeys = Object.freeze(['id']);
-IdentityBinding.indexes = Object.freeze({"provider_providerUid": ["provider", "providerUid"], "canonicalUid": ["canonicalUid"], "canonicalUid_id": ["canonicalUid", "id"]});
+IdentityBinding.indexes = Object.freeze(['provider,providerUid', 'canonicalUid', 'canonicalUid,id']);
 
 class MaintenanceJob extends CloudDbModel {}
 MaintenanceJob.fieldTypes = Object.freeze({"jobId": "String", "jobType": "String", "entityId": "String", "ownerUid": "String", "generation": "Long", "status": "String", "runAfterAt": "Date", "leaseUntilAt": "Date", "leaseOwner": "String", "attemptCount": "Integer", "cursor": "String", "checkpointJson": "Text", "lastErrorCode": "String", "createdAt": "Date", "updatedAt": "Date", "authCredentialCiphertext": "Text", "authProviderUid": "String"});

@@ -157,7 +157,11 @@ function createStage3Services(ctx) {
       scope, viewport: scope === 'VIEWPORT' ? viewport(payload.viewport, env) : null, mode: mode(payload.mode), merchantId };
   }
   function sortedQuery(spec, category, phase, at, env) {
-    let q = collection(env, 'FoodCard').query().equalTo('status', 'APPROVED').lessThanOrEqualTo('publishedAt', new Date(at));
+    // Reuse the deployed visibility-prefixed indexes without changing their
+    // immutable definitions. All writes use PUBLIC; the bounded maintenance
+    // worker normalizes historical rows without any friend permission lookup.
+    let q = collection(env, 'FoodCard').query().equalTo('visibility', 'PUBLIC')
+      .equalTo('status', 'APPROVED').lessThanOrEqualTo('publishedAt', new Date(at));
     if (spec.mode !== 'ALL') q = q.equalTo('consumptionMode', spec.mode);
     if (category) q = q.equalTo('categoryV2', category);
     if (spec.merchantId) q = q.equalTo('merchantId', spec.merchantId);
@@ -172,7 +176,7 @@ function createStage3Services(ctx) {
   }
   function candidateMatches(row, spec, category, phase, at, publicOnly = true) {
     const published = dateMillis(row.publishedAt);
-    if (row.status !== 'APPROVED' || published === null || published > at ||
+    if (row.visibility !== 'PUBLIC' || row.status !== 'APPROVED' || published === null || published > at ||
       (spec.mode !== 'ALL' && row.consumptionMode !== spec.mode) || (category && row.categoryV2 !== category) ||
       (spec.merchantId && row.merchantId !== spec.merchantId) ||
       (spec.keyword && !String(row.searchTextNormalized || '').includes(spec.keyword))) return false;
@@ -193,7 +197,7 @@ function createStage3Services(ctx) {
     const spec = querySpec(payload, env, merchantId);
     if (spec.scope === 'VIEWPORT') await requireGate(env, 'map', uid);
     const pageSize = integer(payload.pageSize, 20, 30);
-    const signature = digest({ kind: 'cards-range-v2', uid, spec });
+    const signature = digest({ kind: 'cards-range-v3-deployed-indexes', uid, spec });
     const saved = cursorRead(payload.cursor, signature); const at = saved ? saved.at : Date.now();
     const categories = spec.categories.length ? spec.categories : [''];
     let phase = saved ? saved.phase : 'known';

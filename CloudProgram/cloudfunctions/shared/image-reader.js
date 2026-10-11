@@ -3,7 +3,7 @@ const crypto = require('node:crypto');
 const { createContentPolicy, policyModels, accessError, cardContentRevision } = require('./content-policy');
 const { CardMedia } = require('./image-models');
 const { mediaVariant, sameMediaSource, verifyMediaBytes } = require('./media-descriptor');
-const { errorCode } = require('./read-errors');
+const { errorCode, shouldReadMetrics } = require('./read-errors');
 const { buildInfo } = require('./release-info');
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SHA = /^[a-f0-9]{64}$/;
@@ -98,10 +98,10 @@ function createImageReader(deps) {
     if (viewerUid && items.some(item => item.mode !== 'PUBLIC')) await policy.assertAccountActive(viewerUid, true);
     return { media: new Map(media.map(row => [String(row.id), row])), cards: new Map(cards.map(row => [String(row.id), row])), policy };
   }
-  async function allowed(state, viewerUid, item, media, administrator) {
+  async function allowed(state, viewerUid, item, media) {
     if (!media) return false;
-    if (item.mode === 'REVIEW') return state.policy.canReadModerationMedia(viewerUid, media, administrator);
-    if (item.mode === 'REVISION') return state.policy.canReadRevisionMedia(viewerUid, media, item.revisionId, administrator);
+    if (item.mode === 'REVIEW') return state.policy.canReadCorrectionMedia(viewerUid, media);
+    if (item.mode === 'REVISION') return state.policy.canReadRevisionMedia(viewerUid, media, item.revisionId);
     return state.policy.canReadMedia(viewerUid, media);
   }
   async function read(input, trustedViewer) {
@@ -109,6 +109,7 @@ function createImageReader(deps) {
     const started = Date.now(); let phaseStarted = started;
     function phase(next) { const now = Date.now(); metrics.phaseMs[metrics.phase] = (metrics.phaseMs[metrics.phase] || 0) + now - phaseStarted; metrics.phase = next; phaseStarted = now; }
     let viewerUid = '', outcome = 'error', failure = '';
+    const results = [];
     try {
       const privateRead = items.some(item => item.mode !== 'PUBLIC');
       if (privateRead && trustedViewer !== undefined) viewerUid = trustedViewer;
@@ -121,15 +122,14 @@ function createImageReader(deps) {
         if (binding && (String(binding.status || 'ACTIVE') !== 'ACTIVE' || !binding.canonicalUid)) throw accessError('账号身份已停用。', 'ACCOUNT_INACTIVE');
         viewerUid = binding ? String(binding.canonicalUid) : providerUid;
       }
-      const administrator = !!viewerUid && deps.adminUids.includes(viewerUid);
       phase('content-state');
-      const initial = await authority(viewerUid, items, metrics), results = [], downloaded = [];
+      const initial = await authority(viewerUid, items, metrics), downloaded = [];
       let remaining = COVER_BUDGET, downloadCount = 0;
       for (let index = 0; index < items.length; index++) {
         const item = items[index], media = initial.media.get(item.mediaId);
         const result = { mediaId: item.mediaId, mode: item.mode, revisionId: item.revisionId, requestedVariant: item.variant, status: 'DENIED', code: 'CONTENT_ACCESS_DENIED' };
         results.push(result);
-        if (!await allowed(initial, viewerUid, item, media, administrator)) continue;
+        if (!await allowed(initial, viewerUid, item, media)) continue;
         const key = objectKey(media, 'ORIGINAL');
         if (input.expectedKey && input.expectedKey !== key) continue;
         let descriptor;
@@ -168,7 +168,7 @@ function createImageReader(deps) {
         const fresh = await authority(viewerUid, downloaded.map(entry => items[entry.index]), metrics);
         for (const entry of downloaded) {
           const item = items[entry.index], current = fresh.media.get(item.mediaId), result = results[entry.index];
-          let valid = sameMediaSource(current, entry.media) && await allowed(fresh, viewerUid, item, current, administrator);
+          let valid = sameMediaSource(current, entry.media) && await allowed(fresh, viewerUid, item, current);
           if (valid) {
             try { const now = mediaVariant(current, entry.descriptor.variant); valid = (!now.sha256 || now.sha256 === entry.descriptor.sha256) && now.byteSize === entry.descriptor.byteSize; } catch (_error) { valid = false; }
           }
@@ -183,7 +183,7 @@ function createImageReader(deps) {
       if (metrics.responseBytes > 3 * 1024 * 1024) throw accessError('图片响应超过预算。', 'RESPONSE_TOO_LARGE');
       outcome = 'success'; return response;
     } catch (error) { failure = errorCode(error); if (error && typeof error === 'object') error.readStage = metrics.phase; throw error; }
-    finally { phase('complete'); console.info('image.read ' + JSON.stringify({ ...metrics, ...buildInfo, traceId: input.readRequestId || '', requestId: input.readRequestId || '', modes: [...new Set(items.map(item => item.mode))], variants: [...new Set(items.map(item => item.variant))], attempt: input.readAttempt || 1, count: items.length, outcome, code: failure || 'OK', ms: Date.now() - started })); }
+    finally { phase('complete'); if (outcome !== 'success' || results.some(result => !['BYTES', 'CACHE_OK'].includes(result.status)) || !deps.shouldLogMetrics || deps.shouldLogMetrics(input.readRequestId || '')) console.info('image.read ' + JSON.stringify({ ...metrics, ...buildInfo, traceId: input.readRequestId || '', requestId: input.readRequestId || '', modes: [...new Set(items.map(item => item.mode))], variants: [...new Set(items.map(item => item.variant))], attempt: input.readAttempt || 1, count: items.length, outcome, code: failure || 'OK', ms: Date.now() - started })); }
   }
   return { readBatch: input => read(input), readTrusted: (input, viewerUid) => read(input, viewerUid) };
 }
@@ -195,7 +195,10 @@ function reader(env) {
     const { AGCClient, CredentialParser } = require('@agconnect/common-server');
     const { AGCCloudStorage } = require('@agconnect/cloudstorage-server');
     const models = { ...policyModels, CardMedia }; let storageReady = false;
-    defaultReader = createImageReader({ adminUids: String(env.SHIKE_ADMIN_UIDS || '').split(',').map(value => value.trim()).filter(Boolean),
+    defaultReader = createImageReader({
+      // Keep existing full metrics by default; explicit flags enable sampling or silence success.
+      shouldLogMetrics: id => shouldReadMetrics({ ...env,
+        SHIKE_READ_METRICS_ENABLED: env.SHIKE_READ_METRICS_ENABLED === undefined ? 'true' : env.SHIKE_READ_METRICS_ENABLED }, id),
       collection: name => cloud.database({ zoneName: env.SHIKE_DB_ZONE || 'shike' }).collection(models[name]),
       verifyToken: async token => {
         try { const verified = await cloud.auth().verifyAccessToken({ accessToken: token, checkRevoked: true }); const uid = String(verified.getSub() || ''); if (!uid) throw new Error('Missing subject'); return uid; }

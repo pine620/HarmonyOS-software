@@ -13,6 +13,21 @@
   "lifecycleVerifiedDefault": false,
   "maintenanceEnabledDefault": false,
   "httpTrigger": false,
+  "cardHistoryBackfill": {
+    "handlerPayload": {
+      "workerToken": "COPY_SECRET_FROM_DEPLOYED_TIMER_CONFIGURATION",
+      "action": "card-history",
+      "mode": "status"
+    },
+    "modes": ["status", "initialize", "run", "retry"],
+    "defaultMode": "status",
+    "writeRequiredFlag": "SHIKE_MAINTENANCE_ENABLED",
+    "jobType": "BACKFILL_CARD",
+    "jobIdentity": "BACKFILL_CARD:stage1-v1:1",
+    "rowsPerInvocation": 20,
+    "automaticTimerCreated": false,
+    "lifecycleDeletionRequired": false
+  },
   "mediaCoverBackfill": {
     "separateTimerRequired": true,
     "recommendedIntervalMinutes": 1,

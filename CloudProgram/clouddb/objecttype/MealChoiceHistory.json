@@ -48,6 +48,38 @@
       "notNull": false,
       "isNeedEncrypt": false,
       "isSensitive": false
+    },
+    {
+      "fieldName": "source",
+      "fieldType": "String",
+      "belongPrimaryKey": false,
+      "notNull": false,
+      "isNeedEncrypt": false,
+      "isSensitive": false
+    },
+    {
+      "fieldName": "roundId",
+      "fieldType": "String",
+      "belongPrimaryKey": false,
+      "notNull": false,
+      "isNeedEncrypt": false,
+      "isSensitive": false
+    },
+    {
+      "fieldName": "drawId",
+      "fieldType": "String",
+      "belongPrimaryKey": false,
+      "notNull": false,
+      "isNeedEncrypt": false,
+      "isSensitive": false
+    },
+    {
+      "fieldName": "deletedAt",
+      "fieldType": "Date",
+      "belongPrimaryKey": false,
+      "notNull": false,
+      "isNeedEncrypt": false,
+      "isSensitive": false
     }
   ],
   "indexes": [

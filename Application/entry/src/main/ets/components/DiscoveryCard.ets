@@ -37,11 +37,6 @@ export struct DiscoveryCard {
         Button('重试实拍图').height(48).borderRadius(24).backgroundColor($r('app.color.accent_soft')).fontColor($r('app.color.action_text'))
           .margin({ left: 8, right: 8, top: 8 }).onClick((): void => this.onRetry())
       }
-      if (this.card.recommendationReasons !== undefined && this.card.recommendationReasons.length > 0) {
-        Text(this.card.recommendationReasons.join(' · ')).fontSize(12).lineHeight(18)
-          .fontColor($r('app.color.muted')).maxLines(2).width('100%')
-          .padding({ left: 12, right: 12, top: 8, bottom: 12 }).onClick((): void => this.onOpen())
-      }
     }.width('100%').backgroundColor($r('app.color.surface')).borderRadius(20)
       .border({ width: this.selected ? 2 : 0, color: $r('app.color.accent_action') })
   }

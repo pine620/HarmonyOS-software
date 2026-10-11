@@ -7,8 +7,6 @@ export type FoodVisibility = 'PUBLIC';
 export type CardReviewState = 'LEGACY_APPROVED' | 'PENDING_POST_REVIEW' | 'APPROVED' | 'TAKEN_DOWN' | 'REQUEST_CHANGE';
 export type CardReactionType = 'LIKE' | 'DISLIKE';
 export type CardRevisionStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'WITHDRAWN';
-export type MaintenanceJobType = 'PURGE_GROUP' | 'MODERATION_AUDIT' | 'PURGE_CARD' | 'DELETE_ACCOUNT' | 'BACKFILL_CARD' | 'MIGRATE_REACTION' | 'PURGE_CONVERSATION' | 'MIGRATE_PERSONAL_COLLECTION' | 'MIGRATE_PERSONAL_COLLECTION_BATCH' | 'MEDIA_COVER_BACKFILL';
-export type MaintenanceJobStatus = 'PENDING' | 'RUNNING' | 'RETRY_WAIT' | 'DONE' | 'CANCELLED' | 'FAILED';
 
 /** Cloud DB Date values cross the JSON boundary as millisecond numbers. */
 export interface CardReactionRecord {
@@ -49,24 +47,6 @@ export interface FoodCardRevisionRecord {
 }
 
 /** Server-owned task metadata; clients do not access the database directly. */
-export interface MaintenanceJobRecord {
-  jobId: string;
-  jobType: MaintenanceJobType;
-  entityId: string;
-  ownerUid?: string;
-  generation: number;
-  status: MaintenanceJobStatus;
-  runAfterAt: number;
-  leaseUntilAt?: number;
-  leaseOwner?: string;
-  attemptCount: number;
-  cursor?: string;
-  checkpointJson?: string;
-  lastErrorCode?: string;
-  createdAt: number;
-  updatedAt: number;
-}
-
 export interface UserProfile {
   uid: string;
   nickname: string;
@@ -180,7 +160,6 @@ export interface CardIdRequest {
 }
 
 export interface CardDetailRequest extends CardIdRequest {
-  includeComments: boolean;
 }
 
 export interface SetCardReactionRequest extends CardIdRequest {
@@ -229,26 +208,8 @@ export interface CardRevisionIdRequest {
   revisionId: string;
 }
 
-export interface ModerateCardRevisionRequest extends CardRevisionIdRequest {
-  action: 'APPROVE' | 'REJECT';
-  reason: string;
-}
-
 export interface RevisionMediaRequest extends CardRevisionIdRequest {
   mediaId: string;
-}
-
-export interface StartMigrationJobRequest {
-  jobType: 'BACKFILL_CARD' | 'MIGRATE_REACTION';
-}
-
-export interface MaintenanceJobIdRequest {
-  jobId: string;
-}
-
-export interface MaintenanceJobsRequest {
-  status?: MaintenanceJobStatus;
-  pageToken: string;
 }
 
 export interface CardRevisionView {
@@ -276,64 +237,12 @@ export interface CardEditContextResponse {
   revision: CardRevisionView | null;
 }
 
-export interface ModerationRevisionsResponse {
-  revisions: Array<CardRevisionView>;
-  nextPageToken: string;
-}
-
-export interface MigrationCheckpoint {
-  anchorUid?: string;
-  baselineAt: number;
-  scanned: number;
-  migrated: number;
-  skipped: number;
-  failures: number;
-  failedEntityId: string;
-  coverageComplete: boolean;
-  verificationCursor: string;
-  verificationScanned: number;
-  verificationMissing: number;
-  phase: 'MIGRATE' | 'VERIFY';
-}
-
-export interface MaintenanceJobView {
-  jobId: string;
-  jobType: MaintenanceJobType;
-  entityId: string;
-  generation: number;
-  status: MaintenanceJobStatus;
-  attemptCount: number;
-  cursor: string;
-  lastErrorCode: string;
-  runAfterAt: number | null;
-  leaseUntilAt: number | null;
-  createdAt: number | null;
-  updatedAt: number | null;
-}
-
-export interface MigrationJobView extends MaintenanceJobView {
-  checkpoint: MigrationCheckpoint;
-}
-
-export interface MigrationJobResponse {
-  job: MigrationJobView;
-}
-
-export interface MigrationStatusResponse {
-  jobs: Array<MigrationJobView>;
-  cardCoverageComplete: boolean;
-  reactionCoverageComplete: boolean;
-  indexedQueryReady: boolean;
-  userQueryVerificationRequired: boolean;
-}
-
 export interface ReportCardRequest {
   cardId: string;
   reason: string;
 }
 
 export type CardActionType = 'LIKE' | 'FAVORITE';
-export type CommentReactionType = 'LIKE' | 'DISLIKE';
 
 export interface CardPhoto {
   sha256?: string;
@@ -352,69 +261,9 @@ export interface CardPhoto {
   height: number;
 }
 
-export interface CardComment {
-  id: string;
-  parentId: string;
-  replyToNickname: string;
-  authorNickname: string;
-  authorAvatarUrl: string;
-  authorAvatarPath: string;
-  authorAvatarBucket: string;
-  content: string;
-  deleted: boolean;
-  likeCount: number;
-  dislikeCount: number;
-  viewerReaction: CommentReactionType | '';
-  viewerIsAuthor: boolean;
-  // The service determines this from the authenticated user. It is optional
-  // only so comments returned by an older deployed service remain readable.
-  viewerCanDelete?: boolean;
-  createdAt: number;
-  replies: Array<CardComment>;
-}
-
-export interface ReceivedCommentItem {
-  id: string;
-  cardId: string;
-  cardName: string;
-  authorNickname: string;
-  // Optional while an older cloud service is still deployed.
-  authorAvatarUrl?: string;
-  authorAvatarPath?: string;
-  authorAvatarBucket?: string;
-  content: string;
-  kind: 'CARD_COMMENT' | 'REPLY';
-  createdAt: number;
-}
-
-export interface ReceivedCommentsResponse {
-  items: Array<ReceivedCommentItem>;
-  nextPageToken: string;
-}
-
-export interface ReceivedCommentsRequest {
-  pageToken: string;
-  pageSize: number;
-}
-
-export interface CreateCardCommentRequest {
-  cardId: string;
-  parentCommentId: string;
-  content: string;
-}
-
-export interface DeleteCardCommentRequest {
-  commentId: string;
-}
-
 export interface ToggleCardActionRequest {
   cardId: string;
   action: CardActionType;
-}
-
-export interface ToggleCommentReactionRequest {
-  commentId: string;
-  reaction: CommentReactionType;
 }
 
 export interface CardActionResponse {
@@ -425,13 +274,6 @@ export interface CardActionResponse {
   viewerFavorited: boolean;
   dislikeCount?: number;
   myReaction?: CardReactionType | '';
-}
-
-export interface CommentReactionResponse {
-  active: boolean;
-  reaction: CommentReactionType | '';
-  likeCount: number;
-  dislikeCount: number;
 }
 
 export interface EmptyRequest {
@@ -452,7 +294,6 @@ export interface FoodCard {
   collectionReady?: boolean;
   collectionStatus?: string;
   collectionReason?: string;
-  recommendationReasons?: Array<string>;
   id: string;
   // Optional while old deployments and historical rows retain their legacy shape.
   schemaVersion?: number;
@@ -523,8 +364,6 @@ export interface FoodCard {
   favoriteCount?: number;
   viewerLiked?: boolean;
   viewerFavorited?: boolean;
-  commentCount?: number;
-  comments?: Array<CardComment>;
   district: string;
   distanceKm: number;
   status: CardStatus;
@@ -547,18 +386,12 @@ export interface PublicCardsRequest {
 }
 
 export interface NearbyCardsResponse {
+  coverage?: 'COMPLETE' | 'PARTIAL_SCAN_LIMIT' | 'PARTIAL_RESULT_LIMIT';
+  scannedCandidateCount?: number;
+  fetchedCandidateCount?: number;
   cards: Array<FoodCard>;
   nextPageToken: string;
   district: string;
-}
-
-/**
- * The social ranking is intentionally unfiltered by category. The service
- * enforces the membership boundary: a card can only belong to the current
- * user or to a friendship whose status is ACCEPTED.
- */
-export interface FriendRankingsResponse {
-  cards: Array<FoodCard>;
 }
 
 export interface LocationCheckResponse {

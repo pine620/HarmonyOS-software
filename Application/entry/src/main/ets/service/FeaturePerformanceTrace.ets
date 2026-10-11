@@ -1,6 +1,7 @@
 import { hiTraceMeter } from '@kit.PerformanceAnalysisKit';
-export type FeatureTraceName = 'map_first_render' | 'map_marker_query' | 'search_first_result' | 'today_eat_candidates' |
-  'food_list_first_page' | 'draft_restore' | 'poll_refresh' | 'moderation_queue' | 'deleted_cards_page';
+export type FeatureTraceName = 'map_first_render' | 'map_marker_query' | 'search_first_result' | 'random_food_pool' |
+  'random_food_cards' | 'food_choice_history' | 'meal_poll_candidates' |
+  'food_list_first_page' | 'draft_restore' | 'poll_refresh' | 'deleted_cards_page';
 interface TracePageRequest { cursor?: string; pageToken?: string; }
 export class FeaturePerformanceTrace {
   private static nextId: number = 1000000;
@@ -10,10 +11,12 @@ export class FeaturePerformanceTrace {
     switch (operation) {
       case 'list-map-merchants': return 'map_marker_query';
       case 'search-public-cards': return first ? 'search_first_result' : undefined;
-      case 'get-meal-candidates': return 'today_eat_candidates';
-      case 'list-personal-collection': case 'list-food-list-items': return first ? 'food_list_first_page' : undefined;
+      case 'get-random-food-pool': return 'random_food_pool';
+      case 'get-random-food-cards': return 'random_food_cards';
+      case 'list-food-choices': return first ? 'food_choice_history' : undefined;
+      case 'get-meal-candidates': return 'meal_poll_candidates';
+      case 'list-personal-collection': return first ? 'food_list_first_page' : undefined;
       case 'get-meal-poll': return 'poll_refresh';
-      case 'list-moderation-queue': return 'moderation_queue';
       case 'list-deleted-cards': return 'deleted_cards_page';
       default: return undefined;
     }

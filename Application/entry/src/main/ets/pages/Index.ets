@@ -1,39 +1,33 @@
-import { ModerationCenterPage } from './ModerationCenterPage';
-import { ModerationDetailPage } from './ModerationDetailPage';
+import { MyContentStatusPage } from './MyContentStatusPage';
 import { DeletedCardsPage } from './DeletedCardsPage';
-import { LifecycleJobsPage } from './LifecycleJobsPage';
-import { LifecycleJobPage } from './LifecycleJobPage';
 import { ReportContentPage } from './ReportContentPage';
-import { ModerationDetailRequest, LifecycleJobRequest, ReportRoute } from '../model/OperationsModels';
+import { ReportRoute } from '../model/ContentStatusModels';
 import { CardIdRequest } from '../model/CloudContracts';
-import { PreferenceSetupPage } from './PreferenceSetupPage';
-import { TodayEatPage } from './TodayEatPage';
+import { RandomFoodPage } from './RandomFoodPage';
+import { FoodChoiceHistoryPage } from './FoodChoiceHistoryPage';
 import { DraftsPage } from './SocialDiscoveryPages';
 import { LocalDraft } from '../model/DraftModels';
-import { PreferenceRepository } from '../repository/PreferenceRepository';
 import { common } from '@kit.AbilityKit';
 import { FoodCard, UserProfile } from '../model/CloudContracts';
 import { AuthService } from '../service/AuthService';
+import { AuthSessionStore } from '../service/AuthSessionStore';
 import { PrivacyStore } from '../service/PrivacyStore';
 import { DiscoveryFeedState } from '../service/DiscoveryFeedState';
 import { ImageRepository } from '../service/ImageRepository';
 import { CardRepository } from '../repository/CardRepository';
 import { clearPendingSharedCard } from '../service/CardAppLink';
 import { FriendRepository } from '../repository/FriendRepository';
-import { NotificationRepository } from '../repository/NotificationRepository';
-import { OpenNotificationResponse } from '../model/NotificationModels';
-import { FriendsResponse, GroupConversationSummary, SocialUser } from '../model/FriendModels';
+import { FriendProfileResponse, GroupChatDetailResponse, GroupConversationSummary, SocialUser } from '../model/FriendModels';
 import { ContinuationState } from '../service/ContinuationState';
 import { PushNotificationService } from '../service/PushNotificationService';
 import { ServiceCardStore } from '../service/ServiceCardStore';
 import { ServiceCardRemoteSyncService } from '../service/ServiceCardRemoteSyncService';
 import { NearbyPage } from './NearbyPage';
-import { RankingPage } from './RankingPage';
+import { FoodRankingPage } from './FoodRankingPage';
 import { CreateCardPage } from './CreateCardPage';
 import { ProfilePage } from './ProfilePage';
 import { FavoriteCardsPage } from './FavoriteCardsPage';
 import { CardHistoryPage } from './CardHistoryPage';
-import { NotificationInboxPage } from './NotificationInboxPage';
 import { MyPublishedPage, PermissionsPrivacyPage, ProfileEditPage, ProfileSettingsPage } from './ProfileSubPages';
 import { CardDetailPage } from './CardDetailPage';
 import { FriendsPage } from './FriendsPage';
@@ -57,6 +51,8 @@ interface LoginErrorInfo {
 struct Index {
   @Provide('pathStack') pathStack: NavPathStack = new NavPathStack();
   @Provide('windowBreakpoint') windowBreakpoint: LayoutBreakpoint = 'sm';
+  @State randomFoodVisible: boolean = false;
+  @State foodChoiceVisible: boolean = false;
   @State draftTarget: string = '';
   @State selectedDraftId: string = '';
   @State ready: boolean = false;
@@ -87,7 +83,6 @@ struct Index {
   @State recommendationRevision: number = 0;
   @StorageLink('contentMutationRevision') @Watch('onContentMutation') contentMutationRevision: number = 0;
   @StorageLink('friendRelationshipRevision') @Watch('onFriendRelationshipChanged') friendRelationshipRevision: number = 0;
-  @State showPreferencePrompt: boolean = false;
   @State selectedTab: number = 0;
   @State navigationHomeVisible: boolean = true;
   @State sharedLinkMessage: string = '';
@@ -95,8 +90,8 @@ struct Index {
   @StorageLink('pendingSystemEntryRoute') @Watch('onPendingSystemEntryChanged') pendingSystemEntryRoute: string = '';
   @StorageLink('pendingSystemEntryCardId') pendingSystemEntryCardId: string = '';
   @StorageLink('pendingSystemEntryFriendUid') pendingSystemEntryFriendUid: string = '';
+  @StorageLink('pendingSystemEntryGroupId') pendingSystemEntryGroupId: string = '';
   @StorageLink('pendingSystemEntryTab') pendingSystemEntryTab: number = 0;
-  @StorageLink('pendingSystemEntryNotificationId') pendingSystemEntryNotificationId: string = '';
   private openingSharedCard: boolean = false;
   private sharedCardGeneration: number = 0;
   private openingSystemEntry: boolean = false;
@@ -104,7 +99,6 @@ struct Index {
   private registerCodeTimer: number | undefined = undefined;
   private cardRepository: CardRepository = new CardRepository();
   private friendRepository: FriendRepository = new FriendRepository();
-  private notificationRepository: NotificationRepository = new NotificationRepository();
   private tabsController: TabsController = new TabsController();
 
   aboutToAppear(): void {
@@ -133,7 +127,7 @@ struct Index {
     return true;
   }
 
-  private requestLogin(message: string = '登录后可发布、收藏、评论和使用好友功能。'): void {
+  private requestLogin(message: string = '登录后可发布、收藏和使用好友功能。'): void {
     if (this.loggedIn) return;
     this.loginMessage = message;
     this.loginRequested = true;
@@ -409,17 +403,12 @@ struct Index {
     if (this.openingSystemEntry || route.length === 0 || !this.ready
       || !this.privacyAccepted) return;
     if (!this.loggedIn && route !== 'card' && (route !== 'tab' || this.pendingSystemEntryTab !== 0)) {
-      this.requestLogin('登录后可打开这条通知或好友页面。');
+      this.requestLogin('登录后可打开好友消息。');
       return;
     }
     this.openingSystemEntry = true;
+    const entrySession: number = AuthSessionStore.generation();
     try {
-      if (route === 'notification') {
-        const notificationId: string = this.pendingSystemEntryNotificationId.trim();
-        ContinuationState.clearPending();
-        if (notificationId.length > 0) await this.followNotification(notificationId);
-        return;
-      }
       if (route === 'tab') {
         const tab: number = this.pendingSystemEntryTab >= 0 && this.pendingSystemEntryTab <= 4
           ? this.pendingSystemEntryTab : 0;
@@ -436,12 +425,24 @@ struct Index {
         }
         return;
       }
+      if (route === 'group-chat') {
+        const groupId: string = this.pendingSystemEntryGroupId.trim();
+        const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+        const response: GroupChatDetailResponse = await this.friendRepository.groupDetail(context, groupId);
+        if (entrySession !== AuthSessionStore.generation() || this.pendingSystemEntryRoute !== route ||
+          this.pendingSystemEntryGroupId !== groupId) return;
+        ContinuationState.clearPending();
+        this.openGroupChat(response.group);
+        return;
+      }
       if (route === 'friend-chat') {
         const friendUid: string = this.pendingSystemEntryFriendUid.trim();
         const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-        const response: FriendsResponse = await this.friendRepository.listFriends(context);
-        const friend: SocialUser | undefined = response.friends.find(
-          (item: SocialUser): boolean => item.uid === friendUid);
+        const response: FriendProfileResponse = await this.friendRepository.friendProfile(context, friendUid, '', 1);
+        if (entrySession !== AuthSessionStore.generation() || this.pendingSystemEntryRoute !== route ||
+          this.pendingSystemEntryFriendUid !== friendUid) return;
+        const friend: SocialUser | undefined = response.profile.user.friendshipState === 'FRIEND'
+          ? response.profile.user : undefined;
         ContinuationState.clearPending();
         if (friend !== undefined) {
           this.openChat(friend);
@@ -453,6 +454,7 @@ struct Index {
       }
       ContinuationState.clearPending();
     } catch (error) {
+      if (entrySession !== AuthSessionStore.generation()) return;
       ContinuationState.clearPending();
       const detail = error as LoginErrorInfo;
       this.sharedLinkMessage = detail.message && detail.message.length > 0
@@ -460,35 +462,6 @@ struct Index {
     } finally {
       this.openingSystemEntry = false;
     }
-  }
-
-  private async followNotification(notificationId: string): Promise<void> {
-    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    const result: OpenNotificationResponse = await this.notificationRepository.open(context, notificationId);
-    AppStorage.setOrCreate('notificationForegroundRevision',
-      (AppStorage.get<number>('notificationForegroundRevision') || 0) + 1);
-    if (result.route === 'friends') {
-      AppStorage.setOrCreate('requestedFriendSection', 1);
-      this.selectTab(2);
-      return;
-    }
-    if (result.route === 'friend-chat') {
-      const response = await this.friendRepository.friendProfile(context, result.targetId, '', 1);
-      this.openChat(response.profile.user);
-      return;
-    }
-    if (result.route === 'group-chat') {
-      const response = await this.friendRepository.groupDetail(context, result.targetId);
-      this.openGroupChat(response.group);
-      return;
-    }
-    if (result.route === 'card') {
-      const card: FoodCard = await this.cardRepository.detail(context, result.targetId);
-      this.openCard(card);
-      return;
-    }
-    this.sharedLinkMessage = '这条通知对应的内容已失效或不可查看。';
-    this.selectTab(2);
   }
 
   /**
@@ -598,17 +571,16 @@ struct Index {
   private onFriendRelationshipChanged(): void { DiscoveryFeedState.clear(); }
 
   private tabPosition(index: number): number {
-    return this.loggedIn ? index : index === 4 ? 1 : 0;
+    return this.loggedIn ? index : index === 4 ? 2 : index === 1 ? 1 : 0;
   }
 
   private onTabPositionChanged(position: number): void {
-    if (position === 0) this.preparePreferencePrompt();
-    this.selectTab(this.loggedIn ? position : position === 1 ? 4 : 0);
+    this.selectTab(this.loggedIn ? position : position === 2 ? 4 : position === 1 ? 1 : 0);
   }
 
   private selectTab(index: number): void {
     const safeIndex: number = this.loggedIn
-      ? (index >= 0 && index <= 4 ? index : 0) : (index === 4 ? 4 : 0);
+      ? (index >= 0 && index <= 4 ? index : 0) : (index === 4 ? 4 : index === 1 ? 1 : 0);
     this.selectedTab = safeIndex;
     AppStorage.setOrCreate('discoveryVisible', this.navigationHomeVisible && safeIndex === 0);
     ContinuationState.showTab(safeIndex);
@@ -616,13 +588,6 @@ struct Index {
       AppStorage.setOrCreate('socialForegroundRevision',
         (AppStorage.get<number>('socialForegroundRevision') || 0) + 1);
     }
-  }
-
-  private preparePreferencePrompt(): void {
-    if (!this.privacyAccepted) return;
-    const context: common.Context = this.getUIContext().getHostContext() as common.Context;
-    const uid: string = this.profile === undefined ? 'guest' : this.profile.uid;
-    this.showPreferencePrompt = !new PreferenceRepository().seen(context, uid);
   }
 
   @Builder
@@ -700,28 +665,28 @@ struct Index {
       })
     } else if (routeName === 'profile-favorites') {
       FavoriteCardsPage({ onOpenCard: (card: FoodCard): void => this.openCard(card) })
-    } else if (routeName === 'moderation-center') {
-      ModerationCenterPage({ scope: 'ADMIN' })
     } else if (routeName === 'my-reports') {
-      ModerationCenterPage({ scope: 'REPORTS' })
+      MyContentStatusPage({ scope: 'REPORTS' })
     } else if (routeName === 'review-requests') {
-      ModerationCenterPage({ scope: 'CORRECTIONS' })
-    } else if (routeName === 'moderation-detail' && routeParam !== null && routeParam !== undefined) {
-      ModerationDetailPage({ kind: (routeParam as ModerationDetailRequest).kind, itemId: (routeParam as ModerationDetailRequest).id })
+      MyContentStatusPage({ scope: 'CORRECTIONS' })
     } else if (routeName === 'deleted-cards') {
       DeletedCardsPage()
-    } else if (routeName === 'lifecycle-jobs') {
-      LifecycleJobsPage()
-    } else if (routeName === 'lifecycle-job' && routeParam !== null && routeParam !== undefined) {
-      LifecycleJobPage({ jobId: (routeParam as LifecycleJobRequest).jobId })
     } else if (routeName === 'report-content' && routeParam !== null && routeParam !== undefined) {
       ReportContentPage({ targetType: (routeParam as ReportRoute).targetType, targetId: (routeParam as ReportRoute).targetId })
     } else if (routeName === 'review-correction' && routeParam !== null && routeParam !== undefined) {
-      NavDestination() { CreateCardPage({ editCardId: (routeParam as CardIdRequest).cardId, accountUid: this.profile === undefined ? '' : this.profile.uid }) }.title('修改审核内容')
-    } else if (routeName === 'taste-preference') {
-      NavDestination() { PreferenceSetupPage({ onDone: (): void => { this.pathStack.pop(); } }) }.title('主动偏好')
-    } else if (routeName === 'today-eat') {
-      NavDestination() { TodayEatPage({ onOpenCard: (card: FoodCard): void => this.openCard(card) }) }.title('今天吃什么')
+      NavDestination() { CreateCardPage({ editCardId: (routeParam as CardIdRequest).cardId, accountUid: this.profile === undefined ? '' : this.profile.uid }) }.title('修改内容')
+    } else if (routeName === 'random-food') {
+      NavDestination() {
+        RandomFoodPage({ navigationVisible: this.randomFoodVisible,
+          onBack: (): void => { this.pathStack.pop(); }, onOpenCard: (card: FoodCard): void => this.openCard(card),
+          onOpenHistory: (): void => { this.pathStack.pushPathByName('food-choice-history', null); },
+          onLogin: (): void => this.requestLogin('登录后使用我的、好友来源和云端选择记录。') })
+      }.hideTitleBar(true).onShown((): void => { this.randomFoodVisible = true; }).onHidden((): void => { this.randomFoodVisible = false; })
+    } else if (routeName === 'food-choice-history') {
+      NavDestination() {
+        FoodChoiceHistoryPage({ navigationVisible: this.foodChoiceVisible, onBack: (): void => { this.pathStack.pop(); },
+          onOpenCard: (card: FoodCard): void => this.openCard(card), onLogin: (): void => this.requestLogin('登录后查看云端选择记录。') })
+      }.hideTitleBar(true).onShown((): void => { this.foodChoiceVisible = true; }).onHidden((): void => { this.foodChoiceVisible = false; })
 
     } else if (routeName === 'drafts') {
       NavDestination() { DraftsPage({ onRestore: (draft: LocalDraft): void => { this.draftTarget = draft.targetCardId; this.selectedDraftId = draft.draftId; this.pathStack.pushPathByName('restore-draft', null); } }) }.title('草稿箱')
@@ -729,10 +694,6 @@ struct Index {
       NavDestination() { CreateCardPage({ editCardId: this.draftTarget, restoreDraftId: this.selectedDraftId, accountUid: this.profile === undefined ? '' : this.profile.uid }) }.title('恢复草稿')
     } else if (routeName === 'profile-history') {
       CardHistoryPage({ onOpenCard: (card: FoodCard): void => this.openCard(card) })
-    } else if (routeName === 'notification-inbox') {
-      NotificationInboxPage({ onOpenNotification: async (notificationId: string): Promise<void> => {
-        await this.followNotification(notificationId);
-      } })
     } else if (routeName === 'profile-privacy') {
       PermissionsPrivacyPage()
     } else if (routeName === 'profile-edit') {
@@ -794,7 +755,7 @@ struct Index {
             .fontColor($r('app.color.ink')).border({ width: 1, color: $r('app.color.line') })
             .onClick(() => this.showFullPrivacy = !this.showFullPrivacy)
           if (this.showFullPrivacy) {
-            Text('食刻使用 AGC Auth 处理邮箱验证码注册/登录；邮箱只用于认证，不写入 UserProfile、名片、好友或私信，也不会收集或保存邮箱密码。华为账号只作为兼容入口，登录后会换成 AGC 会话。昵称和头像只会在你主动保存资料时处理，头像先在本机重编码并移除 EXIF/GPS。首页推荐不限距离，浏览时不读取定位。你主动发布时，实拍图、公开商品字段、约 100 米精度的位置以及后续主动提交的评论和互动记录会进入 AGC 云端。好友功能会保存食刻号、好友申请、好友关系、一对一和群聊会话的未读数，以及你主动发送的文字和卡片标识；粘贴的链接会作为普通文字消息保存。站内通知会记录好友、消息、评论与回复的事件类型及已读状态，不保存正文；系统 Push 默认关闭，你主动开启后，设备 Push Token 会在食刻云端加密保存，系统通知正文不包含私信或评论内容。桌面服务卡片只在本机缓存一条公开推荐摘要；跨设备接续只传页签、商品卡 ID 或好友 ID，不传聊天正文和账号凭据。移除好友时会话从双方页面移除，并同步清理全部一对一私信。正式上架前必须根据平台要求补充内容审核方案，并在 AGC 配置同内容的 HTTPS 隐私政策地址。')
+            Text('食刻使用 AGC Auth 处理邮箱验证码注册/登录；邮箱只用于认证，不写入 UserProfile、名片、好友或私信，也不会收集或保存邮箱密码。华为账号只作为兼容入口，登录后会换成 AGC 会话。昵称和头像只会在你主动保存资料时处理，头像先在本机重编码并移除 EXIF/GPS。首页推荐不限距离，浏览时不读取定位。你主动发布时，实拍图、公开商品字段、约 100 米精度的位置以及后续主动提交的互动记录会进入 AGC 云端。好友功能会保存食刻号、好友申请、好友关系、一对一和群聊会话的未读数，以及你主动发送的文字和卡片标识；粘贴的链接会作为普通文字消息保存。系统 Push 默认关闭，你主动开启后，设备 Push Token 会在食刻云端加密保存，系统通知正文不包含私信内容。桌面服务卡片只在本机缓存一条公开推荐摘要；跨设备接续只传页签、商品卡 ID 或好友 ID，不传聊天正文和账号凭据。移除好友时会话从双方页面移除，并同步清理全部一对一私信。正式上架前必须根据平台要求补充内容审核方案，并在 AGC 配置同内容的 HTTPS 隐私政策地址。')
               .fontSize(13).lineHeight(21).fontColor($r('app.color.muted')).width('100%')
               .padding(14).backgroundColor($r('app.color.canvas')).borderRadius(14)
           }
@@ -817,7 +778,7 @@ struct Index {
         .width('100%').padding(18).backgroundColor($r('app.color.surface')).borderRadius(22)
         .border({ width: 1, color: $r('app.color.line') }).alignItems(HorizontalAlign.Start)
 
-        Text('当前为云端测试版：发布、评论、互动、好友申请和私信仅在你主动操作时写入；通知也只有在“权限与隐私”中主动开启后才会登记。')
+        Text('当前为云端测试版：发布、互动、好友申请和私信仅在你主动操作时写入；通知也只有在“权限与隐私”中主动开启后才会登记。')
           .fontSize(12).lineHeight(19).fontColor($r('app.color.warning')).width('100%')
           .padding(12).backgroundColor($r('app.color.accent_soft')).borderRadius(14)
 
@@ -1007,8 +968,8 @@ struct Index {
         Text('食刻').fontSize(22).fontWeight(FontWeight.Bold).fontColor($r('app.color.accent_action'))
           .margin({ bottom: 16 }).accessibilityLevel('no');
         this.navigationRailItem(0, '推荐', $r('app.media.nav_recommend'));
+        this.navigationRailItem(1, '榜单', $r('app.media.nav_ranking'));
         if (this.loggedIn) {
-          this.navigationRailItem(1, '榜单', $r('app.media.nav_ranking'));
           this.navigationRailItem(2, '好友', $r('app.media.nav_friends'));
           this.navigationRailItem(3, '制作', $r('app.media.nav_create'));
         }
@@ -1087,42 +1048,28 @@ struct Index {
               onOpenCard: (card: FoodCard): void => this.openCard(card),
               loggedIn: this.loggedIn,
               revision: this.recommendationRevision,
-              showPreferencePrompt: this.showPreferencePrompt,
-              onSetupPreference: (): void => {
-                this.pathStack.pushPathByName('taste-preference', null);
-                this.showPreferencePrompt = false;
-              },
-              onSkipPreference: (): void => {
-                new PreferenceRepository().markSeen(this.getUIContext().getHostContext() as common.Context,
-                  this.profile === undefined ? 'guest' : this.profile.uid);
-                this.showPreferencePrompt = false;
-              },
               onOpenMeal: (): void => {
-                if (this.loggedIn) this.pathStack.pushPathByName('today-eat', null);
-                else this.requestLogin('登录后开启今天吃什么。');
+                this.pathStack.pushPathByName('random-food', null);
               }
             }).layoutWeight(1)
-            }.width('100%').height('100%').onAppear((): void => this.preparePreferencePrompt())
+            }.width('100%').height('100%')
           }.tabBar(this.bottomTab('推荐', 0))
-          if (this.loggedIn) {
-            TabContent() {
-              RankingPage({
+          TabContent() {
+              FoodRankingPage({
                 pageActive: this.navigationHomeVisible && this.selectedTab === 1,
                 onOpenCard: (card: FoodCard): void => this.openCard(card),
                 revision: this.recommendationRevision + this.friendRelationshipRevision,
-                onOpenRecommendations: (): void => this.tabsController.changeIndex(this.tabPosition(0))
+                onRequireLogin: (): void => this.requestLogin('登录后查看好友推荐榜。')
               })
-            }.tabBar(this.bottomTab('榜单', 1))
+          }.tabBar(this.bottomTab('榜单', 1))
+          if (this.loggedIn) {
             TabContent() {
               FriendsPage({
                 pageActive: this.navigationHomeVisible && this.selectedTab === 2,
                 onOpenChat: (friend: SocialUser): void => this.openChat(friend),
                 onOpenProfile: (friend: SocialUser): void => this.openFriendProfile(friend),
                 onOpenGroup: (group: GroupConversationSummary): void => this.openGroupChat(group),
-                onOpenAddFriend: (): void => this.openAddFriend(),
-                onOpenNotifications: (): void => {
-                  this.pathStack.pushPathByName('notification-inbox', null);
-                }
+                onOpenAddFriend: (): void => this.openAddFriend()
               })
             }.tabBar(this.bottomTab('好友', 2))
             TabContent() {
@@ -1141,11 +1088,13 @@ struct Index {
         .onChange((position: number): void => this.onTabPositionChanged(position))
         .barMode(BarMode.Fixed)
         .layoutWeight(1).height('100%').barHeight(this.windowBreakpoint === 'lg' ? 0 : 58)
-        .scrollable(this.windowBreakpoint !== 'lg').backgroundColor($r('app.color.canvas'))
+        .scrollable(this.windowBreakpoint !== 'lg')
+        .backgroundColor(this.selectedTab === 1 ? $r('app.color.food_ranking_canvas') : $r('app.color.canvas'))
         .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM]);
       }.width('100%').layoutWeight(1);
     }
-    .width('100%').height('100%').backgroundColor($r('app.color.canvas'));
+    .width('100%').height('100%')
+    .backgroundColor(this.selectedTab === 1 ? $r('app.color.food_ranking_canvas') : $r('app.color.canvas'));
   }
 
   build() {

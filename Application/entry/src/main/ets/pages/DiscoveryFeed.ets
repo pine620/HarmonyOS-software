@@ -1,9 +1,9 @@
-import { PreferenceRepository } from '../repository/PreferenceRepository';
-import { RecommendationPage, RecommendationReason } from '../model/PreferenceModels';
+import { RandomPrimaryStyle } from '../common/RandomFoodUi';
+import { ReadCancelledError } from '../service/CloudReadErrors';
 import { CardPreviewsRequest, CardPreviewsResponse, CardPreviewItem } from '../model/PersonalCollectionModels';
 import { ReadRequestOptions, ReadScheduler } from '../service/ReadScheduler';
 import { common } from '@kit.AbilityKit';
-import { FoodCard, FoodCategoryV2, NearbyCardsResponse, PublicCardsRequest, UserProfile } from '../model/CloudContracts';
+import { CardPhoto, FoodCard, FoodCategoryV2, NearbyCardsResponse, PublicCardsRequest, UserProfile } from '../model/CloudContracts';
 import { copyCardQuery, copyViewport, DiscoveryCamera, DiscoveryCapabilities, DiscoveryCardPage, DiscoveryMode, DiscoveryScope,
   DiscoverySort, DiscoveryViewport, MapMerchant, MapMerchantPage, MapMerchantQuery,
   MerchantRecommendationQuery, normalizeSearch, PublicCardQuery, QueryCoverage } from '../model/DiscoveryModels';
@@ -37,9 +37,6 @@ export struct DiscoveryFeed {
   @Consume('windowBreakpoint') windowBreakpoint: LayoutBreakpoint;
   @Require @Prop @Watch('onCapabilitiesChanged') capabilities: DiscoveryCapabilities;
   @Prop @Watch('onRevisionChanged') revision: number = 0;
-  @Prop showPreferencePrompt: boolean = false;
-  onSetupPreference: () => void = (): void => {};
-  onSkipPreference: () => void = (): void => {};
   onOpenMeal: () => void = (): void => {};
   onOpenCard: (card: FoodCard) => void = (_card: FoodCard): void => {};
   onPrimaryCard: (card: FoodCard, remoteSync: boolean) => void = (_card: FoodCard, _remoteSync: boolean): void => {};
@@ -101,20 +98,26 @@ export struct DiscoveryFeed {
   private loadingPhotoIds: Set<string> = new Set<string>();
   private hydratedIds: Set<string> = new Set<string>();
   private hydrationRunning: boolean = false;
+  private prefetchRunning: boolean = false;
+  private prefetchTimer: number | undefined = undefined;
+  private prefetchGeneration: number = -1;
+  private prefetchOwner: string = '';
+  private prefetchStartedAt: number = 0;
+  private prefetchManifests: Map<string, FoodCard> = new Map<string, FoodCard>();
+  private prefetchManifestAttempts: Set<string> = new Set<string>();
+  private prefetchPhotoAttempts: Set<string> = new Set<string>();
+  private prefetchReadyPhotos: Set<string> = new Set<string>();
+  private prefetchCoversSignature: string = '';
+  private prefetchCompletedSignature: string = '';
+  private feedLoadStartedAt: number = Date.now();
   private visibleFirst: number = 0;
   private visibleLast: number = 3;
   @StorageLink('accountContentRevision') @Watch('onRevisionChanged') accountContentRevision: number = 0;
   private onVisibilityChanged(visible: boolean): void { if (visible === this.visibleLifecycle) return; this.visibleLifecycle = visible; if (visible && this.appActive) this.resume(); else this.pause(false); }
-  @StorageLink('preferenceRevision') @Watch('onRevisionChanged') preferenceRevision: number = 0;
-  private preferenceRepository: PreferenceRepository = new PreferenceRepository();
-  private isRecommendation(query: PublicCardQuery): boolean { return query.scope === 'ALL_PUBLIC' && query.keyword.length === 0 && query.mode === 'ALL' && query.categories.length === 0 && query.sort === 'LATEST' && query.priceMinFen === undefined && query.priceMaxExclusiveFen === undefined; }
+  private isPublicFeedQuery(query: PublicCardQuery): boolean { return query.scope === 'ALL_PUBLIC' && query.keyword.length === 0 && query.mode === 'ALL' && query.categories.length === 0 && query.sort === 'LATEST' && query.priceMinFen === undefined && query.priceMaxExclusiveFen === undefined; }
   private async queryCards(query: PublicCardQuery, cursor: string): Promise<DiscoveryCardPage> {
-    if (!this.isRecommendation(query)) return this.capabilities.searchEnabled ? this.repository.search(copyCardQuery(query, cursor)) : this.legacyPage(cursor);
-    const generation: number = this.listGeneration;
-    const options: ReadRequestOptions = { mayContinue: async (): Promise<boolean> => this.current(generation) };
-    const page: RecommendationPage = await this.preferenceRepository.recommendations(this.context(), cursor, options);
-    for (const card of page.cards) { const reason: RecommendationReason | undefined = page.reasons.find((r: RecommendationReason): boolean => r.cardId === card.id); if (reason !== undefined) card.recommendationReasons = reason.reasons; }
-    return { cards: page.cards, nextCursor: page.nextCursor, coverage: page.coverage === 'COMPLETE' ? 'COMPLETE' : 'PARTIAL_SCAN_LIMIT', scannedCandidateCount: page.scannedCandidateCount, fetchedCandidateCount: page.fetchedCandidateCount === undefined ? page.scannedCandidateCount : page.fetchedCandidateCount, merchantReadCount: 0, returnedCount: page.cards.length, scope: 'ALL_PUBLIC' };
+    if (this.isPublicFeedQuery(query) || !this.capabilities.searchEnabled) return this.publicPage(cursor);
+    return this.repository.search(copyCardQuery(query, cursor));
   }
   private repository: DiscoveryRepository = new DiscoveryRepository();
   private cardRepository: CardRepository = new CardRepository();
@@ -126,7 +129,7 @@ export struct DiscoveryFeed {
   private current(generation: number): boolean { return this.active && this.appActive && this.navigationVisible && generation === this.listGeneration && this.owner === this.viewer(); }
   private loadedSignature: string = '';
   private primaryRemoteSync: boolean = false;
-  private signature(): string { return this.revision + ':' + this.accountContentRevision + ':' + this.preferenceRevision; }
+  private signature(): string { return this.revision + ':' + this.accountContentRevision; }
   aboutToAppear(): void { this.resume(); }
   aboutToDisappear(): void { this.pause(true); }
   private saveSnapshot(): void {
@@ -167,7 +170,7 @@ export struct DiscoveryFeed {
   }
   private resume(): void {
     if (this.active || !this.appActive || !this.visibleLifecycle || !this.navigationVisible) return;
-    this.active = true; const owner: string = this.viewer();
+    this.active = true; this.feedLoadStartedAt = Date.now(); const owner: string = this.viewer();
     const snapshot: DiscoverySnapshot | undefined = DiscoveryFeedState.read(owner, this.signature());
     this.owner = owner;
     console.info('[DiscoveryFeed] event=resume viewGeneration=' + this.listGeneration + ' snapshot=' + String(snapshot !== undefined) + ' first=' + this.visibleFirst + ' last=' + this.visibleLast);
@@ -221,6 +224,7 @@ export struct DiscoveryFeed {
   private pause(destroying: boolean): void {
     if (!this.active) return;
     console.info('[DiscoveryFeed] event=pause viewGeneration=' + this.listGeneration);
+    if (this.prefetchTimer !== undefined) { clearTimeout(this.prefetchTimer); this.prefetchTimer = undefined; }
     this.saveSnapshot(); this.active = false; this.listGeneration++; this.mapGeneration++; this.merchantGeneration++; ImageRepository.subscriptionsChanged(); ReadScheduler.subscriptionsChanged();
     if (!destroying) { this.selectedMerchant = undefined; this.merchantCards = []; this.cards = this.cards.map((entry: DiscoveryEntry): DiscoveryEntry => { return { card: entry.card, coverUrl: '', loadedAt: entry.loadedAt }; }); }
     if (this.debounce !== undefined) { clearTimeout(this.debounce); this.debounce = undefined; }
@@ -306,15 +310,18 @@ export struct DiscoveryFeed {
     if (coverage === 'PARTIAL_SCAN_LIMIT') return '已找到 ' + count + ' 条，扫描未完成，可继续搜索。';
     return '已找到 ' + count + ' 条推荐' + (cursor.length > 0 ? '，可继续加载。' : '。');
   }
-  private async legacyPage(cursor: string): Promise<DiscoveryCardPage> {
-    const request: PublicCardsRequest = { scope: 'all', category: 'all', pageToken: cursor, pageSize: 20 };
-    const response: NearbyCardsResponse = await this.cardRepository.listRecommendationsMetadata(request);
-    return { cards: response.cards, nextCursor: response.nextPageToken, coverage: response.nextPageToken.length > 0 ? 'PARTIAL_RESULT_LIMIT' : 'COMPLETE',
-      scannedCandidateCount: 0, fetchedCandidateCount: 0, merchantReadCount: 0, returnedCount: response.cards.length, scope: 'ALL_PUBLIC' };
+  private async publicPage(cursor: string): Promise<DiscoveryCardPage> {
+    const request: PublicCardsRequest = { scope: 'all', category: 'all', pageToken: cursor, pageSize: 6 };
+    const generation: number = this.listGeneration;
+    const options: ReadRequestOptions = { mayContinue: async (): Promise<boolean> => this.current(generation) };
+    const response: NearbyCardsResponse = await this.cardRepository.listRecommendationsMetadata(request, (): boolean => this.current(generation), options);
+    return { cards: response.cards, nextCursor: response.nextPageToken, coverage: response.coverage === undefined ? (response.nextPageToken.length > 0 ? 'PARTIAL_RESULT_LIMIT' : 'COMPLETE') : response.coverage,
+      scannedCandidateCount: response.scannedCandidateCount || 0, fetchedCandidateCount: response.fetchedCandidateCount || 0, merchantReadCount: 0, returnedCount: response.cards.length, scope: 'ALL_PUBLIC' };
   }
   private async reload(recordHistory: boolean = false, remoteSync: boolean = false): Promise<void> {
     if (this.debounce !== undefined) { clearTimeout(this.debounce); this.debounce = undefined; }
     const generation: number = ++this.listGeneration;
+    this.feedLoadStartedAt = Date.now();
     this.loadFailed = false; this.featureNotReady = false;
     this.loading = true; this.loadingMore = false; this.loadMoreFailed = false; this.hydrationRunning = false; this.hydratedIds.clear(); this.failedPhotoIds.clear(); this.loadingPhotoIds.clear(); this.nextCursor = '';
     let query: PublicCardQuery;
@@ -347,13 +354,13 @@ export struct DiscoveryFeed {
         if (this.capabilities.searchEnabled || this.capabilities.mapEnabled) this.onUnavailable();
       }
       this.status = stage47ErrorText(failure as Object, '推荐加载失败，请稍后重试。');
-    } finally { if (this.current(generation)) this.loading = false; }
+    } finally { if (this.current(generation)) { this.loading = false; this.scheduleHomepagePrefetch(generation); } }
   }
   private async loadMore(automatic: boolean = false): Promise<void> {
     if (this.loading || this.loadingMore || this.nextCursor.length === 0 || this.showingPrevious || automatic && this.loadMoreFailed) return;
     const query: PublicCardQuery | undefined = this.submittedQuery;
     if (query === undefined) return;
-    const generation: number = this.listGeneration; this.loadingMore = true;
+    const generation: number = this.listGeneration; this.loadingMore = true; this.feedLoadStartedAt = Date.now();
     try {
       const result: DiscoveryCardPage = await this.queryCards(query, this.nextCursor);
       if (!this.current(generation)) return;
@@ -370,7 +377,7 @@ export struct DiscoveryFeed {
         this.status = stage47ErrorText(failure as Object, '推荐暂未开放。');
       }
       else this.status = stage47ErrorText(failure as Object, '推荐加载失败。');
-    } finally { if (this.current(generation)) this.loadingMore = false; }
+    } finally { if (this.current(generation)) { this.loadingMore = false; this.scheduleHomepagePrefetch(generation); } }
   }
   private async hydrateVisible(first: number, last: number): Promise<void> {
     this.visibleFirst = first; this.visibleLast = last;
@@ -378,7 +385,7 @@ export struct DiscoveryFeed {
     const generation: number = this.listGeneration;
     const chosen: Array<FoodCard> = this.cards.slice(Math.max(0, first), Math.min(this.cards.length, last + 1))
       .map((entry: DiscoveryEntry): FoodCard => entry.card).filter((card: FoodCard): boolean => !this.hydratedIds.has(card.id) && !this.failedPhotoIds.has(card.id) && !this.loadingPhotoIds.has(card.id));
-    if (chosen.length === 0) { this.prefetchNextRow(generation); return; }
+    if (chosen.length === 0) { this.scheduleHomepagePrefetch(generation); return; }
     console.info('[DiscoveryFeed] event=hydrate viewGeneration=' + generation + ' count=' + chosen.length + ' first=' + first + ' last=' + last);
     this.hydrationRunning = true; const changed: Array<string> = [];
     for (const card of chosen) this.loadingPhotoIds.add(card.id);
@@ -398,7 +405,7 @@ export struct DiscoveryFeed {
           console.info('[DiscoveryFeed] event=cover-settled viewGeneration=' + generation + ' cardId=' + card.id +
             ' ready=' + String(settled.coverUrl.length > 0) +
             ' failed=' + String(card.primaryPhotoLoadFailed === true));
-          if (card.id === this.cards[0]?.card.id && this.submittedQuery !== undefined && this.isRecommendation(this.submittedQuery) && card.mediaContentChanged !== true) { this.onPrimaryCard(card, this.primaryRemoteSync); this.primaryRemoteSync = false; }
+          if (card.id === this.cards[0]?.card.id && this.submittedQuery !== undefined && this.isPublicFeedQuery(this.submittedQuery) && card.mediaContentChanged !== true) { this.onPrimaryCard(card, this.primaryRemoteSync); this.primaryRemoteSync = false; }
           this.cards = this.cards.map((entry: DiscoveryEntry): DiscoveryEntry => entry.card.id === card.id ? settled : entry);
         }, false, 'normal', (card: FoodCard): boolean => { const index: number = this.cards.findIndex((entry: DiscoveryEntry): boolean => entry.card.id === card.id); return index >= this.visibleFirst && index <= this.visibleLast && this.cards[index].card === card; });
     } catch (_failure) { if (this.current(generation)) this.status = '实拍图暂不可用，推荐信息已保留，可刷新重试。'; }
@@ -408,20 +415,123 @@ export struct DiscoveryFeed {
         this.hydrationRunning = false;
         for (const card of chosen) this.loadingPhotoIds.delete(card.id);
         if (changed.length > 0 || this.visibleFirst !== first || this.visibleLast !== last || this.cards.slice(this.visibleFirst, this.visibleLast + 1).some((entry: DiscoveryEntry): boolean => !this.hydratedIds.has(entry.card.id) && !this.failedPhotoIds.has(entry.card.id))) void this.hydrateVisible(this.visibleFirst, this.visibleLast);
-        else this.prefetchNextRow(generation);
+        else this.scheduleHomepagePrefetch(generation);
       }
     }
   }
-  private prefetchNextRow(generation: number): void {
-    if (!this.current(generation) || !ReadScheduler.canPrefetch()) return;
-    const next: Array<DiscoveryEntry> = this.cards.slice(this.visibleLast + 1, this.visibleLast + 3);
-    for (const entry of next) {
-      const card: FoodCard = entry.card;
-      if (card.photoPath.length === 0 || this.failedPhotoIds.has(card.id)) continue;
-      void ImageRepository.getDownloadUrl(this.context(), card.photoBucket, card.photoPath, 'prefetch', async (): Promise<boolean> => {
-        const index: number = this.cards.findIndex((value: DiscoveryEntry): boolean => value.card.id === card.id);
-        return this.current(generation) && index > this.visibleLast && index <= this.visibleLast + 2;
-      }, card.photos?.[0], true).catch((): void => {});
+  private scheduleHomepagePrefetch(generation: number): void {
+    if (!this.current(generation) || this.loading || this.loadingMore || this.submittedQuery === undefined || this.cards.length === 0) return;
+    if (this.prefetchRunning || this.prefetchTimer !== undefined) return;
+    const signature: string = this.cards.map((entry: DiscoveryEntry): string => this.prefetchCardKey(entry.card)).join('|');
+    if (this.prefetchGeneration === generation && this.prefetchCompletedSignature === signature) return;
+    this.prefetchRunning = true;
+    void this.prefetchHomepage(generation).finally((): void => {
+      this.prefetchRunning = false;
+      // A refresh may replace the generation while a background request is settling.
+      if (generation !== this.listGeneration) this.scheduleHomepagePrefetch(this.listGeneration);
+    });
+  }
+  private deferPrefetch(generation: number): void {
+    if (!this.current(generation) || this.prefetchTimer !== undefined) return;
+    this.prefetchTimer = setTimeout((): void => {
+      this.prefetchTimer = undefined;
+      this.scheduleHomepagePrefetch(this.listGeneration);
+    }, 400);
+  }
+  private prefetchCardKey(card: FoodCard): string { return card.id + ':' + (card.contentRevision || ''); }
+  private async prefetchHomepage(generation: number): Promise<void> {
+    if (this.prefetchGeneration !== generation) {
+      this.prefetchGeneration = generation;
+      if (this.prefetchOwner !== this.owner) { this.prefetchManifests.clear(); this.prefetchOwner = this.owner; }
+      const keys: Set<string> = new Set<string>(this.cards.map((entry: DiscoveryEntry): string => this.prefetchCardKey(entry.card)));
+      for (const key of this.prefetchManifests.keys()) if (!keys.has(key)) this.prefetchManifests.delete(key);
+      this.prefetchManifestAttempts.clear(); this.prefetchPhotoAttempts.clear(); this.prefetchReadyPhotos.clear(); this.prefetchCoversSignature = ''; this.prefetchCompletedSignature = '';
+      this.prefetchStartedAt = Date.now();
+    }
+    try {
+      while (this.current(generation)) {
+        if (this.loading || this.loadingMore || this.hydrationRunning || !ReadScheduler.canPrefetch()) { this.deferPrefetch(generation); return; }
+        // Every returned cover, including offscreen cards, precedes all detail originals.
+        const pendingCover: DiscoveryEntry | undefined = this.cards.find((entry: DiscoveryEntry): boolean =>
+          !this.hydratedIds.has(entry.card.id) && !this.failedPhotoIds.has(entry.card.id));
+        if (pendingCover !== undefined) {
+          const card: FoodCard = pendingCover.card;
+          await ImageRepository.hydrateCovers(this.context(), [card], async (): Promise<boolean> => this.current(generation),
+            (settledCard: FoodCard): void => {
+              if (!this.current(generation) || !this.cards.some((entry: DiscoveryEntry): boolean => entry.card === settledCard)) return;
+              if (settledCard.mediaAccessDenied === true) { this.cards = this.cards.filter((entry: DiscoveryEntry): boolean => entry.card.id !== settledCard.id); return; }
+              if (settledCard.primaryPhotoLoadFailed === true) this.failedPhotoIds.add(settledCard.id);
+              else this.hydratedIds.add(settledCard.id);
+              if (settledCard.id === this.cards[0]?.card.id && this.submittedQuery !== undefined && this.isPublicFeedQuery(this.submittedQuery) && settledCard.mediaContentChanged !== true && settledCard.primaryPhotoLoadFailed !== true) { this.onPrimaryCard(settledCard, this.primaryRemoteSync); this.primaryRemoteSync = false; }
+              this.cards = this.cards.map((entry: DiscoveryEntry): DiscoveryEntry => {
+                if (entry.card !== settledCard) return entry;
+                const updated: DiscoveryEntry = { card: settledCard, coverUrl: settledCard.mediaContentChanged === true ? '' : settledCard.photoUrl, loadedAt: entry.loadedAt };
+                return updated;
+              });
+            }, false, 'prefetch', (value: FoodCard): boolean => this.cards.some((entry: DiscoveryEntry): boolean => entry.card === value));
+          if (!this.current(generation)) return;
+          if (card.mediaContentChanged === true) await this.refreshChangedCards([card.id], generation);
+          if (!this.hydratedIds.has(card.id) && !this.failedPhotoIds.has(card.id) && this.cards.some((entry: DiscoveryEntry): boolean => entry.card === card)) { this.deferPrefetch(generation); return; }
+          continue;
+        }
+        if (this.cards.some((entry: DiscoveryEntry): boolean => this.failedPhotoIds.has(entry.card.id))) return;
+        const coversSignature: string = this.cards.map((entry: DiscoveryEntry): string => this.prefetchCardKey(entry.card)).join('|');
+        if (coversSignature !== this.prefetchCoversSignature) {
+          this.prefetchCoversSignature = coversSignature;
+          console.info('[DiscoveryFeed] event=all-covers-ready viewGeneration=' + generation + ' cards=' + this.cards.length + ' ms=' + (Date.now() - this.feedLoadStartedAt));
+        }
+        const missing: Array<FoodCard> = this.cards.map((entry: DiscoveryEntry): FoodCard => entry.card)
+          .filter((card: FoodCard): boolean => card.photoPath.length > 0 && !this.prefetchManifests.has(this.prefetchCardKey(card)) && !this.prefetchManifestAttempts.has(this.prefetchCardKey(card))).slice(0, 10);
+        if (missing.length > 0) {
+          const request: CardPreviewsRequest = { cardIds: missing.map((card: FoodCard): string => card.id), includeDetailPhotos: true };
+          const options: ReadRequestOptions = { priority: 'prefetch', mayContinue: async (): Promise<boolean> => this.current(generation) };
+          try {
+            const response: CardPreviewsResponse = await CloudGateway.callPublic<CardPreviewsResponse>('get-card-previews', request, options);
+            if (!this.current(generation)) return;
+            for (const card of missing) {
+              const item: CardPreviewItem | undefined = response.items.find((value: CardPreviewItem): boolean => value.cardId === card.id);
+              this.prefetchManifestAttempts.add(this.prefetchCardKey(card));
+              if (item !== undefined && item.accessible && item.card !== null) {
+                if (item.card.contentRevision === card.contentRevision) this.prefetchManifests.set(this.prefetchCardKey(card), item.card);
+                else await this.refreshChangedCards([card.id], generation);
+                if (!this.current(generation)) return;
+              } else this.cards = this.cards.filter((entry: DiscoveryEntry): boolean => entry.card.id !== card.id);
+            }
+          } catch (error) {
+            if (error instanceof ReadCancelledError) { this.deferPrefetch(generation); return; }
+            for (const card of missing) this.prefetchManifestAttempts.add(this.prefetchCardKey(card));
+            console.warn('[DiscoveryFeed] event=detail-prefetch-manifest-failed viewGeneration=' + generation);
+          }
+          continue;
+        }
+        let nextPhoto: CardPhoto | undefined = undefined;
+        let photoKey: string = '';
+        for (const entry of this.cards) {
+          const key: string = this.prefetchCardKey(entry.card);
+          const manifest: FoodCard | undefined = this.prefetchManifests.get(key);
+          const photo: CardPhoto | undefined = manifest?.photos?.find((value: CardPhoto): boolean =>
+            !this.prefetchPhotoAttempts.has(key + ':' + value.id));
+          if (photo !== undefined) { nextPhoto = photo; photoKey = key + ':' + photo.id; break; }
+        }
+        if (nextPhoto === undefined) {
+          this.prefetchCompletedSignature = coversSignature;
+          console.info('[DiscoveryFeed] event=detail-prefetch-complete viewGeneration=' + generation + ' cards=' + this.cards.length + ' readyOriginals=' + this.prefetchReadyPhotos.size + ' attemptedOriginals=' + this.prefetchPhotoAttempts.size + ' failedManifests=' + this.cards.filter((entry: DiscoveryEntry): boolean => entry.card.photoPath.length > 0 && !this.prefetchManifests.has(this.prefetchCardKey(entry.card))).length + ' ms=' + (Date.now() - this.prefetchStartedAt));
+          return;
+        }
+        try {
+          const localUrl: string = await this.cardRepository.hydrateDetailPhoto(this.context(), nextPhoto, 'prefetch', async (): Promise<boolean> => this.current(generation));
+          if (localUrl.length === 0) throw new Error('详情图片预加载未返回缓存地址。');
+          if (!this.current(generation)) return;
+          this.prefetchPhotoAttempts.add(photoKey); this.prefetchReadyPhotos.add(photoKey);
+        } catch (error) {
+          if (error instanceof ReadCancelledError) { this.deferPrefetch(generation); return; }
+          this.prefetchPhotoAttempts.add(photoKey);
+          console.warn('[DiscoveryFeed] event=detail-prefetch-photo-failed viewGeneration=' + generation + ' mediaId=' + nextPhoto.id);
+        }
+      }
+    } catch (_error) {
+      // Background failures never replace the foreground feed status or auto-retry an error storm.
+      console.warn('[DiscoveryFeed] event=detail-prefetch-stopped viewGeneration=' + generation);
     }
   }
   private async refreshChangedCards(ids: Array<string>, generation: number): Promise<void> {
@@ -655,18 +765,10 @@ export struct DiscoveryFeed {
   }
 
   @Builder
-  private preferenceButton(): void {
-    Button('设置偏好').attributeModifier(new QuietActionStyle()).height(48).fontSize(13)
-      .padding({ left: 8, right: 8 }).accessibilityText('设置推荐偏好')
-      .onClick((): void => this.onSetupPreference())
-  }
-
-  @Builder
   private cardResults(): void {
     Row({ space: 8 }) {
       Text(this.showingPrevious ? '上一地区结果' : this.scope === 'VIEWPORT' ? '本区域推荐' : '全部公开推荐').fontSize(13).fontWeight(FontWeight.Medium)
         .fontColor($r('app.color.ink')).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1);
-      this.preferenceButton();
       Button('刷新').attributeModifier(new QuietActionStyle()).height(48).enabled(!this.loading)
         .onClick((): void => { DiscoveryFeedState.clear(); void this.reload(false, true); })
     }.width('100%')
@@ -737,12 +839,11 @@ export struct DiscoveryFeed {
           Text(this.expanded ? '地图浏览' : '推荐').fontSize(24).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'));
           Blank()
           if (this.expanded) {
-            if (!this.listOpen) { this.preferenceButton(); }
             Button('刷新').attributeModifier(new QuietActionStyle()).height(48).enabled(!this.loading)
               .onClick((): void => { DiscoveryFeedState.clear(); void this.reload(false, true); })
           } else {
-            Button('今天吃什么 ›').attributeModifier(new QuietActionStyle()).height(48)
-              .accessibilityText('今天吃什么').onClick((): void => this.onOpenMeal())
+            Button('今日吃什么 ›').attributeModifier(new RandomPrimaryStyle()).fontSize(14).padding({ left: 14, right: 14 })
+              .accessibilityText('今日吃什么，随机翻三张').onClick((): void => this.onOpenMeal())
           }
         }.width('100%')
         }

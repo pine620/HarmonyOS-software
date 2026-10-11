@@ -28,7 +28,6 @@ export default class EntryAbility extends UIAbility {
     if (!AppStorage.has('socialForegroundRevision')) AppStorage.setOrCreate('socialForegroundRevision', 0);
     if (!AppStorage.has('friendRelationshipRevision')) AppStorage.setOrCreate('friendRelationshipRevision', 0);
     if (!AppStorage.has('requestedFriendSection')) AppStorage.setOrCreate('requestedFriendSection', 0);
-    if (!AppStorage.has('notificationForegroundRevision')) AppStorage.setOrCreate('notificationForegroundRevision', 0);
     ContinuationState.initialize();
     this.captureSystemEntry(want);
     if (PushNotificationService.isSupported()) {
@@ -46,8 +45,6 @@ export default class EntryAbility extends UIAbility {
     AppStorage.setOrCreate('stage47AppActive', true);
     const revision: number = AppStorage.get<number>('socialForegroundRevision') || 0;
     AppStorage.setOrCreate('socialForegroundRevision', revision + 1);
-    const notificationRevision: number = AppStorage.get<number>('notificationForegroundRevision') || 0;
-    AppStorage.setOrCreate('notificationForegroundRevision', notificationRevision + 1);
   }
 
   onWindowStageRestore(windowStage: window.WindowStage): void {

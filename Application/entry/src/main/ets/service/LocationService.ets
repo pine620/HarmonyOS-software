@@ -188,7 +188,7 @@ export class LocationService {
     return LocationService.getRoundedLocation(context, forceRefresh, requestPermission);
   }
 
-  /** Retains the existing publish/ranking contract with an administrative area. */
+  /** Retains the existing publishing contract with an administrative area. */
   static async getPreciseRoundedLocation(context: common.UIAbilityContext): Promise<RoundedLocation> {
     const location: RoundedLocation = await LocationService.getRoundedLocation(context, true);
     return {

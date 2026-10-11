@@ -41,19 +41,13 @@ const NEARBY_CACHE_VERSION = 'v3';
 let nearbyRedis = null;
 let nearbyRedisConnecting = null;
 let nearbyRedisRetryAfter = 0;
-const MAX_CARD_COMMENTS = 100;
-const MAX_RECEIVED_COMMENT_SCAN = 500;
-const MAX_COMMENT_LENGTH = 240;
 const MAX_CARD_REVIEW_LENGTH = 600;
 const MAX_SOCIAL_RESULTS = 50;
-const MAX_FRIEND_RANKING_SIZE = 50;
-const MAX_FRIEND_RANKING_QUERY_BATCH = 2;
 const MAX_SOCIAL_PAGE_SIZE = 50;
 const SOCIAL_QUERY_BATCH_SIZE = 200;
 const SOCIAL_PROFILE_QUERY_BATCH_SIZE = 50;
 const MAX_MESSAGE_LENGTH = 1000;
 const MAX_MESSAGE_PAGE_SIZE = 50;
-const MAX_NOTIFICATION_PAGE_SIZE = 50;
 const MAX_GROUP_MEMBERS = 20;
 const MIN_GROUP_FRIENDS = 2;
 const MAX_GROUP_NAME_LENGTH = 32;
@@ -99,7 +93,7 @@ class FoodCard extends CloudDbModel {}
 // Legacy CloudDB columns remain for deployed-schema compatibility; public reads ignore them.
 FoodCard.fieldTypes = Object.freeze({"id": "String", "ownerUid": "String", "productName": "String", "brand": "String", "priceFen": "Integer", "priceLabel": "String", "originalPriceFen": "Integer", "specification": "String", "shop": "String", "sellingPointsJson": "Text", "publicOffersJson": "Text", "reviewText": "Text", "tasteScore": "Integer", "sourceLink": "Text", "category": "String", "mediaId": "String", "latE3": "Integer", "lonE3": "Integer", "district": "String", "geohash": "String", "status": "String", "createdAt": "Long", "updatedAt": "Long", "schemaVersion": "Integer", "migrationSource": "String", "consumptionMode": "String", "visibility": "String", "merchantId": "String", "merchantNameSnapshot": "String", "merchantAddressSnapshot": "Text", "categoryV2": "String", "categoryVersion": "Integer", "itemPriceFen": "Long", "dineInAvgFen": "Long", "orderTotalFen": "Long", "deliveryFeeFen": "Long", "queryPriceFen": "Long", "deliveryPlatformKey": "String", "deliveryPlatformLabelSnapshot": "String", "consumedAt": "Date", "publishedAt": "Date", "modifiedAt": "Date", "edited": "Boolean", "friendVisibilitySince": "Date", "friendVisibilitySequence": "Long", "reviewState": "String", "deletedAt": "Date", "purgeAt": "Date", "lifecycleGeneration": "Long", "searchTextNormalized": "Text", "reviewReason": "String"});
 FoodCard.primaryKeys = Object.freeze(['id']);
-FoodCard.indexes = Object.freeze(["status,createdAt,id", "status,category,createdAt,id", "ownerUid,createdAt", "ownerUid,status,createdAt", "status,latE3,lonE3,createdAt", "status,createdAt", "ownerUid,status,tasteScore,createdAt", "merchantId,id", "ownerUid,merchantId,id", "status,publishedAt,id", "status,queryPriceFen,publishedAt,id", "status,queryPriceFen,publishedAt,id", "merchantId,status,publishedAt,id", "status,tasteScore,publishedAt,id", "ownerUid,status,createdAt,id"]);
+FoodCard.indexes = Object.freeze(["status,createdAt,id", "status,category,createdAt,id", "ownerUid,createdAt", "ownerUid,status,createdAt", "status,latE3,lonE3,createdAt", "status,createdAt", "merchantId,id", "ownerUid,merchantId,id", "visibility,status,publishedAt,id", "visibility,status,queryPriceFen,publishedAt,id", "visibility,status,queryPriceFen,publishedAt,id", "merchantId,visibility,status,publishedAt,id", "visibility,status,tasteScore,publishedAt,id", "ownerUid,status,createdAt,id", "merchantId,status,tasteScore,publishedAt,id"]);
 
 class Merchant extends CloudDbModel {}
 Merchant.fieldTypes = Object.freeze({
@@ -130,7 +124,7 @@ Merchant.fieldTypes = Object.freeze({
   "lastUpdatePayloadHash": "String"
 });
 Merchant.primaryKeys = Object.freeze(['merchantId']);
-Merchant.indexes = Object.freeze(["provider,providerPoiId", "verificationStatus,createdAt,merchantId", "createdByUid,createdAt,merchantId", "mapVisible,latitudeE6,merchantId"]);
+Merchant.indexes = Object.freeze(["provider,providerPoiId", "verificationStatus,createdAt,merchantId", "createdByUid,createdAt,merchantId", "mapVisible,latitudeE6,merchantId", "coordinateSystem,latitudeE6,merchantId"]);
 
 const { CardMedia } = require('./shared/image-models');
 
@@ -155,6 +149,7 @@ CardAction.indexes = Object.freeze([
   'cardId,kind,id'
 ]);
 
+// Retired comment storage remains registered for historical lifecycle cleanup.
 class CardComment extends CloudDbModel {}
 CardComment.fieldTypes = Object.freeze({"id": "String", "cardId": "String", "authorUid": "String", "parentId": "String", "replyToNickname": "String", "replyToUid": "String", "content": "Text", "status": "String", "createdAt": "Long", "updatedAt": "Long"});
 CardComment.primaryKeys = Object.freeze(['id']);
@@ -186,9 +181,9 @@ Friendship.primaryKeys = Object.freeze(['id']);
 Friendship.indexes = Object.freeze(['memberAUid', 'memberBUid', 'requesterUid', 'addresseeUid']);
 
 class FriendReport extends CloudDbModel {}
-FriendReport.fieldTypes = Object.freeze({"id": "String", "reporterUid": "String", "cardId": "String", "reason": "String", "status": "String", "createdAt": "Long", "targetType": "String", "targetId": "String", "updatedAt": "Long", "resolutionAction": "String", "resolutionReason": "String", "resolvedByUid": "String", "resolvedAt": "Long"});
+FriendReport.fieldTypes = Object.freeze({"id": "String", "reporterUid": "String", "targetUid": "String", "reason": "String", "status": "String", "createdAt": "Long"});
 FriendReport.primaryKeys = Object.freeze(['id']);
-FriendReport.indexes = Object.freeze(["cardId", "reporterUid,createdAt", "status,createdAt,id", "reporterUid,createdAt,id"]);
+FriendReport.indexes = Object.freeze(["targetUid", "reporterUid"]);
 
 class Conversation extends CloudDbModel {}
 Conversation.fieldTypes = Object.freeze({
@@ -312,7 +307,7 @@ IdentityBinding.fieldTypes = Object.freeze({
   updatedAt: 'Long'
 });
 IdentityBinding.primaryKeys = Object.freeze(['id']);
-IdentityBinding.indexes = Object.freeze({"provider_providerUid": ["provider", "providerUid"], "canonicalUid": ["canonicalUid"], "canonicalUid_id": ["canonicalUid", "id"]});
+IdentityBinding.indexes = Object.freeze(['provider,providerUid', 'canonicalUid', 'canonicalUid,id']);
 
 class AuthMigrationTicket extends CloudDbModel {}
 AuthMigrationTicket.fieldTypes = Object.freeze({
@@ -388,6 +383,7 @@ MaintenanceJob.fieldTypes = Object.freeze({"jobId": "String", "jobType": "String
 MaintenanceJob.primaryKeys = Object.freeze(['jobId']);
 MaintenanceJob.indexes = Object.freeze(["status,runAfterAt,jobId", "status,leaseUntilAt,jobId", "ownerUid,jobType,jobId", "entityId,jobType,generation", "status,jobType,runAfterAt,jobId", "status,jobType,leaseUntilAt,jobId"]);
 
+// Retired preference/list/state types remain for migration and account cleanup.
 class TastePreference extends CloudDbModel {}
 TastePreference.fieldTypes = Object.freeze({"uid": "String", "likedCategoriesJson": "Text", "lessCategoriesJson": "Text", "preferredMode": "String", "budgetMinFen": "Long", "budgetMaxFen": "Long", "updatedAt": "Date", "version": "Long"});
 TastePreference.primaryKeys = Object.freeze(["uid"]);
@@ -409,6 +405,12 @@ PersonalFoodState.primaryKeys = Object.freeze(["ownerUid", "cardId"]);
 PersonalFoodState.indexes = Object.freeze(["ownerUid,state,updatedAt,cardId"]);
 
 
+class MealChoiceHistory extends CloudDbModel {}
+MealChoiceHistory.fieldTypes = Object.freeze({ historyId: 'String', uid: 'String', cardId: 'String', merchantId: 'String',
+  consumptionMode: 'String', selectedAt: 'Date', source: 'String', roundId: 'String', drawId: 'String', deletedAt: 'Date' });
+MealChoiceHistory.primaryKeys = Object.freeze(['historyId']);
+MealChoiceHistory.indexes = Object.freeze(['uid,selectedAt,historyId']);
+
 class MealPoll extends CloudDbModel {}
 MealPoll.fieldTypes = Object.freeze({"pollId": "String", "groupId": "String", "creatorUid": "String", "title": "String", "mode": "String", "visibilityMode": "String", "consumptionMode": "String", "status": "String", "deadlineAt": "Date", "acceptingOptions": "Boolean", "closeOutcome": "String", "closeReason": "String", "winnerOptionId": "String", "winnerResolvedAt": "Date", "resultCountsJson": "Text", "createdAt": "Date", "updatedAt": "Date", "version": "Long", "requestPayloadHash": "String"});
 MealPoll.primaryKeys = Object.freeze(["pollId"]);
@@ -426,7 +428,7 @@ MealPollVote.indexes = Object.freeze(["pollId,optionId,voterUid", "voterUid"]);
 
 const OBJECT_TYPES = Object.freeze({
   UserProfile, FoodCard, CardMedia, Report, CardAction, CardComment, CommentReaction,
-  TastePreference, FoodList, FoodListItem, PersonalFoodState, MealPoll, MealPollOption, MealPollVote,
+  TastePreference, FoodList, FoodListItem, PersonalFoodState, MealChoiceHistory, MealPoll, MealPollOption, MealPollVote,
   Friendship, FriendReport, Conversation, ChatMessage, GroupConversation, GroupMember, GroupMessage,
   NotificationEvent, PushRegistration, WidgetRegistration,
   IdentityBinding, AuthMigrationTicket,
@@ -737,148 +739,24 @@ async function bestEffortPush(uid, title, body, routeData, env) {
   }
 }
 
-const NOTIFICATION_TEXT = Object.freeze({
+const SOCIAL_PUSH_TEXT = Object.freeze({
   FRIEND_REQUEST: { title: '新的好友申请', body: '有人向你发送了食刻好友申请。' },
   FRIEND_ACCEPTED: { title: '好友申请已通过', body: '你们现在可以在食刻互相分享推荐了。' },
   DIRECT_MESSAGE: { title: '新的食刻私信', body: '打开食刻查看好友消息。' },
   GROUP_MESSAGE: { title: '群聊有新消息', body: '打开食刻查看群聊。' },
-  CARD_COMMENT: { title: '卡片有新评论', body: '有人评论了你的食刻卡片。' },
-  REPLY: { title: '评论有新回复', body: '有人回复了你的评论。' }
 });
-
-function notificationId(recipientUid, kind, sourceId) {
-  return crypto.createHash('sha256').update(
-    `notification:${recipientUid}:${kind}:${sourceId}`).digest('hex');
-}
-
-async function emitNotification(recipientUid, actorUid, kind, sourceId, targetId, env) {
-  if (!recipientUid || recipientUid === actorUid || !NOTIFICATION_TEXT[kind]) return;
+async function sendSocialPush(recipientUid, actorUid, kind, targetId, env) {
+  const copy=SOCIAL_PUSH_TEXT[kind];
+  if(!recipientUid||recipientUid===actorUid||!copy)return;
   try {
-    const policy = contentPolicy(env);
-    await policy.assertAccountActive(recipientUid);
-    await policy.assertAccountActive(actorUid);
-    const id = notificationId(recipientUid, kind, sourceId);
-    const notifications = collection(env, 'NotificationEvent');
-    if (await one(notifications.query().equalTo('id', id))) return;
-    try {
-      await notifications.insert({
-        id, recipientUid, actorUid, kind, sourceId, targetId, createdAt: Date.now(), readAt: 0
-      });
-    } catch (error) {
-      // A concurrent retry may have inserted the same deterministic event.
-      if (await one(notifications.query().equalTo('id', id))) return;
-      throw error;
-    }
-    const copy = NOTIFICATION_TEXT[kind];
-    await bestEffortPush(recipientUid, copy.title, copy.body,
-      { shikeRoute: 'notification', shikeNotificationId: id }, env);
-  } catch (error) {
-    // Completed social writes are authoritative even when reminders fail.
-    console.error(`notification event failed: ${safeLogError(error)}`);
-  }
-}
-
-function publicNotification(row) {
-  const copy = NOTIFICATION_TEXT[String(row.kind || '')] ||
-    { title: '食刻通知', body: '打开食刻查看最新消息。' };
-  return {
-    id: String(row.id || ''), kind: String(row.kind || ''),
-    title: copy.title, body: copy.body,
-    createdAt: Number(row.createdAt || 0), readAt: Number(row.readAt || 0)
-  };
-}
-
-async function listNotifications(uid, payload, env) {
-  const requested = Number(payload.pageSize || MAX_NOTIFICATION_PAGE_SIZE);
-  const pageSize = Number.isFinite(requested)
-    ? Math.max(1, Math.min(MAX_NOTIFICATION_PAGE_SIZE, Math.floor(requested)))
-    : MAX_NOTIFICATION_PAGE_SIZE;
-  const token = String(payload.pageToken || '').trim();
-  const offset = /^\d+$/.test(token) ? Math.min(Number(token), 1000000) : 0;
-  let rows = await queryAllRows(() => collection(env, 'NotificationEvent').query()
-    .equalTo('recipientUid', uid));
-  if (payload.includeComments === false) rows = rows.filter((row) => row.kind !== 'CARD_COMMENT' && row.kind !== 'REPLY');
-  rows.sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0) ||
-    String(b.id || '').localeCompare(String(a.id || '')));
-  const items = rows.slice(offset, offset + pageSize).map(publicNotification);
-  return {
-    items,
-    unreadCount: rows.filter((row) => Number(row.readAt || 0) === 0).length,
-    nextPageToken: offset + pageSize < rows.length ? String(offset + pageSize) : ''
-  };
-}
-
-async function ownedNotification(uid, id, env) {
-  if (!/^[0-9a-f]{64}$/.test(id)) throw new Error('通知不存在或无权查看。');
-  const row = await one(collection(env, 'NotificationEvent').query().equalTo('id', id));
-  if (!row || String(row.recipientUid || '') !== uid) throw new Error('通知不存在或无权查看。');
-  return row;
-}
-
-async function markNotificationRead(uid, payload, env) {
-  const row = await ownedNotification(uid, String(payload.notificationId || ''), env);
-  if (Number(row.readAt || 0) === 0) {
-    row.readAt = Date.now();
-    await collection(env, 'NotificationEvent').upsert(row);
-  }
-  return { success: true };
-}
-
-async function markAllNotificationsRead(uid, env) {
-  const rows = await queryAllRows(() => collection(env, 'NotificationEvent').query()
-    .equalTo('recipientUid', uid));
-  const now = Date.now();
-  const notifications = collection(env, 'NotificationEvent');
-  const unread = [];
-  for (const row of rows) {
-    if (Number(row.readAt || 0) !== 0) continue;
-    row.readAt = now;
-    unread.push(row);
-  }
-  for (let offset = 0; offset < unread.length; offset += SOCIAL_QUERY_BATCH_SIZE) {
-    await notifications.upsert(unread.slice(offset, offset + SOCIAL_QUERY_BATCH_SIZE));
-  }
-  return { success: true };
-}
-
-async function openNotification(uid, payload, env) {
-  const row = await ownedNotification(uid, String(payload.notificationId || ''), env);
-  if (Number(row.readAt || 0) === 0) {
-    row.readAt = Date.now();
-    await collection(env, 'NotificationEvent').upsert(row);
-  }
-  const kind = String(row.kind || '');
-  const targetId = String(row.targetId || '');
-  const actorUid = String(row.actorUid || '');
-  if (payload.includeComments === false && (kind === 'CARD_COMMENT' || kind === 'REPLY')) return { route: 'expired', targetId: '' };
-  const actor = await one(collection(env, 'UserProfile').query().equalTo('uid', actorUid));
-  if (!isAccountActive(actor)) return { route: 'expired', targetId: '' };
-  if (kind === 'FRIEND_REQUEST') {
-    const request = await one(collection(env, 'Friendship').query().equalTo('id', targetId));
-    return request && String(request.addresseeUid || '') === uid &&
-      String(request.status || '') === 'PENDING'
-      ? { route: 'friends', targetId: '' } : { route: 'expired', targetId: '' };
-  }
-  if (kind === 'FRIEND_ACCEPTED' || kind === 'DIRECT_MESSAGE') {
-    const relationship = await friendshipBetween(uid, actorUid, env);
-    return relationship && String(relationship.status || '') === 'ACCEPTED'
-      ? { route: 'friend-chat', targetId: actorUid } : { route: 'expired', targetId: '' };
-  }
-  if (kind === 'GROUP_MESSAGE') {
-    const membership = await one(collection(env, 'GroupMember').query()
-      .equalTo('id', groupMemberId(targetId, uid)));
-    const group = await one(collection(env, 'GroupConversation').query().equalTo('id', targetId));
-    return membership && group ? { route: 'group-chat', targetId } : { route: 'expired', targetId: '' };
-  }
-  if (kind === 'CARD_COMMENT' || kind === 'REPLY') {
-    const card = await one(collection(env, 'FoodCard').query().equalTo('id', targetId));
-    const comment = await one(collection(env, 'CardComment').query()
-      .equalTo('id', String(row.sourceId || '')));
-    return card && comment && String(comment.cardId || '') === targetId &&
-      String(comment.status || '') === 'ACTIVE' && await contentPolicy(env).canReadCard(uid, card)
-      ? { route: 'card', targetId } : { route: 'expired', targetId: '' };
-  }
-  return { route: 'expired', targetId: '' };
+    if(!pushConfigured(pushConfiguration(env)))return;
+    const policy=contentPolicy(env);
+    await policy.assertAccountActive(recipientUid);await policy.assertAccountActive(actorUid);
+    const route=kind==='FRIEND_REQUEST'?{shikeRoute:'tab',shikeTab:'2',shikeFriendSection:'requests'}:
+      kind==='GROUP_MESSAGE'?{shikeRoute:'group-chat',shikeGroupId:targetId}:
+      {shikeRoute:'friend-chat',shikeFriendUid:actorUid};
+    await bestEffortPush(recipientUid,copy.title,copy.body,route,env);
+  } catch(error) { console.error(`social push failed: ${safeLogError(error)}`); }
 }
 
 function serviceCardCategoryLabel(category) {
@@ -1044,14 +922,6 @@ async function pushServiceCardUpdate(uid, payload, env) {
     }
   }
   return result;
-}
-
-// Administrators are configured only in the deployed service environment;
-// the mobile client never sends or decides a privileged role.
-function isAdministrator(uid, env) {
-  const configured = String((env && env.SHIKE_ADMIN_UIDS) || process.env.SHIKE_ADMIN_UIDS || '');
-  if (uid.length === 0 || configured.length === 0) return false;
-  return configured.split(',').map((item) => item.trim()).includes(uid);
 }
 
 function safeLogError(error) {
@@ -1286,14 +1156,15 @@ function transactionPolicy(transaction, env, profiles = []) {
   }, { profiles });
 }
 
-async function readableCardRows(rows, _viewerUid, _env, _publicOnly = false, _readContext = null) {
-  return rows.filter(readableCardState);
+async function readableCardRows(rows, viewerUid, env, _publicOnly = false, readContext = null) {
+  const context = readContext || await createCardReadContext(rows, viewerUid, env);
+  return rows.filter(row => readableCardState(row) && isAccountActive(context.profiles.get(String(row.ownerUid))));
 }
 
 async function readCardIfAllowed(row, env, distanceKm = 0, includePhoto = true, viewerUid = '',
-  includeThread = false, maxPhotoCount = MAX_CARD_PHOTOS, metrics = null, readContext = null) {
+  includeActions = false, maxPhotoCount = MAX_CARD_PHOTOS, metrics = null, readContext = null) {
   try {
-    return await publicCard(row, env, distanceKm, includePhoto, viewerUid, includeThread, maxPhotoCount, metrics, readContext);
+    return await publicCard(row, env, distanceKm, includePhoto, viewerUid, includeActions, maxPhotoCount, metrics, readContext);
   } catch (error) {
     if (error && error.code === 'CONTENT_ACCESS_DENIED') return null;
     throw error;
@@ -1302,15 +1173,17 @@ async function readCardIfAllowed(row, env, distanceKm = 0, includePhoto = true, 
 
 // Offsets count consumed database rows, including denied rows. A bounded scan
 // continues past hidden content and returns a continuation when its budget ends.
-async function scanCardPage(queryFactory, viewerUid, env, offset, pageSize, publicOnly = false, photoCount = 1) {
+async function scanCardPage(queryFactory, viewerUid, env, offset, pageSize, publicOnly = false, photoCount = 1, maxBatchSize = 50) {
   const cards = [];
   const sourceRows = [];
   let cursor = offset;
   let scanned = 0;
-  const finish = async (hasMore) => ({ cards: await finalizeCardReads(cards, sourceRows, viewerUid, env), nextOffset: cursor, hasMore });
+  let fetched = 0;
+  const finish = async (hasMore) => ({ cards: await finalizeCardReads(cards, sourceRows, viewerUid, env), nextOffset: cursor, hasMore, scannedCandidateCount: scanned, fetchedCandidateCount: fetched });
   while (scanned < 200 && cards.length < pageSize) {
-    const limit = Math.min(50, 200 - scanned);
+    const limit = Math.min(maxBatchSize, 200 - scanned);
     const rows = await queryFactory().limit(limit, cursor).get();
+    fetched += rows.length;
     if (rows.length === 0) return finish(false);
     const readContext = await createCardReadContext(rows, viewerUid, env);
     const readableRows = new Set(await readableCardRows(rows, viewerUid, env, publicOnly, readContext));
@@ -1401,7 +1274,7 @@ async function ensureIdentityBinding(provider, providerUid, canonicalUid, env) {
 
 async function verifiedAgcUid(accessToken) {
   if (!accessToken || String(accessToken).length > 8192) {
-    throw new Error('未登录或登录状态已失效。');
+    throw accessError('未登录或登录状态已失效。', 'AUTH_REQUIRED');
   }
   try {
     const verified = await measuredDependency('authVerify', () => cloud.auth().verifyAccessToken({
@@ -1413,7 +1286,7 @@ async function verifiedAgcUid(accessToken) {
     return uid;
   } catch (_error) {
     // Account Kit access tokens are intentionally not accepted here.
-    throw new Error('登录凭证无效或已撤销，请重新登录。');
+    throw accessError('登录凭证无效或已撤销，请重新登录。', 'AUTH_REQUIRED');
   }
 }
 
@@ -2354,7 +2227,15 @@ async function finalizeCardReads(cards, sourceRows, viewerUid, env, friendsOnly 
     }
   }
   const policy = contentPolicy(env);
-
+  // Batch fresh author authority; do not seed from the first-phase read context.
+  const authorUids = [...new Set([...current.values()].map(row => String(row.ownerUid || '')).filter(Boolean))];
+  const freshAuthors = new Map(authorUids.map(uid => [uid, null]));
+  for (let start = 0; start < authorUids.length; start += SOCIAL_PROFILE_QUERY_BATCH_SIZE) {
+    const batch = authorUids.slice(start, start + SOCIAL_PROFILE_QUERY_BATCH_SIZE);
+    const rows = await collection(env, 'UserProfile').query().in('uid', batch).limit(batch.length).get();
+    for (const row of rows) freshAuthors.set(String(row.uid), row);
+  }
+  policy.seedProfiles(freshAuthors.entries());
   const result = [];
   for (const card of cards) {
     const row = current.get(String(card.id));
@@ -2402,143 +2283,14 @@ function previewCard(row, context, env) {
     photos: photo ? [photo] : [], authorUid: String(row.ownerUid), authorNickname: String(author.nicknameValue || '食刻用户'),
     authorAvatarUrl: '', authorAvatarPath: '', authorAvatarBucket: '',
     district: String(row.district || ''), distanceKm: 0, status: 'APPROVED', createdAt: Number(row.createdAt || 0),
-    likeCount: 0, favoriteCount: 0, viewerLiked: false, viewerFavorited: false, comments: [] };
+    likeCount: 0, favoriteCount: 0, viewerLiked: false, viewerFavorited: false };
 }
 
 async function cardActionSummary(cardId, viewerUid, env) {
   return stage1.reactionSummary(cardId, viewerUid, env);
 }
 
-async function commentReactionSummary(commentId, viewerUid, env) {
-  const reactions = await collection(env, 'CommentReaction').query().equalTo('commentId', commentId).limit(500).get();
-  let likeCount = 0;
-  let dislikeCount = 0;
-  let viewerReaction = '';
-  for (const reaction of reactions) {
-    const kind = String(reaction.kind || '');
-    if (kind === 'LIKE') likeCount += 1;
-    if (kind === 'DISLIKE') dislikeCount += 1;
-    if (viewerUid && String(reaction.actorUid || '') === viewerUid && (kind === 'LIKE' || kind === 'DISLIKE')) {
-      viewerReaction = kind;
-    }
-  }
-  return { likeCount, dislikeCount, viewerReaction };
-}
-
-async function publicComments(cardId, viewerUid, env) {
-  const rows = await collection(env, 'CardComment').query().equalTo('cardId', cardId)
-    .orderByAsc('createdAt').limit(MAX_CARD_COMMENTS).get();
-  const authorUids = [...new Set(rows.map((row) => String(row.authorUid || '')).filter(Boolean))];
-  const authorsByUid = new Map();
-  const inactiveAuthors = new Set();
-  const profiles = collection(env, 'UserProfile');
-  for (let start = 0; start < authorUids.length; start += SOCIAL_PROFILE_QUERY_BATCH_SIZE) {
-    const batch = authorUids.slice(start, start + SOCIAL_PROFILE_QUERY_BATCH_SIZE);
-    try {
-      const records = await profiles.query().in('uid', batch).limit(batch.length).get();
-      const returnedUids = new Set(records.map((record) => String(record.uid)));
-      for (const missingUid of batch) if (!returnedUids.has(missingUid)) inactiveAuthors.add(missingUid);
-      for (const record of records) {
-        if (!isAccountActive(record)) { inactiveAuthors.add(String(record.uid)); continue; }
-        try {
-          const profile = profileResponse(record, env);
-          authorsByUid.set(String(record.uid || ''), {
-            nickname: profile.nickname || '食刻用户',
-            avatarPath: profile.avatarPath || '',
-            avatarBucket: profile.avatarBucket || ''
-          });
-        } catch (_error) {
-          // Keep the same fallback as publicProfile for malformed profiles.
-        }
-      }
-    } catch (error) {
-      // Account status is an authorization boundary; only presentation can fall back.
-      throw error;
-    }
-  }
-  const reactionSummariesById = new Map();
-  const commentIds = rows.map((row) => String(row.id || '')).filter(Boolean);
-  const reactionsStore = collection(env, 'CommentReaction');
-  for (let start = 0; start < commentIds.length; start += SOCIAL_PROFILE_QUERY_BATCH_SIZE) {
-    const batch = commentIds.slice(start, start + SOCIAL_PROFILE_QUERY_BATCH_SIZE);
-    const maxBatchRows = batch.length * 500;
-    const reactions = [];
-    let offset = 0;
-    while (offset < maxBatchRows) {
-      const pageSize = Math.min(SOCIAL_QUERY_BATCH_SIZE, maxBatchRows - offset);
-      const page = await reactionsStore.query().in('commentId', batch).limit(pageSize, offset).get();
-      reactions.push(...page);
-      if (page.length < pageSize) break;
-      offset += page.length;
-    }
-    if (reactions.length === maxBatchRows) {
-      // An unusually active thread may have more than 500 reactions per
-      // comment. Use the original bounded query for exact per-comment counts.
-      for (const id of batch) {
-        reactionSummariesById.set(id, await commentReactionSummary(id, viewerUid, env));
-      }
-      continue;
-    }
-    for (const reaction of reactions) {
-      const id = String(reaction.commentId || '');
-      let summary = reactionSummariesById.get(id);
-      if (!summary) {
-        summary = { likeCount: 0, dislikeCount: 0, viewerReaction: '', total: 0 };
-        reactionSummariesById.set(id, summary);
-      }
-      if (summary.total >= 500) continue;
-      summary.total += 1;
-      const kind = String(reaction.kind || '');
-      if (kind === 'LIKE') summary.likeCount += 1;
-      if (kind === 'DISLIKE') summary.dislikeCount += 1;
-      if (viewerUid && String(reaction.actorUid || '') === viewerUid && (kind === 'LIKE' || kind === 'DISLIKE')) {
-        summary.viewerReaction = kind;
-      }
-    }
-  }
-  const byId = new Map();
-  const ordered = [];
-  let commentCount = 0;
-  const viewerIsAdministrator = !!viewerUid && isAdministrator(viewerUid, env);
-  for (const row of rows) {
-    const author = authorsByUid.get(String(row.authorUid || '')) ||
-      { nickname: '食刻用户', avatarPath: '', avatarBucket: '' };
-    const reactions = reactionSummariesById.get(String(row.id || '')) ||
-      { likeCount: 0, dislikeCount: 0, viewerReaction: '' };
-    const deleted = String(row.status || 'ACTIVE') === 'DELETED' || inactiveAuthors.has(String(row.authorUid || ''));
-    if (!deleted) commentCount += 1;
-    const view = {
-      id: String(row.id || ''),
-      parentId: String(row.parentId || ''),
-      replyToNickname: String(row.replyToNickname || ''),
-      authorUid: String(row.authorUid || ''),
-      authorNickname: author.nickname,
-      authorAvatarUrl: '',
-      authorAvatarPath: author.avatarPath,
-      authorAvatarBucket: author.avatarBucket,
-      content: deleted ? '' : String(row.content || ''),
-      deleted,
-      likeCount: reactions.likeCount,
-      dislikeCount: reactions.dislikeCount,
-      viewerReaction: reactions.viewerReaction,
-      viewerIsAuthor: !!viewerUid && String(row.authorUid || '') === viewerUid,
-      viewerCanDelete: !!viewerUid && (String(row.authorUid || '') === viewerUid || viewerIsAdministrator),
-      createdAt: Number(row.createdAt || 0),
-      replies: []
-    };
-    byId.set(view.id, view);
-    ordered.push(view);
-  }
-  const roots = [];
-  for (const view of ordered) {
-    const parent = view.parentId.length > 0 ? byId.get(view.parentId) : undefined;
-    if (parent !== undefined) parent.replies.push(view);
-    else roots.push(view);
-  }
-  return { comments: roots, commentCount };
-}
-
-async function publicCard(row, env, distanceKm = 0, includePhoto = false, viewerUid = '', includeThread = false,
+async function publicCard(row, env, distanceKm = 0, includePhoto = false, viewerUid = '', includeActions = false,
   maxPhotoCount = MAX_CARD_PHOTOS, metrics = null, readContext = null, reviewAccess = false) {
   const context = readContext || await createCardReadContext([row], viewerUid, env, metrics);
   if (reviewAccess && viewerUid === row.ownerUid && stage1.editableState(row)) await context.policy.assertAccountActive(viewerUid);
@@ -2554,12 +2306,9 @@ async function publicCard(row, env, distanceKm = 0, includePhoto = false, viewer
   const primaryPhoto = photos.length > 0 ? photos[0] : {
     id: '', url: '', path: '', bucket: '', width: 0, height: 0
   };
-  const actions = includeThread
+  const actions = includeActions
     ? await cardActionSummary(String(row.id || ''), viewerUid, env)
     : { likeCount: 0, favoriteCount: 0, viewerLiked: false, viewerFavorited: false };
-  const thread = includeThread && includeThread !== 'NO_COMMENTS'
-    ? await publicComments(String(row.id || ''), viewerUid, env)
-    : { comments: [], commentCount: 0 };
   return {
     ...cardContractFields(row),
     id: row.id,
@@ -2594,10 +2343,8 @@ async function publicCard(row, env, distanceKm = 0, includePhoto = false, viewer
     viewerLiked: actions.viewerLiked,
     dislikeCount: Number(actions.dislikeCount || 0), myReaction: String(actions.myReaction || ''),
     viewerFavorited: actions.viewerFavorited,
-    ...(includeThread ? { viewerWanted: actions.viewerWanted, collectionReady: actions.collectionReady,
+    ...(includeActions ? { viewerWanted: actions.viewerWanted, collectionReady: actions.collectionReady,
       collectionStatus: actions.collectionStatus } : {}),
-    commentCount: thread.commentCount,
-    comments: thread.comments,
     district: row.district || '当前位置',
     distanceKm,
     // Legacy rows with an unknown or retired status are not promoted by the
@@ -2729,7 +2476,7 @@ function nearbyCacheMetric(env, metrics, requestStarted) {
     `totalMs=${Date.now() - requestStarted}`);
 }
 
-/** Public homepage pagination has no location, radius or 200-candidate cutoff. */
+/** Ordinary public feed: page-sized metadata reads, one lookahead, bounded hidden-row scan. */
 async function listPublicRecommendations(payload, env, viewerUid = '') {
   const category = String(payload.category || 'all');
   if (category !== 'all' && !VALID_CATEGORY.has(category)) throw new Error('商品分类无效。');
@@ -2750,8 +2497,10 @@ async function listPublicRecommendations(payload, env, viewerUid = '') {
     let query = collection(env, 'FoodCard').query().equalTo('status', 'APPROVED').lessThanOrEqualTo('createdAt', snapshotAt);
     if (category !== 'all') query = query.equalTo('category', category);
     return query.orderByDesc('createdAt').orderByAsc('id');
-  }, viewerUid, env, offset, pageSize, true);
-  return { cards: page.cards, nextPageToken: page.hasMore ? 'g1.' + category + '.' + snapshotAt + '.' + page.nextOffset : '', district: '' };
+  }, viewerUid, env, offset, pageSize, true, 1, pageSize + 1);
+  return { cards: page.cards, nextPageToken: page.hasMore ? 'g1.' + category + '.' + snapshotAt + '.' + page.nextOffset : '', district: '',
+    coverage: page.hasMore ? (page.scannedCandidateCount >= 200 && page.cards.length < pageSize ? 'PARTIAL_SCAN_LIMIT' : 'PARTIAL_RESULT_LIMIT') : 'COMPLETE',
+    scannedCandidateCount: page.scannedCandidateCount, fetchedCandidateCount: page.fetchedCandidateCount };
 }
 
 async function listNearby(uid, payload, env) {
@@ -2907,55 +2656,10 @@ async function listNearby(uid, payload, env) {
  * caller or by a user with an accepted friendship record. Pending requests
  * and stale/deleted friendship rows never enter the owner set.
  */
-async function listFriendRankings(uid, env) {
-  const rows = await friendshipRowsFor(uid, env);
-  const allowedOwners = new Set([uid]);
-  for (const row of rows) {
-    if (String(row.status || '') !== 'ACCEPTED') continue;
-    const otherUid = String(row.memberAUid || '') === uid
-      ? String(row.memberBUid || '') : String(row.memberAUid || '');
-    if (otherUid) allowedOwners.add(otherUid);
-  }
-
-  const ownerUids = Array.from(allowedOwners);
-  const rankedRows = [];
-  const rankingContext = { policy: createContentPolicy((name) => collection(env, name), one) };
-  const cards = collection(env, 'FoodCard');
-  for (let start = 0; start < ownerUids.length; start += MAX_FRIEND_RANKING_QUERY_BATCH) {
-    const ownerBatch = ownerUids.slice(start, start + MAX_FRIEND_RANKING_QUERY_BATCH);
-    const ownerResults = await Promise.allSettled(ownerBatch.map((ownerUid) => cards.query()
-      .equalTo('ownerUid', ownerUid)
-      .equalTo('status', 'APPROVED')
-      .orderByDesc('tasteScore')
-      .orderByDesc('createdAt')
-      .limit(MAX_FRIEND_RANKING_SIZE)
-      .get()));
-    const ownerFailure = ownerResults.find((result) => result.status === 'rejected');
-    if (ownerFailure) throw ownerFailure.reason;
-    const ownerRows = ownerResults.map((result) => result.value);
-    const photoRows = ownerRows.flat().filter((row) => String(row.mediaId || '').length > 0);
-    rankedRows.push(...await readableCardRows(photoRows, uid, env, false, rankingContext));
-  }
-  const topRows = rankedRows
-    .sort((first, second) => {
-      const scoreDifference = Number(second.tasteScore || 0) - Number(first.tasteScore || 0);
-      return scoreDifference !== 0 ? scoreDifference : Number(second.createdAt || 0) - Number(first.createdAt || 0);
-    })
-    .slice(0, MAX_FRIEND_RANKING_SIZE);
-  const output = [];
-  const readContext = await createCardReadContext(topRows, uid, env);
-  await preparePrimaryPhotos(readContext, topRows, env);
-  for (const row of topRows) {
-    const card = await readCardIfAllowed(row, env, 0, true, uid, false, 1, null, readContext);
-    if (card) output.push(card);
-  }
-  return { cards: await finalizeCardReads(output, topRows, uid, env, true) };
-}
-
 async function cardDetail(uid, payload, env) {
   const row = await one(collection(env, 'FoodCard').query().equalTo('id', String(payload.cardId || '')));
   await contentPolicy(env).assertCardReadable(uid, row);
-  const detail = await publicCard(row, env, 0, true, uid, payload.includeComments === false ? 'NO_COMMENTS' : true);
+  const detail = await publicCard(row, env, 0, true, uid, true);
   const current = await finalizeCardReads([detail], [row], uid, env);
   if (!current.length) throw accessError('内容已不可访问或已变化，请刷新。', 'CONTENT_UNAVAILABLE');
   return current[0];
@@ -2989,92 +2693,6 @@ async function myFavoriteCards(uid, env) {
     if (card) cards.push(card);
   }
   return { cards };
-}
-
-async function receivedComments(uid, payload, env) {
-  const page = socialPage(payload);
-  const offset = Math.min(page.offset, MAX_RECEIVED_COMMENT_SCAN);
-  if (offset >= MAX_RECEIVED_COMMENT_SCAN) return { items: [], nextPageToken: '' };
-  // Filter self/deleted comments after querying; scanning only offset + pageSize
-  // raw rows can produce an empty page while older eligible comments still exist.
-  const scanLimit = MAX_RECEIVED_COMMENT_SCAN;
-  const ownedCards = await queryAllRows(() => collection(env, 'FoodCard').query().equalTo('ownerUid', uid));
-  const cardsById = new Map(ownedCards.map((card) => [String(card.id || ''), card]));
-  const commentsById = new Map();
-  const cardIds = [...cardsById.keys()].filter(Boolean);
-  for (let start = 0; start < cardIds.length; start += SOCIAL_PROFILE_QUERY_BATCH_SIZE) {
-    const batch = cardIds.slice(start, start + SOCIAL_PROFILE_QUERY_BATCH_SIZE);
-    const rows = await collection(env, 'CardComment').query().in('cardId', batch)
-      .orderByDesc('createdAt').limit(scanLimit).get();
-    for (const row of rows) {
-      if (String(row.authorUid || '') !== uid && String(row.status || 'ACTIVE') === 'ACTIVE') {
-        commentsById.set(String(row.id || ''), row);
-      }
-    }
-  }
-  // New replies retain the actual recipient UID. Old replyToNickname values are
-  // not used for identity checks because nicknames may change or be duplicated.
-  const replies = await collection(env, 'CardComment').query().equalTo('replyToUid', uid)
-    .orderByDesc('createdAt').limit(scanLimit).get();
-  for (const row of replies) {
-    if (String(row.authorUid || '') !== uid && String(row.status || 'ACTIVE') === 'ACTIVE') {
-      commentsById.set(String(row.id || ''), row);
-    }
-  }
-  const missingCardIds = [...new Set([...commentsById.values()]
-    .map((row) => String(row.cardId || '')).filter((cardId) => cardId && !cardsById.has(cardId)))];
-  for (let start = 0; start < missingCardIds.length; start += SOCIAL_PROFILE_QUERY_BATCH_SIZE) {
-    const batch = missingCardIds.slice(start, start + SOCIAL_PROFILE_QUERY_BATCH_SIZE);
-    const rows = await collection(env, 'FoodCard').query().in('id', batch).limit(batch.length).get();
-    for (const row of rows) cardsById.set(String(row.id || ''), row);
-  }
-  const visibleRows = [];
-  const readableCards = new Set(await readableCardRows([...cardsById.values()], uid, env));
-  for (const row of commentsById.values()) {
-    const card = cardsById.get(String(row.cardId || ''));
-    if (readableCards.has(card)) visibleRows.push(row);
-  }
-  visibleRows.sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0) ||
-    String(b.id || '').localeCompare(String(a.id || '')));
-  const pageRows = visibleRows.slice(offset, offset + page.pageSize + 1);
-  const hasMore = pageRows.length > page.pageSize;
-  const selected = pageRows.slice(0, page.pageSize);
-  const authorUids = [...new Set(selected.map((row) => String(row.authorUid || '')).filter(Boolean))];
-  const authorsByUid = new Map();
-  for (let start = 0; start < authorUids.length; start += SOCIAL_PROFILE_QUERY_BATCH_SIZE) {
-    const batch = authorUids.slice(start, start + SOCIAL_PROFILE_QUERY_BATCH_SIZE);
-    const rows = await collection(env, 'UserProfile').query().in('uid', batch).limit(batch.length).get();
-    for (const row of rows) authorsByUid.set(String(row.uid || ''), row);
-  }
-  const items = selected.filter((row) => isAccountActive(authorsByUid.get(String(row.authorUid || '')))).map((row) => {
-    const card = cardsById.get(String(row.cardId || ''));
-    const author = authorsByUid.get(String(row.authorUid || ''));
-    let authorNickname = String(author && (author.nicknameValue || author.nickname) || '食刻用户');
-    let authorAvatarPath = '';
-    let authorAvatarBucket = '';
-    if (author) {
-      try {
-        const profile = profileResponse(author, env);
-        authorNickname = profile.nickname;
-        authorAvatarPath = profile.avatarPath;
-        authorAvatarBucket = profile.avatarBucket;
-      } catch (_error) {
-        // A stale avatar must not hide the commenter's available nickname.
-      }
-    }
-    return {
-      id: String(row.id || ''),
-      cardId: String(row.cardId || ''),
-      cardName: String(card && card.productName || ''),
-      authorNickname,
-      authorAvatarPath,
-      authorAvatarBucket,
-      content: String(row.content || ''),
-      kind: String(row.replyToUid || '') === uid ? 'REPLY' : 'CARD_COMMENT',
-      createdAt: Number(row.createdAt || 0)
-    };
-  });
-  return { items, nextPageToken: hasMore ? String(offset + selected.length) : '' };
 }
 
 function socialPair(uid, otherUid) {
@@ -3403,7 +3021,7 @@ async function sendFriendRequest(uid, payload, env) {
     })]);
     return { notify: true, requestId: state.id, createdAt: state.now };
   });
-  if (result.notify) await emitNotification(targetUid, uid, 'FRIEND_REQUEST', result.requestId + ':' + result.createdAt, result.requestId, env);
+  if (result.notify) await sendSocialPush(targetUid, uid, 'FRIEND_REQUEST', result.requestId, env);
   return { success: true };
 }
 
@@ -3444,7 +3062,7 @@ async function respondFriendRequest(uid, payload, env) {
     return {};
   });
   if (result.expired) throw accessError('这条好友申请已过期。', 'INVALID_STATE');
-  if (result.notify) await emitNotification(requesterUid, uid, 'FRIEND_ACCEPTED', requestId + ':' + result.originalCreatedAt, uid, env);
+  if (result.notify) await sendSocialPush(requesterUid, uid, 'FRIEND_ACCEPTED', uid, env);
   return { success: true };
 }
 
@@ -3761,7 +3379,7 @@ async function sendMessage(uid, payload, env) {
     }
   });
   if (!committed) throw new Error('消息发送未完成，请重试。');
-  await emitNotification(friendUid, uid, 'DIRECT_MESSAGE', messageId, uid, env);
+  await sendSocialPush(friendUid, uid, 'DIRECT_MESSAGE', uid, env);
   return { message: await publicMessage(message, uid, env) };
 }
 
@@ -4175,8 +3793,8 @@ async function sendGroupMessage(uid, payload, env) {
     }
   });
   if (!committed) throw new Error('群消息发送未完成，请重试。');
-  await Promise.all(recipientUids.map((recipientUid) => emitNotification(recipientUid, uid,
-      'GROUP_MESSAGE', messageId, groupId, env)));
+  await Promise.all(recipientUids.map((recipientUid) => sendSocialPush(recipientUid, uid,
+      'GROUP_MESSAGE', groupId, env)));
   return { message: await publicGroupMessage(message, uid, env) };
 }
 
@@ -4244,90 +3862,13 @@ function cardActionKind(value) {
   return kind;
 }
 
-function commentReactionKind(value) {
-  const kind = String(value || '');
-  if (kind !== 'LIKE' && kind !== 'DISLIKE') throw new Error('不支持的评论互动类型。');
-  return kind;
-}
-
 async function toggleCardAction(uid, payload, env) {
   const kind = cardActionKind(payload.action);
   return kind === 'LIKE' ? stage1.mutateReaction(uid, payload, env, true) : stage1.toggleFavorite(uid, payload, env);
 }
 
-async function createCardComment(uid, payload, env) {
-  const cardId = String(payload.cardId || '');
-  const content = String(payload.content || '').trim();
-  if (!content.length || content.length > MAX_COMMENT_LENGTH) throw new Error('评论长度无效。');
-  const commentId = crypto.randomUUID();
-  let cardOwner = '';
-  let replyToUid = '';
-  const committed = await collection(env, 'CardComment').runTransaction({ apply: async (tx) => {
-    const profile = await stage1.activeProfile(tx, uid, env);
-    const card = await stage1.txOne(tx, env, 'FoodCard', 'id', cardId);
-    await transactionPolicy(tx, env, [profile]).assertCardReadable(uid, card);
-    const parentId = String(payload.parentCommentId || '');
-    const parent = parentId ? await stage1.txOne(tx, env, 'CardComment', 'id', parentId) : null;
-    if (parentId && (!parent || parent.cardId !== cardId || parent.status !== 'ACTIVE')) throw accessError('回复目标已失效。');
-    replyToUid = parent ? String(parent.authorUid || '') : '';
-    const recipient = replyToUid ? await stage1.txOne(tx, env, 'UserProfile', 'uid', replyToUid) : null;
-    if (parent && !isAccountActive(recipient)) throw accessError('回复目标账号已停用。');
-    const now = logicalWriteTime(profile.updatedAt);
-    stage1.upsertRows(tx, [Object.assign(new CardComment(), {
-      id: commentId, cardId, authorUid: uid, parentId: parent ? String(parent.parentId || parent.id) : '',
-      replyToUid, replyToNickname: recipient ? String(recipient.nicknameValue || recipient.nickname || '食刻用户') : '',
-      content, status: 'ACTIVE', createdAt: now, updatedAt: now
-    }), Object.assign(new FoodCard(), card), profileForWrite(profile, now)]);
-    cardOwner = String(card.ownerUid); return true;
-  } });
-  if (!committed) throw new Error('评论未保存。');
-  const recipients = new Map();
-  if (cardOwner !== uid) recipients.set(cardOwner, 'CARD_COMMENT');
-  if (replyToUid && replyToUid !== uid) recipients.set(replyToUid, 'REPLY');
-  await Promise.all([...recipients.entries()].map(([recipientUid, kind]) => emitNotification(recipientUid, uid, kind, commentId, cardId, env)));
-  return { success: true };
-}
-
-async function deleteCardComment(uid, payload, env) {
-  const committed = await collection(env, 'CardComment').runTransaction({ apply: async (tx) => {
-    await stage1.activeProfile(tx, uid, env);
-    const comment = await stage1.txOne(tx, env, 'CardComment', 'id', String(payload.commentId || ''));
-    if (!comment || (comment.authorUid !== uid && !isAdministrator(uid, env))) throw accessError('评论不存在或无权删除。');
-    if (comment.status !== 'DELETED') stage1.upsertRows(tx, [Object.assign(new CardComment(), comment, {
-      status: 'DELETED', updatedAt: logicalWriteTime(comment.updatedAt)
-    })]);
-    return true;
-  } });
-  if (!committed) throw new Error('评论状态未保存。');
-  return { success: true };
-}
-
-async function toggleCommentReaction(uid, payload, env) {
-  const commentId = String(payload.commentId || '');
-  const kind = commentReactionKind(payload.reaction);
-  const id = actionId('comment', uid, commentId);
-  let reaction = '';
-  const committed = await collection(env, 'CommentReaction').runTransaction({ apply: async (tx) => {
-    const profile = await stage1.activeProfile(tx, uid, env);
-    const comment = await stage1.txOne(tx, env, 'CardComment', 'id', commentId);
-    if (!comment || comment.status !== 'ACTIVE' || comment.authorUid === uid) throw accessError('评论不存在或不能互动。');
-    const card = await stage1.txOne(tx, env, 'FoodCard', 'id', comment.cardId);
-    await transactionPolicy(tx, env, [profile]).assertCardReadable(uid, card);
-    const existing = await stage1.txOne(tx, env, 'CommentReaction', 'id', id);
-    reaction = existing && existing.kind === kind ? '' : kind;
-    if (!reaction) tx.executeDelete([existing]);
-    else stage1.upsertRows(tx, [Object.assign(new CommentReaction(), { id, actorUid: uid, commentId, kind, createdAt: Date.now() })]);
-    stage1.upsertRows(tx, [Object.assign(new CardComment(), comment), Object.assign(new FoodCard(), card),
-      profileForWrite(profile, logicalWriteTime(profile.updatedAt))]);
-    return true;
-  } });
-  if (!committed) throw new Error('评论互动未保存。');
-  const summary = await commentReactionSummary(commentId, uid, env);
-  return { active: !!reaction, reaction, likeCount: summary.likeCount, dislikeCount: summary.dislikeCount };
-}
-
 async function reportCard(uid, payload, env) {
-  return moderation.submitReport(uid, payload, env, 'CARD');
+  return contentStatus.submitReport(uid, payload, env, 'CARD');
 }
 
 async function deleteOwnCard(uid, payload, env) {
@@ -4354,92 +3895,15 @@ async function verifiedDeletionUid(accessToken, env) {
   return binding ? String(binding.canonicalUid || providerUid) : providerUid;
 }
 
-async function assertAdmin(uid, env) {
-  await contentPolicy(env).assertAccountActive(uid);
-  if (!isAdministrator(uid, env)) throw accessError('403：没有管理员权限。', 'FORBIDDEN');
-}
-
-async function listModerationCards(uid, payload, env) {
-  await assertAdmin(uid, env);
-  const requestedSize = Number(payload.pageSize || MAX_PAGE_SIZE);
-  const pageSize = Number.isFinite(requestedSize) ? Math.floor(Math.min(MAX_PAGE_SIZE, Math.max(1, requestedSize))) : MAX_PAGE_SIZE;
-  const offset = Number(payload.pageToken || 0);
-  if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('审核分页参数无效。');
-  const items = [];
-  let cursor = offset;
-  let scanned = 0;
-  let hasMore = true;
-  while (scanned < 200 && items.length < pageSize) {
-    const limit = Math.min(50, 200 - scanned);
-    const rows = await collection(env, 'FoodCard').query().equalTo('status', 'APPROVED')
-      .orderByDesc('createdAt').orderByAsc('id').limit(limit, cursor).get();
-    if (rows.length === 0) { hasMore = false; break; }
-    for (let index = 0; index < rows.length; index += 1) {
-      const row = rows[index];
-      cursor += 1;
-      scanned += 1;
-      if (row.reviewState === 'PENDING_POST_REVIEW' && row.deletedAt == null && row.purgeAt == null) {
-        items.push({ cardId: String(row.id || ''), ownerUid: String(row.ownerUid || ''),
-          productName: String(row.productName || ''), reviewText: String(row.reviewText || ''),
-          sourceLink: String(row.sourceLink || ''), visibility: currentVisibility(row),
-          reviewState: row.reviewState, modifiedAt: dateMillis(row.modifiedAt),
-          createdAt: Number(row.createdAt || 0), photos: await publicPhotos(row, env, true) });
-      }
-      if (items.length === pageSize) {
-        return { items, nextPageToken: index + 1 < rows.length || rows.length === limit ? String(cursor) : '' };
-      }
-    }
-    if (rows.length < limit) { hasMore = false; break; }
-  }
-  return { items, nextPageToken: hasMore ? String(cursor) : '' };
-}
-
-async function moderateCard(uid, payload, env) {
-  await assertAdmin(uid, env);
-  const cardId = String(payload.cardId || '').trim();
-  const action = String(payload.action || '');
-  if (!cardId || (action !== 'APPROVE' && action !== 'TAKE_DOWN')) throw new Error('审核操作无效。');
-  const cards = collection(env, 'FoodCard');
-  let reviewed = null;
-  const committed = await cards.runTransaction({
-    apply: async (transaction) => {
-      const rows = await transaction.executeQuery(cards.query().equalTo('id', cardId).limit(1));
-      const row = rows[0];
-      if (!row) throw accessError('内容不存在。');
-      const owners = await transaction.executeQuery(collection(env, 'UserProfile').query()
-        .equalTo('uid', String(row.ownerUid || '')).limit(1));
-      if (payload.expectedModifiedAt != null && dateMillis(row.modifiedAt) !== Number(payload.expectedModifiedAt)) {
-        throw accessError('内容已变化，请刷新审核列表。', 'CONFLICT');
-      }
-      if (action === 'APPROVE' && (row.status !== 'APPROVED' || row.reviewState !== 'PENDING_POST_REVIEW' ||
-          row.deletedAt != null || row.purgeAt != null || !isAccountActive(owners[0]))) {
-        throw accessError('当前内容不能批准。', 'INVALID_STATE');
-      }
-      const now = Math.max(Date.now(), Number(row.updatedAt || 0) + 1, (dateMillis(row.modifiedAt) || 0) + 1);
-      reviewed = Object.assign(new FoodCard(), row, {
-        reviewState: action === 'APPROVE' ? 'APPROVED' : 'TAKEN_DOWN',
-        status: action === 'APPROVE' ? 'APPROVED' : 'REMOVED',
-        publishedAt: new Date(now), modifiedAt: new Date(now), updatedAt: now
-      });
-      const counters = await stage2.prepareCounterTransition(transaction, row, reviewed, owners[0], env, now);
-      stage1.upsertRows(transaction, [reviewed, ...counters]);
-      return true;
-    }
-  });
-  if (!committed || !reviewed) throw new Error('审核操作未完成，请重试。');
-  return { success: true, cardId, reviewState: reviewed.reviewState,
-    publishedAt: dateMillis(reviewed.publishedAt), modifiedAt: dateMillis(reviewed.modifiedAt) };
-}
-
 const stage1 = require('./stage1-services').createStage1Services({
   collection, one, transactionPolicy, contentPolicy, profileForWrite, logicalWriteTime,
-  assertAdmin, validateCard, uniqueMediaIds, promotePendingMedia, refreshPublishCount, actionId, safeArray,
+  validateCard, uniqueMediaIds, promotePendingMedia, refreshPublishCount, actionId, safeArray,
   recoveryPeriod: env => String(env.SHIKE_ENVIRONMENT || '') === 'test' && Number.isSafeInteger(Number(env.SHIKE_TEST_RECOVERY_SECONDS)) && Number(env.SHIKE_TEST_RECOVERY_SECONDS) >= 30 && Number(env.SHIKE_TEST_RECOVERY_SECONDS) <= 86400 ? Number(env.SHIKE_TEST_RECOVERY_SECONDS) * 1000 : 30 * 86400000,
   personalized: PERSONALIZED, models: OBJECT_TYPES, stage2: () => stage2, collections: () => personalCollections, publicCard
 });
 
 const stage2 = require('./stage2-services').createStage2Services({
-  collection, one, models: OBJECT_TYPES, profileForWrite, logicalWriteTime, assertAdmin, contentPolicy
+  collection, one, models: OBJECT_TYPES, profileForWrite, logicalWriteTime, contentPolicy
 });
 
 const stage3 = require('./stage3-services').createStage3Services({
@@ -4449,49 +3913,38 @@ const stage3 = require('./stage3-services').createStage3Services({
 
 const stages47Context = { collection, one, models: OBJECT_TYPES, contentPolicy, transactionPolicy, readableCardRows,
   readCardIfAllowed, finalizeCardReads, createCardReadContext, preparePrimaryPhotos, readCardRowsByIds, readMerchantRowsByIds, withReadPhase, recordReadCounts,
-  profileForWrite, logicalWriteTime, actionId, friendshipRowsFor, friendshipBetween,
-  encryptPrivateText, decryptPrivateText, profileResponse, previewCard, collections: () => personalCollections,
+  profileForWrite, logicalWriteTime, actionId, socialPairId, friendshipRowsFor, friendshipBetween,
+  encryptPrivateText, decryptPrivateText, profileResponse, previewCard, publicPhotos, collections: () => personalCollections,
   stage1: () => stage1, stage2: () => stage2,
-  stage3: () => stage3, stage4: () => stage4, stage5: () => stage5,
+  stage3: () => stage3, foodRankings: () => foodRankings,
   readPublicShareMedia: (card, media, env) => getPublicMedia('', { bucketName: required(env, 'SHIKE_STORAGE_BUCKET'), cloudPath: approvedObjectKeyForMedia(media) }, env)
 };
 const personalCollections = require('./personal-collections').createPersonalCollections(stages47Context);
-const stage4 = require('./stage4-services').createStage4Services(stages47Context);
-const stage5 = require('./stage5-services').createStage5Services(stages47Context);
 const stage6 = require('./stage6-services').createStage6Services(stages47Context);
+const randomFood = require('./random-food-services').createRandomFoodServices(stages47Context);
+const foodRankings = require('./food-ranking-services').createFoodRankingServices(stages47Context);
 const stage7 = require('./stage7-services').createStage7Services(stages47Context);
 
 const authenticationCleanup = require('./authentication-cleanup').createAuthenticationCleanup({ decryptPrivateText, verifiedAgcUid });
-const stage8Context = { ...stages47Context, assertAdmin, isAdministrator, publicPhotos, uniqueMediaIds, refreshPublishCount,
+const contentLifecycleContext = { ...stages47Context,
   legacyReportId: (uid,cardId) => crypto.createHash('sha256').update(uid+':'+cardId).digest('hex'),
-  photoReference: (media,env) => ({ id: media.id, url: '', path: approvedObjectKeyForMedia(media), bucket: required(env,'SHIKE_STORAGE_BUCKET'), width: Number(media.width||0), height: Number(media.height||0) }),
   removeMediaFiles: async (media,env) => { const owner=media.storageUid||media.ownerUid; await callMedia('remove',{keys:[pendingObjectKey(owner,media.id),approvedObjectKey(owner,media.id)]},env); },
   deleteAuthentication: (job,binding,env) => authenticationCleanup.remove(job,binding,env),
-  processLegacyJob: async (job,env) => job.jobType==='PURGE_CONVERSATION' ? processFriendCleanup(job.jobId,env) : stage1.processMigration(String(env.SHIKE_MIGRATION_ANCHOR_UID||String(env.SHIKE_ADMIN_UIDS||'').split(',')[0]||''),{jobId:job.jobId},env)
+  processLegacyJob: async (job,env) => job.jobType==='PURGE_CONVERSATION' ? processFriendCleanup(job.jobId,env) : stage1.processMigration({jobId:job.jobId},env)
 };
-const moderation = require('./moderation-services').createModerationServices(stage8Context);
-const lifecycle = require('./lifecycle-services').createLifecycleServices(stage8Context);
+const contentStatus = require('./content-status-services').createContentStatusServices(contentLifecycleContext);
+const lifecycle = require('./lifecycle-services').createLifecycleServices(contentLifecycleContext);
 async function getReviewMedia(uid, payload, env) {
   return require('./shared/image-reader').readLegacy({ ...payload, viewerUid: uid, mode: 'REVIEW', variant: 'ORIGINAL' }, env);
 }
 
 const operations = {
-  'get-stage89-capabilities': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return moderation.capabilities(uid,env,payload); },
-  'list-moderation-queue': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return moderation.queue(uid,payload,env); },
-  'get-moderation-detail': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return moderation.detail(uid,payload,env); },
-  'decide-moderation': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return moderation.decide(uid,payload,env); },
-  'list-my-reports': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return moderation.queue(uid,payload,env,true); },
-  'report-merchant': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return moderation.submitReport(uid,payload,env,'MERCHANT'); },
-  'list-own-review-requests': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return moderation.ownReviewQueue(uid,payload,env); },
+  'list-my-reports': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return contentStatus.reports(uid,payload,env); },
+  'report-merchant': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return contentStatus.submitReport(uid,payload,env,'MERCHANT'); },
+  'list-own-review-requests': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return contentStatus.ownReviewQueue(uid,payload,env); },
   'list-deleted-cards': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return lifecycle.deleted(uid,payload,env); },
   'restore-deleted-card': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return lifecycle.restore(uid,payload,env); },
-  'list-lifecycle-jobs': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return lifecycle.jobs(uid,payload,env); },
-  'get-lifecycle-job': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return lifecycle.jobDetail(uid,payload,env); },
-  'retry-lifecycle-job': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return lifecycle.retry(uid,payload,env); },
-  'confirm-auth-cleanup': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return lifecycle.retry(uid,payload,env,true); },
   'get-review-media': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return getReviewMedia(uid,payload,env); },
-  'run-lifecycle-job': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); await assertAdmin(uid,env); const result=await lifecycle.process(String(payload.jobId||''),env); return {success:true,...result}; },
-
   'get-card-previews': async ({ accessToken, payload }, env) => { const uid = accessToken ? await verifiedUid(accessToken, env, true) : ''; return personalCollections.previews(uid,payload,env); },
   'list-personal-collection': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env, true); return personalCollections.list(uid,payload,env); },
   'get-personal-collection-migration': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env, true); return personalCollections.status(uid,env); },
@@ -4500,20 +3953,11 @@ const operations = {
   'set-card-favorite': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return personalCollections.set(uid,payload,env,'FAVORITE'); },
   'set-card-wanted': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return personalCollections.set(uid,payload,env,'WANT_TO_EAT'); },
   'get-stage47-capabilities': async ({ accessToken, payload }, env) => { const uid = accessToken ? await verifiedUid(accessToken, env, true) : ''; return stage7.capabilities(uid,env); },
-  'get-taste-preference': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env, true); return stage4.get(uid,env); },
-  'update-taste-preference': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage4.update(uid,payload,env); },
-  'clear-taste-preference': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage4.update(uid,payload,env,true); },
-  'list-personalized-recommendations': async ({ accessToken, payload }, env) => { const uid = accessToken ? await verifiedUid(accessToken, env, true) : ''; return stage4.recommendations(uid,payload,env); },
-  'list-food-lists': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env, true); return stage5.lists(uid,payload,env); },
-  'create-food-list': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage5.create(uid,payload,env); },
-  'update-food-list': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage5.update(uid,payload,env); },
-  'delete-food-list': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage5.update(uid,payload,env,true); },
-  'list-food-list-items': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env, true); return stage5.items(uid,payload,env); },
-  'add-food-list-item': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage5.item(uid,payload,env); },
-  'remove-food-list-item': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage5.item(uid,payload,env,true); },
-  'reorder-food-list-items': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage5.reorder(uid,payload,env); },
-  'get-personal-food-state': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env, true); return stage5.personal(uid,payload,env); },
-  'update-personal-food-state': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage5.updatePersonal(uid,payload,env); },
+  'get-random-food-pool': async ({ accessToken, payload }, env) => { const uid = accessToken ? await verifiedUid(accessToken, env, true) : ''; return randomFood.pool(uid,payload,env); },
+  'get-random-food-cards': async ({ accessToken, payload }, env) => { const uid = accessToken ? await verifiedUid(accessToken, env, true) : ''; return randomFood.cards(uid,payload,env); },
+  'save-food-choice': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return randomFood.saveChoice(uid,payload,env); },
+  'list-food-choices': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return randomFood.history(uid,payload,env); },
+  'delete-food-choice': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return randomFood.deleteChoice(uid,payload,env); },
   'get-meal-candidates': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env, true); return stage6.candidates(uid,payload,env); },
   'create-meal-poll': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage6.createPoll(uid,payload,env); },
   'get-meal-poll': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage6.getPoll(uid,payload,env); },
@@ -4523,7 +3967,7 @@ const operations = {
   'cancel-meal-poll': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage6.mutatePoll(uid,payload,env,'CANCEL'); },
   'stop-meal-poll-options': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage6.mutatePoll(uid,payload,env,'STOP'); },
   'get-user-page': async ({ accessToken, payload }, env) => { const uid = accessToken ? await verifiedUid(accessToken, env, true) : ''; return stage7.userPage(uid,payload,env); },
-  'list-merchant-rankings': async ({ accessToken, payload }, env) => { const uid = accessToken ? await verifiedUid(accessToken, env, true) : ''; return stage7.rankings(uid,payload,env); },
+  'list-food-rankings': async ({ accessToken, payload }, env) => { const uid = accessToken ? await verifiedUid(accessToken, env, true) : ''; return foodRankings.list(uid,payload,env); },
   'set-card-reaction-v2': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage7.reaction(uid,payload,env); },
   'get-discovery-capabilities': async ({ accessToken }, env) => {
     if (accessToken) await verifiedUid(accessToken, env, true);
@@ -4537,34 +3981,12 @@ const operations = {
   'create-user-merchant': async ({ accessToken, payload }, env) => stage2.createUserMerchant(await verifiedUid(accessToken, env), payload, env),
   'update-user-merchant': async ({ accessToken, payload }, env) => stage2.updateUserMerchant(await verifiedUid(accessToken, env), payload, env),
   'get-merchant': async ({ accessToken, payload }, env) => stage2.getMerchant(await verifiedUid(accessToken, env), payload, env),
-  'list-moderation-merchants': async ({ accessToken, payload }, env) => stage2.listModerationMerchants(await verifiedUid(accessToken, env), payload, env),
-  'moderate-merchant': async ({ accessToken, payload }, env) => stage2.moderateMerchant(await verifiedUid(accessToken, env), payload, env),
-  'reconcile-merchant-counters': async ({ accessToken, payload }, env) => stage2.reconcileMerchantPublicCounters(await verifiedUid(accessToken, env), payload, env),
   'get-card-edit-context': async ({ accessToken, payload }, env) => stage1.getEditContext(await verifiedUid(accessToken, env), payload, env),
   'get-revision-media': async ({ accessToken, payload }, env) => getRevisionMedia(await verifiedUid(accessToken, env), payload, env),
   'set-card-reaction': async ({ accessToken, payload }, env) => stage1.mutateReaction(await verifiedUid(accessToken, env), payload, env),
   'submit-card-revision': async ({ accessToken, payload }, env) => stage1.submitRevision(await verifiedUid(accessToken, env), payload, env),
   'get-card-revision': async ({ accessToken, payload }, env) => stage1.getRevision(await verifiedUid(accessToken, env), payload, env),
-  'withdraw-card-revision': async ({ accessToken, payload }, env) => stage1.decideRevision(await verifiedUid(accessToken, env), payload, env, true),
-  'list-moderation-revisions': async ({ accessToken, payload }, env) => stage1.listRevisions(await verifiedUid(accessToken, env), payload, env),
-  'moderate-card-revision': async ({ accessToken, payload }, env) => stage1.decideRevision(await verifiedUid(accessToken, env), payload, env),
-  'start-migration-job': async ({ accessToken, payload }, env) => stage1.startMigration(await verifiedUid(accessToken, env), payload, env),
-  'process-migration-job': async ({ accessToken, payload }, env) => stage1.processMigration(await verifiedUid(accessToken, env), payload, env),
-  'get-migration-status': async ({ accessToken }, env) => stage1.migrationStatus(await verifiedUid(accessToken, env, true), env),
-  'list-maintenance-jobs': async ({ accessToken, payload }, env) => stage1.listJobs(await verifiedUid(accessToken, env), payload, env),
-  'get-maintenance-job': async ({ accessToken, payload }, env) => stage1.getJob(await verifiedUid(accessToken, env), payload, env),
-  'retry-maintenance-job': async ({ accessToken, payload }, env) => stage1.retryJob(await verifiedUid(accessToken, env), payload, env),
-  'validate-lifecycle-job': async ({ accessToken, payload }, env) => stage1.validateLifecycleJob(await verifiedUid(accessToken, env), payload, env),
-  'process-friend-cleanup-job': async ({ accessToken, payload }, env) => {
-    await assertAdmin(await verifiedUid(accessToken, env), env);
-    const jobId = String(payload.jobId || '');
-    if (!/^[0-9a-f]{64}$/.test(jobId)) throw new Error('清理任务标识无效。');
-    return processFriendCleanup(jobId, env);
-  },
-  'list-moderation-cards': async ({ accessToken, payload }, env) =>
-    listModerationCards(await verifiedUid(accessToken, env), payload, env),
-  'moderate-card': async ({ accessToken, payload }, env) =>
-    moderateCard(await verifiedUid(accessToken, env), payload, env),
+  'withdraw-card-revision': async ({ accessToken, payload }, env) => stage1.withdrawRevision(await verifiedUid(accessToken, env), payload, env),
   'complete-legacy-login': async ({ accessToken, payload }, env) =>
     completeLegacyLogin(accessToken, payload, env),
   'start-email-binding': async ({ accessToken }, env) => startEmailBinding(accessToken, env),
@@ -4582,15 +4004,12 @@ const operations = {
   'publish-card': async ({ accessToken, payload }, env) => publishCard(await verifiedUid(accessToken, env), payload, env),
   'list-nearby-cards': async ({ accessToken, payload }, env) => payload.scope === 'all'
     ? listPublicRecommendations(payload, env, accessToken ? await verifiedUid(accessToken, env, true) : '') : listNearby(await verifiedUid(accessToken, env, true), payload, env),
-  'list-friend-rankings': async ({ accessToken }, env) => listFriendRankings(await verifiedUid(accessToken, env, true), env),
   'get-friend-profile': async ({ accessToken, payload }, env) =>
     friendProfile(await verifiedUid(accessToken, env, true), payload, env),
   'get-card-detail': async ({ accessToken, payload }, env) =>
     cardDetail(accessToken ? await verifiedUid(accessToken, env, true) : '', payload, env),
   'list-my-cards': async ({ accessToken }, env) => myCards(await verifiedUid(accessToken, env), env),
   'list-my-favorite-cards': async ({ accessToken }, env) => myFavoriteCards(await verifiedUid(accessToken, env), env),
-  'list-received-comments': async ({ accessToken, payload }, env) =>
-    receivedComments(await verifiedUid(accessToken, env), payload, env),
   'search-users': async ({ accessToken, payload }, env) => searchUsers(await verifiedUid(accessToken, env), payload, env),
   'list-friends': async ({ accessToken, payload }, env) =>
     listFriends(await verifiedUid(accessToken, env), payload, env),
@@ -4625,14 +4044,6 @@ const operations = {
     leaveGroupChat(await verifiedUid(accessToken, env), payload, env),
   'remove-group-member': async ({ accessToken, payload }, env) =>
     removeGroupMember(await verifiedUid(accessToken, env), payload, env),
-  'list-notifications': async ({ accessToken, payload }, env) =>
-    listNotifications(await verifiedUid(accessToken, env, true), payload, env),
-  'mark-notification-read': async ({ accessToken, payload }, env) =>
-    markNotificationRead(await verifiedUid(accessToken, env), payload, env),
-  'mark-all-notifications-read': async ({ accessToken }, env) =>
-    markAllNotificationsRead(await verifiedUid(accessToken, env), env),
-  'open-notification': async ({ accessToken, payload }, env) =>
-    openNotification(await verifiedUid(accessToken, env), payload, env),
   'register-push-device': async ({ accessToken, payload }, env) =>
     registerPushDevice(await verifiedUid(accessToken, env), payload, env),
   'unregister-push-device': async ({ accessToken, payload }, env) =>
@@ -4645,9 +4056,6 @@ const operations = {
     pushServiceCardUpdate(await verifiedUid(accessToken, env), payload, env),
   'report-card': async ({ accessToken, payload }, env) => reportCard(await verifiedUid(accessToken, env), payload, env),
   'toggle-card-action': async ({ accessToken, payload }, env) => toggleCardAction(await verifiedUid(accessToken, env), payload, env),
-  'create-card-comment': async ({ accessToken, payload }, env) => createCardComment(await verifiedUid(accessToken, env), payload, env),
-  'delete-card-comment': async ({ accessToken, payload }, env) => deleteCardComment(await verifiedUid(accessToken, env), payload, env),
-  'toggle-comment-reaction': async ({ accessToken, payload }, env) => toggleCommentReaction(await verifiedUid(accessToken, env), payload, env),
   'delete-own-card': async ({ accessToken, payload }, env) => deleteOwnCard(await verifiedUid(accessToken, env), payload, env),
   'delete-account-data': async ({ accessToken }, env) => cleanupAccount(await verifiedDeletionUid(accessToken, env), env, accessToken)
 };
@@ -4683,9 +4091,6 @@ async function executeOperation(operation, input, env = process.env) {
 // same cursor: publicizing a row and reconciling a merchant are both idempotent.
 async function normalizePublicContent(env = process.env, cursor = '') {
   if (typeof cursor !== 'string' || cursor.length > 128) throw accessError('迁移游标无效。', 'VALIDATION_ERROR');
-  const admin = String(env.SHIKE_ADMIN_UIDS || process.env.SHIKE_ADMIN_UIDS || '').split(',').map(value => value.trim()).find(Boolean);
-  if (!admin) throw accessError('公开整理需要配置管理员。', 'CONFIGURATION_REQUIRED');
-  await assertAdmin(admin, env);
   let query = collection(env, 'FoodCard').query();
   if (cursor) query = query.greaterThan('id', cursor);
   const rows = await query.orderByAsc('id').limit(10).get();
@@ -4709,13 +4114,17 @@ async function normalizePublicContent(env = process.env, cursor = '') {
   }
   // Reconcile even rows that were already public, so a failed previous batch
   // cannot skip a merchant whose counter update was not committed.
-  for (const merchantId of merchants) await stage2.reconcileMerchantPublicCounters(admin, { merchantId }, env);
+  for (const merchantId of merchants) await stage2.reconcileMerchantPublicCounters({ merchantId }, env);
   const hasMore = rows.length === 10;
   return { scanned: rows.length, changed, merchantsReconciled: merchants.size,
     nextCursor: hasMore ? String(rows[rows.length - 1].id) : '', hasMore };
 }
 
-module.exports = { normalizePublicContent, runMaintenance: env => {
+module.exports = { normalizePublicContent, maintainCardHistory: (payload, env) => {
+  const source = env || process.env, id = crypto.randomUUID();
+  return readRequestScope.run(id, () => withReadMetrics('card-history-maintenance', source,
+    () => stage1.cardHistoryMaintenance(payload, source), id));
+}, runMaintenance: env => {
   const source = env || process.env, id = crypto.randomUUID();
   return readRequestScope.run(id, () => withReadMetrics('maintenance-tick', source, () => lifecycle.tick(source), id));
 }, createHandler, executeOperation, safeLogError, haversineKm, geohash,

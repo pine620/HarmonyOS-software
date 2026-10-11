@@ -3,7 +3,7 @@ import { DraftStore } from '../service/DraftStore';
 import { common } from '@kit.AbilityKit';
 import { ChoiceActionStyle, DangerActionStyle, FormInputStyle, FormNoteStyle, PrimaryActionStyle, QuietActionStyle, SecondaryActionStyle } from '../common/Stage47Ui';
 import util from '@ohos.util';
-import { CardEditContextResponse, CardPhoto, CardRevisionChanges, CardRevisionView, FoodCard, FoodCategory,
+import { CardEditContextResponse, CardPhoto, CardRevisionChanges, CardRevisionResponse, CardRevisionView, FoodCard, FoodCategory,
   FoodCategoryV2, FoodConsumptionMode, PrepareCardPhotoRequest, PublishCardRequest,
   SubmitCardRevisionRequest } from '../model/CloudContracts';
 import { CreateUserMerchantRequest, DeliveryPlatform, Merchant, MerchantChoice, ResolveMerchantRequest,
@@ -84,6 +84,7 @@ export struct CreateCardPage {
   @State initializing: boolean = true;
   @State editContextReady: boolean = false;
   @State requestUnconfirmed: boolean = false;
+  @State savedEditNeedsReload: boolean = false;
   @State hasPublishedNotice: boolean = false;
   @State currentRevision: CardRevisionView | undefined = undefined;
   @State status: string = '填写美食信息，留下你的真实口碑。';
@@ -211,7 +212,7 @@ export struct CreateCardPage {
     this.merchant = undefined; this.merchantChoice = undefined; this.pendingMerchantRequest = undefined;
     this.merchantRequestId = ''; this.merchantName = ''; this.merchantAddress = ''; this.correctingMerchant = false;
     this.platformKey = ''; this.platformLabel = ''; this.photoPreviewUris = []; this.photoLabel = ''; this.ownsPhoto = false;
-    this.currentRevision = undefined; this.baseCard = undefined; this.editContextReady = false; this.historicalShop = ''; this.hasPublishedNotice = false;
+    this.currentRevision = undefined; this.baseCard = undefined; this.editContextReady = false; this.savedEditNeedsReload = false; this.historicalShop = ''; this.hasPublishedNotice = false;
     this.status = '填写美食信息，留下你的真实口碑。'; this.modeCacheAt = Date.now();
   }
   private async initialize(): Promise<void> {
@@ -279,8 +280,8 @@ export struct CreateCardPage {
         if (!this.stillCurrent(generation)) return;
         const photo: RetainedPhoto = { id, url: uri }; kept.push(photo);
       }
-      this.status = revision.status === 'PENDING' ? '已载入待审版本；提交会替换旧待审版本，公开展示仍是旧版。' :
-        '编辑被退回：' + revision.reviewReason + '。修改后可重新提交。';
+      this.status = revision.status === 'PENDING' ? '已载入旧待审编辑；检查内容后保存，修改将直接生效。' :
+        '旧编辑被退回：' + revision.reviewReason + '。检查并修改后保存，修改将直接生效。';
     } else {
       const photos: Array<CardPhoto> = card.photos === undefined ? [] : card.photos;
       for (const photo of photos) {
@@ -289,7 +290,7 @@ export struct CreateCardPage {
         if (!this.stillCurrent(generation)) return;
         const retained: RetainedPhoto = { id: photo.id, url: uri }; if (photo.id.length > 0) kept.push(retained);
       }
-      this.status = card.reviewState === 'REQUEST_CHANGE' ? '审核要求修改：' + (card.reviewReason || '请检查内容') + '。修改后重新提交审核。' : revision !== null ? '旧编辑已结束或基准变化，已载入当前版本；请重新检查后提交。' : '编辑提交后待审，当前展示保持旧版本。';
+      this.status = card.reviewState === 'REQUEST_CHANGE' ? '历史修改要求：' + (card.reviewReason || '请检查内容') + '。修改并保存后将直接生效。' : revision !== null ? '旧编辑已结束或基准变化，已载入当前版本；请检查后保存。' : '保存后修改将直接生效。';
     }
     this.category = legacyCategoryFor(this.categoryV2); this.retainedPhotos = kept; this.ownsPhoto = kept.length > 0;
     if (merchantId.length > 0) {
@@ -463,15 +464,33 @@ export struct CreateCardPage {
         }
         this.requestUnconfirmed = true;
         await this.flushDraft(true);
-        const result = await this.editRepository.submit(this.context(), request);
+        const result: CardRevisionResponse = await this.editRepository.submit(this.context(), request);
         if (!this.stillCurrent(generation)) return;
+        this.initializing = true;
+        this.savedEditNeedsReload = result.revision.status === 'APPROVED';
         this.pendingRevision = undefined; this.publicationRequestId = ''; this.requestUnconfirmed = false;
-        try { await DraftStore.remove(this.context(), this.activeUid, this.draftId); } catch (_error) { this.draftNotice = '提交已确认，本机草稿清理待重试。'; } this.draftId = util.generateRandomUUID(); this.currentRevision = result.revision; this.preparedPhotos = []; this.uploadedMediaIds = []; this.photoPreviewUris = [];
-        this.initializing = true; await this.loadEditContext(generation); this.initializing = false;
-        this.status = result.revision.status === 'PENDING' ? '编辑已提交待审；公开展示仍保持旧版。可继续编辑或撤回。' :
-          result.revision.status === 'APPROVED' ? '原编辑已审核通过；已载入当前版本。' :
-          result.revision.status === 'REJECTED' ? '原编辑已被退回：' + result.revision.reviewReason :
-          '原编辑已撤回或被替换；已读取当前编辑状态。';
+        try { await DraftStore.remove(this.context(), this.activeUid, this.draftId); }
+        catch (_error) { if (this.stillCurrent(generation)) this.draftNotice = '提交结果已确认，本机草稿清理待重试。'; }
+        if (!this.stillCurrent(generation)) return;
+        if (this.draftTimer !== undefined) clearTimeout(this.draftTimer);
+        this.draftTimer = undefined; this.draftDirty = false; this.draftId = util.generateRandomUUID();
+        this.currentRevision = result.revision; this.preparedPhotos = []; this.uploadedMediaIds = []; this.photoPreviewUris = [];
+        try {
+          await this.loadEditContext(generation);
+          if (!this.stillCurrent(generation)) return;
+          this.savedEditNeedsReload = false;
+          this.status = result.revision.status === 'APPROVED' ? '修改已保存并生效，已载入最新内容。' :
+            result.revision.status === 'PENDING' ? '云端仍返回旧待审结果，修改尚未生效。请更新云服务后保存。' :
+            result.revision.status === 'REJECTED' ? '原请求已被退回，未应用本次修改：' + result.revision.reviewReason :
+            '原请求已撤回或被替换，未应用本次修改；已载入当前内容。';
+        } catch (error) {
+          if (!this.stillCurrent(generation)) return;
+          this.editContextReady = false;
+          this.status = result.revision.status === 'APPROVED' ?
+            '修改已保存并生效，但最新内容读取失败；请重新读取已保存内容。' :
+            '提交结果已确认，状态为 ' + result.revision.status + '；最新内容读取失败，请重新读取。';
+          this.status += ' ' + errorText(error as ErrorDetail);
+        }
       } else {
         let request: PublishCardRequest | undefined = this.pendingPublication;
         if (request === undefined) {
@@ -498,14 +517,14 @@ export struct CreateCardPage {
         this.successMerchant = this.merchant; this.successMode = this.mode;
         try { ModeFieldCache.clear(this.context(), this.activeUid, this.editCardId); } catch (_error) { }
         try { await DraftStore.remove(this.context(), this.activeUid, this.draftId); } catch (_error) { this.draftNotice = '发布已确认，本机草稿清理待重试。'; } this.draftReady = false; this.draftDirty = false; this.resetForm(); this.draftId = util.generateRandomUUID(); this.hasPublishedNotice = true;
-        this.status = '发布成功，已提交后审。可以继续发布同店菜品。'; this.onPublished();
+        this.status = '发布成功。可以继续发布同店菜品。'; this.onPublished();
       }
     } catch (error) {
       if (!this.stillCurrent(generation)) return;
       if (error instanceof CloudBusinessError) {
         // A business rejection is a confirmed response. Transport/handler errors
         // remain ambiguous and keep the immutable request for retry.
-        const confirmed: Array<string> = ['CONFLICT', 'VALIDATION_ERROR', 
+        const confirmed: Array<string> = ['CONFLICT', 'VALIDATION_ERROR',
           'MERCHANT_NOT_VERIFIED', 'ACCOUNT_INACTIVE', 'CONTENT_ACCESS_DENIED', 'COUNTER_RECONCILIATION_REQUIRED'];
         if (confirmed.includes(error.code)) { this.requestUnconfirmed = false; this.pendingRevision = undefined; this.pendingPublication = undefined; this.publicationRequestId = ''; }
         if (error.code === 'CONFLICT' && this.isEditing()) this.editContextReady = false;
@@ -524,7 +543,7 @@ export struct CreateCardPage {
     try {
       await this.editRepository.withdraw(this.context(), revision.revisionId);
       if (!this.stillCurrent(generation)) return;
-      await this.loadEditContext(generation); this.status = '已撤回编辑；当前展示保持原版。';
+      await this.loadEditContext(generation); this.status = '已撤回旧待审编辑；当前内容未改变。';
     } catch (error) { if (this.stillCurrent(generation)) this.status = errorText(error as ErrorDetail); }
     finally { if (this.stillCurrent(generation)) this.publishing = false; }
   }
@@ -533,11 +552,18 @@ export struct CreateCardPage {
     const generation: number = this.formGeneration;
     this.initializing = true;
     try {
+      if (this.savedEditNeedsReload) {
+        await this.loadEditContext(generation);
+        if (!this.stillCurrent(generation)) return;
+        this.savedEditNeedsReload = false;
+        this.status = '修改已保存并生效，已重新载入最新内容。';
+        return;
+      }
       const response: CardEditContextResponse = await this.editRepository.context(this.context(), this.editCardId);
       if (!this.stillCurrent(generation)) return;
       this.baseCard = response.card; this.currentRevision = response.revision === null ? undefined : response.revision;
       this.editContextReady = true;
-      this.status = '已读取最新编辑基准；保留了输入和照片，请检查后重新提交。旧图片失效时请重新选择。';
+      this.status = '已读取最新编辑基准；保留了输入和照片，请检查后重新保存。旧图片失效时请重新选择。';
     } catch (error) { if (this.stillCurrent(generation)) this.status = errorText(error as ErrorDetail); }
     finally { if (this.stillCurrent(generation)) this.initializing = false; }
   }
@@ -808,18 +834,18 @@ export struct CreateCardPage {
         }.width('100%').alignItems(HorizontalAlign.Start).padding(20).backgroundColor($r('app.color.accent_soft')).borderRadius(24);
         this.productInfoSection(); this.merchantSection();
         if (this.mode === 'DELIVERY') { this.deliverySection(); }
-        this.reviewSection(); this.photoSection(); 
+        this.reviewSection(); this.photoSection();
         Text(this.status).fontSize(13).lineHeight(20).fontColor(this.hasPublishedNotice ? $r('app.color.leaf') : $r('app.color.muted'))
           .width('100%').padding(12).backgroundColor($r('app.color.accent_soft')).borderRadius(16);
         if (this.isEditing() && !this.editContextReady && !this.initializing && !this.requestUnconfirmed) {
-          Button('读取最新基准并保留表单').height(48).width('100%').enabled(!this.publishing)
+          Button(this.savedEditNeedsReload ? '重新读取已保存内容' : '读取最新基准并保留表单').height(48).width('100%').enabled(!this.publishing)
             .onClick((): void => { void this.reloadEditBasis(); }).attributeModifier(new SecondaryActionStyle());
         }
-        Button(this.publishing ? '正在保存…' : this.requestUnconfirmed ? '重试原请求' : this.isEditing() ? '提交待审编辑' : '发布这张卡')
+        Button(this.publishing ? '正在保存…' : this.requestUnconfirmed ? '重试原请求' : this.isEditing() ? '保存修改' : '发布这张卡')
           .enabled((!this.isEditing() || this.editContextReady || this.requestUnconfirmed) && !this.publishing && !this.initializing && !this.merchantBusy && !this.merchantRequestUnconfirmed).width('100%').height(52)
           .onClick((): void => { void this.publish(); }).attributeModifier(new PrimaryActionStyle()).fontSize(16).fontWeight(FontWeight.Bold);
         if (this.isEditing() && this.currentRevision !== undefined && this.currentRevision.status === 'PENDING') {
-          Button('撤回待审编辑').height(48).width('100%').enabled(this.formEnabled()).onClick((): void => { void this.withdraw(); }).attributeModifier(new DangerActionStyle());
+          Button('撤回旧待审编辑').height(48).width('100%').enabled(this.formEnabled()).onClick((): void => { void this.withdraw(); }).attributeModifier(new DangerActionStyle());
         }
         if (!this.formEnabled() && !this.initializing && this.requestUnconfirmed) {
           Text('提交结果尚未确认，输入已保留。点击重试将继续上次提交。').fontSize(13).lineHeight(19).fontColor($r('app.color.warning'));

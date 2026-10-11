@@ -1,7 +1,7 @@
 import { bundleManager } from '@kit.AbilityKit';
 import { ImageDescriptors } from './ImageDescriptors';
 import { ImageReadItem, ImageReadRequest } from '../model/ImageModels';
-import { CardDetailRequest } from '../model/CloudContracts';
+import { CardDetailRequest, CardRevisionResponse } from '../model/CloudContracts';
 import { cloudCommon, cloudFunction } from '@kit.CloudFoundationKit';
 import { importObject, ShikeAuth, ShikeLocation, ShikeMedia, ShikeService } from '@shike/cloud-objects';
 import type { CloudEnvelope } from '@shike/cloud-objects';
@@ -14,15 +14,12 @@ export { CloudBusinessError } from './CloudReadErrors';
 type MediaOperation = 'prepare-card-photo' | 'upload-card-photo' | 'get-public-media';
 type MediaErrorSource = 'cloud-call' | 'business-response';
 type MediaCloudObjectName = 'shike-media' | 'shike-service';
-type Stage47ServiceMethod = 'getStage47Capabilities' | 'getTastePreference' | 'updateTastePreference' |
-  'clearTastePreference' | 'listPersonalizedRecommendations' | 'listFoodLists' | 'createFoodList' |
-  'updateFoodList' | 'deleteFoodList' | 'listFoodListItems' | 'addFoodListItem' | 'removeFoodListItem' |
-  'reorderFoodListItems' | 'getPersonalFoodState' | 'updatePersonalFoodState' | 'getMealCandidates' |
+type Stage47ServiceMethod = 'getRandomFoodPool' | 'getRandomFoodCards' | 'saveFoodChoice' | 'listFoodChoices' | 'deleteFoodChoice' | 'getStage47Capabilities' | 'getMealCandidates' |
   'createMealPoll' | 'getMealPoll' | 'addMealPollOption' |
   'voteMealPoll' | 'closeMealPoll' | 'cancelMealPoll' | 'stopMealPollOptions' | 'getUserPage' |
-  'listMerchantRankings' | 'setCardReactionV2' |
+  'listFoodRankings' | 'setCardReactionV2' |
   'getCardPreviews' | 'listPersonalCollection' | 'getPersonalCollectionMigration' |
-  'startPersonalCollectionMigration' | 'resumePersonalCollectionMigration' | 'setCardFavorite' | 'setCardWanted' | 'getStage89Capabilities' | 'listModerationQueue' | 'getModerationDetail' | 'decideModeration' | 'listMyReports' | 'reportMerchant' | 'listOwnReviewRequests' | 'listDeletedCards' | 'restoreDeletedCard' | 'listLifecycleJobs' | 'getLifecycleJob' | 'retryLifecycleJob' | 'confirmAuthCleanup' | 'getReviewMedia' | 'runLifecycleJob';
+  'startPersonalCollectionMigration' | 'resumePersonalCollectionMigration' | 'setCardFavorite' | 'setCardWanted' | 'listMyReports' | 'reportMerchant' | 'listOwnReviewRequests' | 'listDeletedCards' | 'restoreDeletedCard' | 'getReviewMedia';
 
 interface ReadCloudEnvelope extends CloudEnvelope {
   readRequestId: string;
@@ -91,6 +88,7 @@ interface ReadCardIdentity { id: string; }
 interface ReadCandidateIdentity { card: ReadCardIdentity; }
 interface ReadPreviewSummaryItem { accessible: boolean; }
 interface ReadPageSummary {
+  nextPageToken?: string;
   cards?: Array<ReadCardIdentity>;
   candidates?: Array<ReadCandidateIdentity>;
   items?: Array<ReadPreviewSummaryItem>;
@@ -271,23 +269,18 @@ export class CloudGateway {
   }
 
   private static hasPublicMediaManifest(name: string): boolean {
-    return ['get-card-detail', 'get-card-previews', 'list-personal-collection', 'list-personalized-recommendations',
-      'get-meal-candidates', 'get-user-page', 'get-friend-profile', 'list-merchant-rankings', 'search-public-cards',
-      'get-merchant-recommendations', 'list-nearby-cards', 'list-friend-rankings', 'list-my-cards', 'list-my-favorite-cards'].includes(name);
+    return ['get-card-detail', 'get-card-previews', 'list-personal-collection',
+      'get-random-food-cards', 'list-food-choices', 'get-meal-candidates', 'get-user-page', 'get-friend-profile', 'list-food-rankings', 'search-public-cards',
+      'get-merchant-recommendations', 'list-nearby-cards', 'list-my-cards', 'list-my-favorite-cards'].includes(name);
   }
 
   private static changesReadContent(name: string): boolean {
     switch (name) {
-      case 'update-taste-preference': case 'clear-taste-preference':
-      case 'create-food-list': case 'update-food-list': case 'delete-food-list':
-      case 'add-food-list-item': case 'remove-food-list-item': case 'reorder-food-list-items':
       case 'set-card-favorite': case 'set-card-wanted': case 'set-card-reaction-v2':
       case 'start-personal-collection-migration': case 'resume-personal-collection-migration':
-      case 'update-personal-food-state': case 'toggle-card-action':
+      case 'toggle-card-action':
       case 'delete-own-card': case 'delete-account-data': case 'publish-card': case 'publish-cards':
-      case 'decide-moderation': case 'restore-deleted-card': case 'report-merchant':
-      case 'retry-lifecycle-job': case 'confirm-auth-cleanup':
-      case 'moderate-card': case 'moderate-card-revision':
+      case 'restore-deleted-card': case 'report-merchant':
         return true;
       default: return false;
     }
@@ -303,12 +296,12 @@ export class CloudGateway {
         ' readable=' + readable + ' hasMore=' + String((preview.nextCursor || '').length > 0));
       return;
     }
-    if (name !== 'list-personalized-recommendations' && name !== 'get-meal-candidates') return;
+    if (name !== 'list-nearby-cards' && name !== 'get-meal-candidates') return;
     const summary: ReadPageSummary = data as ReadPageSummary;
     const returnedCount: number = summary.cards !== undefined ? summary.cards.length : (summary.candidates?.length || 0);
     // Counts and the logical request ID are sufficient to correlate a page; never log private food choices.
     console.info('[ReadPage] operation=' + name + ' requestId=' + requestId + ' returnedCount=' + returnedCount +
-      ' hasMore=' + String(summary.nextCursor !== undefined && summary.nextCursor.length > 0) +
+      ' hasMore=' + String((summary.nextCursor || summary.nextPageToken || '').length > 0) +
       ' coverage=' + (summary.coverage || '') + ' scanned=' + (summary.scannedCandidateCount || 0) +
       ' consumed=' + (summary.consumedCandidateCount || 0) + ' fetched=' + (summary.fetchedCandidateCount || 0));
   }
@@ -364,14 +357,6 @@ export class CloudGateway {
         raw = await CloudGateway.invokeStage47('setCardFavorite', envelope); break;
       case 'set-card-wanted':
         raw = await CloudGateway.invokeStage47('setCardWanted', envelope); break;
-      case 'get-stage89-capabilities':
-        raw = await CloudGateway.invokeStage47('getStage89Capabilities', envelope); break;
-      case 'list-moderation-queue':
-        raw = await CloudGateway.invokeStage47('listModerationQueue', envelope); break;
-      case 'get-moderation-detail':
-        raw = await CloudGateway.invokeStage47('getModerationDetail', envelope); break;
-      case 'decide-moderation':
-        raw = await CloudGateway.invokeStage47('decideModeration', envelope); break;
       case 'list-my-reports':
         raw = await CloudGateway.invokeStage47('listMyReports', envelope); break;
       case 'report-merchant':
@@ -382,63 +367,21 @@ export class CloudGateway {
         raw = await CloudGateway.invokeStage47('listDeletedCards', envelope); break;
       case 'restore-deleted-card':
         raw = await CloudGateway.invokeStage47('restoreDeletedCard', envelope); break;
-      case 'list-lifecycle-jobs':
-        raw = await CloudGateway.invokeStage47('listLifecycleJobs', envelope); break;
-      case 'get-lifecycle-job':
-        raw = await CloudGateway.invokeStage47('getLifecycleJob', envelope); break;
-      case 'retry-lifecycle-job':
-        raw = await CloudGateway.invokeStage47('retryLifecycleJob', envelope); break;
-      case 'confirm-auth-cleanup':
-        raw = await CloudGateway.invokeStage47('confirmAuthCleanup', envelope); break;
       case 'get-review-media':
         raw = await CloudGateway.invokeStage47('getReviewMedia', envelope); break;
-      case 'run-lifecycle-job':
-        raw = await CloudGateway.invokeStage47('runLifecycleJob', envelope); break;
       case 'get-stage47-capabilities':
         raw = await CloudGateway.invokeStage47('getStage47Capabilities', envelope);
         break;
-      case 'get-taste-preference':
-        raw = await CloudGateway.invokeStage47('getTastePreference', envelope);
-        break;
-      case 'update-taste-preference':
-        raw = await CloudGateway.invokeStage47('updateTastePreference', envelope);
-        break;
-      case 'clear-taste-preference':
-        raw = await CloudGateway.invokeStage47('clearTastePreference', envelope);
-        break;
-      case 'list-personalized-recommendations':
-        raw = await CloudGateway.invokeStage47('listPersonalizedRecommendations', envelope);
-        break;
-      case 'list-food-lists':
-        raw = await CloudGateway.invokeStage47('listFoodLists', envelope);
-        break;
-      case 'create-food-list':
-        raw = await CloudGateway.invokeStage47('createFoodList', envelope);
-        break;
-      case 'update-food-list':
-        raw = await CloudGateway.invokeStage47('updateFoodList', envelope);
-        break;
-      case 'delete-food-list':
-        raw = await CloudGateway.invokeStage47('deleteFoodList', envelope);
-        break;
-      case 'list-food-list-items':
-        raw = await CloudGateway.invokeStage47('listFoodListItems', envelope);
-        break;
-      case 'add-food-list-item':
-        raw = await CloudGateway.invokeStage47('addFoodListItem', envelope);
-        break;
-      case 'remove-food-list-item':
-        raw = await CloudGateway.invokeStage47('removeFoodListItem', envelope);
-        break;
-      case 'reorder-food-list-items':
-        raw = await CloudGateway.invokeStage47('reorderFoodListItems', envelope);
-        break;
-      case 'get-personal-food-state':
-        raw = await CloudGateway.invokeStage47('getPersonalFoodState', envelope);
-        break;
-      case 'update-personal-food-state':
-        raw = await CloudGateway.invokeStage47('updatePersonalFoodState', envelope);
-        break;
+      case 'get-random-food-pool':
+        raw = await CloudGateway.invokeStage47('getRandomFoodPool', envelope); break;
+      case 'get-random-food-cards':
+        raw = await CloudGateway.invokeStage47('getRandomFoodCards', envelope); break;
+      case 'save-food-choice':
+        raw = await CloudGateway.invokeStage47('saveFoodChoice', envelope); break;
+      case 'list-food-choices':
+        raw = await CloudGateway.invokeStage47('listFoodChoices', envelope); break;
+      case 'delete-food-choice':
+        raw = await CloudGateway.invokeStage47('deleteFoodChoice', envelope); break;
       case 'get-meal-candidates':
         raw = await CloudGateway.invokeStage47('getMealCandidates', envelope);
         break;
@@ -466,8 +409,8 @@ export class CloudGateway {
       case 'get-user-page':
         raw = await CloudGateway.invokeStage47('getUserPage', envelope);
         break;
-      case 'list-merchant-rankings':
-        raw = await CloudGateway.invokeStage47('listMerchantRankings', envelope);
+      case 'list-food-rankings':
+        raw = await CloudGateway.invokeStage47('listFoodRankings', envelope);
         break;
       case 'set-card-reaction-v2':
         raw = await CloudGateway.invokeStage47('setCardReactionV2', envelope);
@@ -501,9 +444,6 @@ export class CloudGateway {
         break;
       case 'list-nearby-cards':
         raw = await (CloudGateway.serviceObject as ShikeService).listNearbyCards(envelope);
-        break;
-      case 'list-friend-rankings':
-        raw = await (CloudGateway.serviceObject as ShikeService).listFriendRankings(envelope);
         break;
       case 'get-friend-profile':
         raw = await (CloudGateway.serviceObject as ShikeService).getFriendProfile(envelope);
@@ -542,15 +482,6 @@ export class CloudGateway {
       case 'get-merchant':
         raw = await (CloudGateway.serviceObject as ShikeService).getMerchant(envelope);
         break;
-      case 'list-moderation-merchants':
-        raw = await (CloudGateway.serviceObject as ShikeService).listModerationMerchants(envelope);
-        break;
-      case 'moderate-merchant':
-        raw = await (CloudGateway.serviceObject as ShikeService).moderateMerchant(envelope);
-        break;
-      case 'reconcile-merchant-counters':
-        raw = await (CloudGateway.serviceObject as ShikeService).reconcileMerchantCounters(envelope);
-        break;
       case 'get-card-edit-context':
         raw = await (CloudGateway.serviceObject as ShikeService).getCardEditContext(envelope);
         break;
@@ -563,8 +494,6 @@ export class CloudGateway {
       case 'list-my-favorite-cards':
         raw = await (CloudGateway.serviceObject as ShikeService).listMyFavoriteCards(envelope);
         break;
-      case 'list-received-comments':
-        throw new Error('评论入口已下线。');
       case 'search-users':
         raw = await (CloudGateway.serviceObject as ShikeService).searchUsers(envelope);
         break;
@@ -622,18 +551,6 @@ export class CloudGateway {
       case 'remove-group-member':
         raw = await (CloudGateway.serviceObject as ShikeService).removeGroupMember(envelope);
         break;
-      case 'list-notifications':
-        raw = await (CloudGateway.serviceObject as ShikeService).listNotifications(envelope);
-        break;
-      case 'mark-notification-read':
-        raw = await (CloudGateway.serviceObject as ShikeService).markNotificationRead(envelope);
-        break;
-      case 'mark-all-notifications-read':
-        raw = await (CloudGateway.serviceObject as ShikeService).markAllNotificationsRead(envelope);
-        break;
-      case 'open-notification':
-        raw = await (CloudGateway.serviceObject as ShikeService).openNotification(envelope);
-        break;
       case 'register-push-device':
         raw = await (CloudGateway.serviceObject as ShikeService).registerPushDevice(envelope);
         break;
@@ -655,12 +572,6 @@ export class CloudGateway {
       case 'toggle-card-action':
         raw = await (CloudGateway.serviceObject as ShikeService).toggleCardAction(envelope);
         break;
-      case 'create-card-comment':
-        throw new Error('评论入口已下线。');
-      case 'delete-card-comment':
-        throw new Error('评论入口已下线。');
-      case 'toggle-comment-reaction':
-        throw new Error('评论入口已下线。');
       case 'set-card-reaction':
         raw = await (CloudGateway.serviceObject as ShikeService).setCardReaction(envelope);
         break;
@@ -673,38 +584,8 @@ export class CloudGateway {
       case 'withdraw-card-revision':
         raw = await (CloudGateway.serviceObject as ShikeService).withdrawCardRevision(envelope);
         break;
-      case 'list-moderation-revisions':
-        raw = await (CloudGateway.serviceObject as ShikeService).listModerationRevisions(envelope);
-        break;
-      case 'moderate-card-revision':
-        raw = await (CloudGateway.serviceObject as ShikeService).moderateCardRevision(envelope);
-        break;
-      case 'start-migration-job':
-        raw = await (CloudGateway.serviceObject as ShikeService).startMigrationJob(envelope);
-        break;
-      case 'process-migration-job':
-        raw = await (CloudGateway.serviceObject as ShikeService).processMigrationJob(envelope);
-        break;
-      case 'get-migration-status':
-        raw = await (CloudGateway.serviceObject as ShikeService).getMigrationStatus(envelope);
-        break;
-      case 'list-maintenance-jobs':
-        raw = await (CloudGateway.serviceObject as ShikeService).listMaintenanceJobs(envelope);
-        break;
-      case 'get-maintenance-job':
-        raw = await (CloudGateway.serviceObject as ShikeService).getMaintenanceJob(envelope);
-        break;
-      case 'retry-maintenance-job':
-        raw = await (CloudGateway.serviceObject as ShikeService).retryMaintenanceJob(envelope);
-        break;
-      case 'validate-lifecycle-job':
-        raw = await (CloudGateway.serviceObject as ShikeService).validateLifecycleJob(envelope);
-        break;
       case 'get-revision-media':
         raw = await (CloudGateway.serviceObject as ShikeService).getRevisionMedia(envelope);
-        break;
-      case 'process-friend-cleanup-job':
-        raw = await (CloudGateway.serviceObject as ShikeService).processFriendCleanupJob(envelope);
         break;
       case 'delete-own-card':
         raw = await (CloudGateway.serviceObject as ShikeService).deleteOwnCard(envelope);
@@ -740,14 +621,21 @@ export class CloudGateway {
         const request: CardDetailRequest = payload as CardDetailRequest;
         ImageDescriptors.removeCard(request.cardId);
       }
-      if (session === AuthSessionStore.generation() && (['ACCOUNT_INACTIVE', 'AUTH_REQUIRED'].includes(code) || code === 'FORBIDDEN' && ['list-moderation-queue', 'get-moderation-detail', 'decide-moderation', 'list-lifecycle-jobs', 'get-lifecycle-job', 'retry-lifecycle-job', 'run-lifecycle-job'].includes(name))) {
-        AppStorage.setOrCreate('operationsRoleRevision', (AppStorage.get<number>('operationsRoleRevision') || 0) + 1);
-      }
       throw new CloudBusinessError(message, code, decoded.retryable === undefined ? code === '3007009' : decoded.retryable,
         decoded.retryAfterMs || 0, decoded.requestId || readRequestId, decoded.operation || name, decoded.stage || 'business-response');
     }
     if (session === AuthSessionStore.generation() && CloudGateway.changesReadContent(name)) ReadScheduler.contentChanged();
-    if (session === AuthSessionStore.generation() && ['delete-own-card', 'delete-account-data', 'decide-moderation', 'moderate-card', 'moderate-card-revision'].includes(name)) ImageDescriptors.revoke();
+    if (session === AuthSessionStore.generation() && name === 'submit-card-revision') {
+      const result: CardRevisionResponse = decoded.data as CardRevisionResponse;
+      if (result.revision.status === 'APPROVED') {
+        ReadScheduler.contentChanged();
+        // Also cancel in-flight image permits from the old content version.
+        // Disk bytes remain available for reuse after fresh authorization.
+        ImageDescriptors.revoke();
+        AppStorage.setOrCreate('contentMutationRevision', (AppStorage.get<number>('contentMutationRevision') || 0) + 1);
+      }
+    }
+    if (session === AuthSessionStore.generation() && ['delete-own-card', 'delete-account-data'].includes(name)) ImageDescriptors.revoke();
     if (ReadScheduler.allows(name) && session === AuthSessionStore.generation() &&
       AppStorage.get<boolean>('stage47AppActive') !== false) {
       const requestId: string = decoded.requestId || readRequestId;

@@ -16,7 +16,6 @@ class ReadJob {
   session: number;
   lifecycle: number;
   contentRevision: number;
-  preferenceRevision: number;
   dataVersion: number;
   priority: ReadPriority;
   prioritySource: (() => ReadPriority) | undefined;
@@ -37,7 +36,6 @@ class ReadJob {
     this.session = AuthSessionStore.generation(); this.lifecycle = lifecycle;
     this.dataVersion = dataVersion;
     this.contentRevision = AppStorage.get<number>('accountContentRevision') || 0;
-    this.preferenceRevision = AppStorage.get<number>('preferenceRevision') || 0;
     this.priority = options.priority || ReadScheduler.defaultPriority(operation);
     this.prioritySource = options.currentPriority;
     this.addGuard(options);
@@ -76,7 +74,7 @@ export class ReadScheduler {
   private static timerAt: number = 0;
   static defaultPriority(operation: string): ReadPriority {
     if (ReadScheduler.imageOperation(operation)) return 'cover';
-    return ['get-card-detail', 'get-card-previews', 'list-personalized-recommendations', 'list-nearby-cards',
+    return ['get-card-detail', 'get-card-previews', 'list-nearby-cards',
       'search-public-cards', 'get-merchant-recommendations'].includes(operation) ? 'metadata' : 'secondary';
   }
   static beginImageWork(): void { ReadScheduler.visibleImageWork++; }
@@ -117,7 +115,7 @@ export class ReadScheduler {
     action: (requestId: string, attempt: number) => Promise<object>): Promise<object> {
     const key: string = AuthSessionStore.owner() + ':' + AuthSessionStore.generation() + ':' + ReadScheduler.lifecycle + ':' + (ReadScheduler.imageOperation(operation) ? 0 : ReadScheduler.dataVersion) + ':' +
       (AppStorage.get<number>('accountContentRevision') || 0) + ':' +
-      (ReadScheduler.imageOperation(operation) ? 0 : (AppStorage.get<number>('preferenceRevision') || 0)) + ':' + String(authenticated) + ':' + operation + ':' +
+      String(authenticated) + ':' + operation + ':' +
       ReadScheduler.parameters(payload);
     const existing: Promise<object> | undefined = ReadScheduler.inFlight.get(key);
     if (existing !== undefined) {
@@ -167,7 +165,6 @@ export class ReadScheduler {
     return job.session === AuthSessionStore.generation() && job.lifecycle === ReadScheduler.lifecycle &&
       (ReadScheduler.imageOperation(job.operation) || job.dataVersion === ReadScheduler.dataVersion) &&
       job.contentRevision === (AppStorage.get<number>('accountContentRevision') || 0) &&
-      (ReadScheduler.imageOperation(job.operation) || job.preferenceRevision === (AppStorage.get<number>('preferenceRevision') || 0)) &&
       AppStorage.get<boolean>('stage47AppActive') !== false;
   }
   static invalidateQueued(): void {
