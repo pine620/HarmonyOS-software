@@ -42,18 +42,86 @@ async function executeCloudOperation(
   input: CloudEnvelope
 ): Promise<CloudResponse> {
   const requestId: string = readErrors.requestId(input);
+  const interaction: boolean = operation.includes('card-interaction');
+  const startedAt: number = Date.now();
+  if (interaction) console.info(`[CardInteractionCloud] requestId=${requestId} operation=${operation} stage=received`);
   try {
     const request = Object.assign({}, input, { readRequestId: requestId });
     const data = await runtime.executeOperation(operation, request, process.env);
+    if (interaction) console.info(`[CardInteractionCloud] requestId=${requestId} operation=${operation} stage=response elapsedMs=${Date.now() - startedAt}`);
     return { ok: true, data, message: '', requestId, operation, functionVersion: readErrors.READ_OPT_VERSION, ...releaseInfo.buildInfo };
   } catch (error) {
     const response: CloudResponse = readErrors.errorResponse(error, operation, requestId);
+    if (['login-with-nickname', 'configure-password-account', 'change-password-account', 'logout-nickname'].includes(operation)) {
+      console.error(`${operation} requestId=${requestId} code=${response.code || 'AUTH_FAILED'}`);
+      const safeCodes: string[] = ['INVALID_CREDENTIALS', 'INVALID_NICKNAME', 'INVALID_PASSWORD',
+        'NICKNAME_TAKEN', 'AUTH_RATE_LIMITED', 'REAUTH_REQUIRED', 'FEATURE_NOT_READY',
+        'AUTH_CONFIGURATION_REQUIRED', 'AUTH_UPSTREAM_FAILED', 'AUTH_UPSTREAM_HTTP', 'AUTH_UPSTREAM_RESPONSE',
+        'AUTH_UPSTREAM_TIMEOUT', 'AUTH_UPSTREAM_NETWORK', 'AUTH_AGC_CLIENT_REJECTED', 'AUTH_AGC_SIGN_IN_REJECTED',
+        'AUTH_AGC_TOKEN_INVALID', 'ACCOUNT_INACTIVE', 'AUTH_REQUIRED', 'CONFLICT', 'ACCOUNT_MISMATCH',
+        'CURRENT_PASSWORD_INCORRECT', 'PASSWORD_UNCHANGED', 'PASSWORD_NOT_SET', 'PASSWORD_STATE_CHANGED'];
+      if (!safeCodes.includes(response.code || '')) response.message = '认证服务暂时不可用，请稍后重试。';
+      return response;
+    }
     console.error(`${operation} requestId=${requestId} code=${response.code} stage=${response.stage} failed: ${runtime.safeLogError(error)}`);
     return response;
   }
 }
 
 export class ShikeService {
+  getCardInteractionState(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('get-card-interaction-state', input);
+  }
+  setCardInteraction(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('set-card-interaction', input);
+  }
+  getCardInteractionReceipt(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('get-card-interaction-receipt', input);
+  }
+  getCardInteractionCounts(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('get-card-interaction-counts', input);
+  }
+  getPasswordAccount(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('get-password-account', input);
+  }
+  configurePasswordAccount(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('configure-password-account', input);
+  }
+  changePasswordAccount(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('change-password-account', input);
+  }
+  loginWithNickname(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('login-with-nickname', input);
+  }
+  logoutNickname(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('logout-nickname', input);
+  }
+
+  getCardReportAccess(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('get-card-report-access', input);
+  }
+  getCardReportContext(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('get-card-report-context', input);
+  }
+  submitCardReport(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('submit-card-report', input);
+  }
+  listMyCardReports(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('list-my-card-reports', input);
+  }
+  getMyCardReport(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('get-my-card-report', input);
+  }
+  listCardReviewReports(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('list-card-review-reports', input);
+  }
+  getCardReviewReport(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('get-card-review-report', input);
+  }
+  resolveCardReport(input: CloudEnvelope): Promise<CloudResponse> {
+    return executeCloudOperation('resolve-card-report', input);
+  }
+
   listMyReports(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('list-my-reports', input);
   }
@@ -89,9 +157,6 @@ export class ShikeService {
   }
   setCardFavorite(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('set-card-favorite', input);
-  }
-  setCardWanted(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('set-card-wanted', input);
   }
   getStage47Capabilities(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('get-stage47-capabilities', input);

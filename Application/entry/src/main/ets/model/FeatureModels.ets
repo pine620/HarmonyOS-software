@@ -1,1 +1,0 @@
-export interface Stage47Capabilities { reactionsEnabled: boolean; mealEnabled: boolean; merchantEnabled: boolean; collectionEnabled?: boolean; protocolVersion?: number; reactionsReason?: string; foodRankingsEnabled?: boolean; foodRankingsReason?: string; }

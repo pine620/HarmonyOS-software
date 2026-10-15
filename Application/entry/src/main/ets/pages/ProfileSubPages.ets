@@ -1,4 +1,4 @@
-import { QuietActionStyle } from '../common/Stage47Ui';
+import { AppDestinationStyle } from '../common/AppPageUi';
 import { common } from '@kit.AbilityKit';
 import {
   FoodCard, PrepareCardPhotoRequest, PrepareCardPhotoResponse, UpdateProfileRequest, UserProfile
@@ -7,7 +7,9 @@ import { coverFor } from '../components/FoodCover';
 import { cardPriceText } from '../model/CardPrice';
 import { CardRepository } from '../repository/CardRepository';
 import { CardVisitStore } from '../service/CardVisitStore';
-import { AuthService } from '../service/AuthService';
+import { AuthService, PasswordSavedError } from '../service/AuthService';
+import { AuthSessionStore } from '../service/AuthSessionStore';
+import { CloudBusinessError } from '../service/CloudReadErrors';
 import { LocationService } from '../service/LocationService';
 import { AvatarCrop, ImageDimensions, ImagePreparationService, PreparedPhoto } from '../service/ImagePreparationService';
 import { ImageRepository } from '../service/ImageRepository';
@@ -90,16 +92,16 @@ export struct MyPublishedPage {
           .objectFit(ImageFit.Cover).borderRadius(14).accessibilityLevel('no')
         Column({ space: 5 }) {
           Text(card.productName).fontSize(16).fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.ink')).width('100%').maxLines(1)
+            .fontColor($r('app.color.personal_ink')).width('100%').maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
           Text(priceText(card)).fontSize(14).fontWeight(FontWeight.Medium)
-            .fontColor(card.priceFen > 0 ? $r('app.color.accent_action') : $r('app.color.muted'))
+            .fontColor(card.priceFen > 0 ? $r('app.color.personal_action') : $r('app.color.personal_muted'))
             .width('100%').maxLines(1)
           Row({ space: 8 }) {
             Text(statusText(card)).fontSize(12)
               .fontColor(card.status === 'APPROVED' ? $r('app.color.leaf') : $r('app.color.danger'))
             if (card.district.length > 0) {
-              Text(card.district).fontSize(12).fontColor($r('app.color.muted'))
+              Text(card.district).fontSize(12).fontColor($r('app.color.personal_muted'))
                 .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
             }
           }.width('100%')
@@ -118,8 +120,8 @@ export struct MyPublishedPage {
               .fontSize(13).lineHeight(20).fontColor($r('app.color.danger')).width('100%')
             Row({ space: 10 }) {
               Button('取消').layoutWeight(1).height(48)
-                .backgroundColor($r('app.color.surface')).fontColor($r('app.color.muted'))
-                .border({ width: 1, color: $r('app.color.line') })
+                .backgroundColor($r('app.color.personal_surface')).fontColor($r('app.color.personal_muted'))
+                .border({ width: 1, color: $r('app.color.personal_line') })
                 .onClick(() => {
                   this.pendingDeleteCardId = '';
                   this.status = '';
@@ -134,14 +136,14 @@ export struct MyPublishedPage {
           Row() {
             Blank()
             Button('删除').height(44).fontSize(13)
-              .backgroundColor($r('app.color.surface')).fontColor($r('app.color.danger'))
-              .border({ width: 1, color: $r('app.color.line') })
+              .backgroundColor($r('app.color.personal_surface')).fontColor($r('app.color.danger'))
+              .border({ width: 1, color: $r('app.color.personal_line') })
               .onClick(() => this.requestDeleteCard(card.id))
           }.width('100%').height(44)
       }
     }
-    .width('100%').padding(12).backgroundColor($r('app.color.surface')).borderRadius(18)
-    .border({ width: 1, color: $r('app.color.line') })
+    .width('100%').padding(12).backgroundColor($r('app.color.personal_surface')).borderRadius(18)
+    .border({ width: 1, color: $r('app.color.personal_line') })
   }
 
   build() {
@@ -150,28 +152,28 @@ export struct MyPublishedPage {
         Row() {
           Column({ space: 3 }) {
             Text('我的卡片').fontSize(20).fontWeight(FontWeight.Bold)
-              .fontColor($r('app.color.ink'))
+              .fontColor($r('app.color.personal_ink'))
             Text(`共 ${this.cards.length} 张商品卡片`)
-              .fontSize(12).fontColor($r('app.color.muted'))
+              .fontSize(12).fontColor($r('app.color.personal_muted'))
           }.alignItems(HorizontalAlign.Start)
           Blank()
           Button(this.loading ? '刷新中' : '刷新').height(48).enabled(!this.loading)
-            .backgroundColor($r('app.color.accent_soft')).fontColor($r('app.color.accent_action'))
+            .backgroundColor($r('app.color.personal_soft')).fontColor($r('app.color.personal_action'))
             .onClick((): void => { void this.refresh(); })
         }
-        .width('100%').padding(16).backgroundColor($r('app.color.surface')).borderRadius(18)
-        .border({ width: 1, color: $r('app.color.line') })
+        .width('100%').padding(16).backgroundColor($r('app.color.personal_surface')).borderRadius(18)
+        .border({ width: 1, color: $r('app.color.personal_line') })
 
         if (this.status.length > 0) {
           Text(this.status).fontSize(13).lineHeight(20)
-            .fontColor(this.status.includes('失败') ? $r('app.color.warning') : $r('app.color.muted'))
-            .width('100%').padding(12).backgroundColor($r('app.color.accent_soft')).borderRadius(14)
+            .fontColor(this.status.includes('失败') ? $r('app.color.warning') : $r('app.color.personal_muted'))
+            .width('100%').padding(12).backgroundColor($r('app.color.personal_soft')).borderRadius(14)
         }
 
         if (!this.loaded || (this.loading && this.cards.length === 0)) {
           Column({ space: 10 }) {
-            LoadingProgress().width(36).height(36).color($r('app.color.accent_action'))
-            Text('正在加载商品卡片…').fontSize(13).fontColor($r('app.color.muted'))
+            LoadingProgress().width(36).height(36).color($r('app.color.personal_action'))
+            Text('正在加载商品卡片…').fontSize(13).fontColor($r('app.color.personal_muted'))
           }.width('100%').layoutWeight(1).justifyContent(FlexAlign.Center)
         } else if (this.cards.length === 0) {
           Column({ space: 12 }) {
@@ -179,13 +181,13 @@ export struct MyPublishedPage {
               .accessibilityLevel('no')
             Text(this.status.includes('失败') ? '暂时无法加载卡片' : '还没有发布商品卡片')
               .fontSize(19).fontWeight(FontWeight.Bold)
-              .fontColor($r('app.color.ink'))
+              .fontColor($r('app.color.personal_ink'))
             Text(this.status.includes('失败') ? '请点击右上角刷新后重试。' : '完成第一张推荐卡后，它会出现在这里。')
-              .fontSize(13).fontColor($r('app.color.muted')).textAlign(TextAlign.Center)
+              .fontSize(13).fontColor($r('app.color.personal_muted')).textAlign(TextAlign.Center)
           }
           .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center)
-          .padding(24).backgroundColor($r('app.color.surface')).borderRadius(20)
-          .border({ width: 1, color: $r('app.color.line') })
+          .padding(24).backgroundColor($r('app.color.personal_surface')).borderRadius(20)
+          .border({ width: 1, color: $r('app.color.personal_line') })
         } else {
           List({ space: 12 }) {
             ForEach(this.cards, (card: FoodCard) => {
@@ -195,8 +197,8 @@ export struct MyPublishedPage {
         }
       }
       .width('100%').height('100%').padding({ left: 20, right: 20, top: 12, bottom: 20 })
-      .backgroundColor($r('app.color.canvas')).alignItems(HorizontalAlign.Start)
-    }.title('我的卡片').onShown((): void => {
+      .backgroundColor($r('app.color.personal_canvas')).alignItems(HorizontalAlign.Start)
+    }.attributeModifier(new AppDestinationStyle('我的卡片', $r('app.color.personal_canvas'), $r('app.color.personal_header'), 'PERSONAL')).onShown((): void => {
       if (this.hasBeenShown) {
         void this.refresh();
       } else {
@@ -393,9 +395,9 @@ export struct PermissionsPrivacyPage {
   private dataRow(title: string, description: string) {
     Column({ space: 5 }) {
       Text(title).fontSize(15).fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.ink')).width('100%')
+        .fontColor($r('app.color.personal_ink')).width('100%')
       Text(description).fontSize(13).lineHeight(20)
-        .fontColor($r('app.color.muted')).width('100%')
+        .fontColor($r('app.color.personal_muted')).width('100%')
     }.width('100%').alignItems(HorizontalAlign.Start)
   }
 
@@ -405,127 +407,127 @@ export struct PermissionsPrivacyPage {
         Column({ space: 18 }) {
           Column({ space: 12 }) {
             Text('位置权限').fontSize(18).fontWeight(FontWeight.Bold)
-              .fontColor($r('app.color.ink')).width('100%')
+              .fontColor($r('app.color.personal_ink')).width('100%')
             Text(this.permissionStatus).fontSize(14).fontWeight(FontWeight.Medium)
               .fontColor($r('app.color.leaf')).width('100%')
             Text('浏览推荐无需定位；仅在发布时按需请求一次精确位置，不会持续定位。')
-              .fontSize(13).lineHeight(20).fontColor($r('app.color.muted')).width('100%')
+              .fontSize(13).lineHeight(20).fontColor($r('app.color.personal_muted')).width('100%')
             Button(this.loading ? '正在刷新…' : '刷新权限状态')
               .width('100%').height(48).enabled(!this.loading)
-              .backgroundColor($r('app.color.accent_soft')).fontColor($r('app.color.accent_action'))
+              .backgroundColor($r('app.color.personal_soft')).fontColor($r('app.color.personal_action'))
               .onClick(() => this.refresh())
           }
-          .width('100%').padding(16).backgroundColor($r('app.color.surface')).borderRadius(20)
-          .border({ width: 1, color: $r('app.color.line') }).alignItems(HorizontalAlign.Start)
+          .width('100%').padding(16).backgroundColor($r('app.color.personal_surface')).borderRadius(20)
+          .border({ width: 1, color: $r('app.color.personal_line') }).alignItems(HorizontalAlign.Start)
 
           Column({ space: 12 }) {
             Text('食刻通知').fontSize(18).fontWeight(FontWeight.Bold)
-              .fontColor($r('app.color.ink')).width('100%')
+              .fontColor($r('app.color.personal_ink')).width('100%')
             Text(this.notificationStatus).fontSize(14).fontWeight(FontWeight.Medium)
-              .fontColor(this.notificationEnabled ? $r('app.color.leaf') : $r('app.color.muted')).width('100%')
+              .fontColor(this.notificationEnabled ? $r('app.color.leaf') : $r('app.color.personal_muted')).width('100%')
             Text('默认关闭。开启后提醒好友申请、申请通过、私信与群聊；系统通知不展示聊天正文。')
-              .fontSize(13).lineHeight(20).fontColor($r('app.color.muted')).width('100%')
+              .fontSize(13).lineHeight(20).fontColor($r('app.color.personal_muted')).width('100%')
             if (this.notificationSupported) {
               if (this.notificationEnabled) {
                 if (!this.notificationRegistered) {
                   Button(this.loading ? '处理中…' : '重新登记通知设备')
                     .width('100%').height(48).enabled(!this.loading)
-                    .backgroundColor($r('app.color.accent_action')).fontColor($r('app.color.on_accent_action'))
+                    .backgroundColor($r('app.color.personal_action')).fontColor($r('app.color.personal_surface'))
                     .onClick(() => this.retryNotificationRegistration())
                 }
                 Button(this.loading ? '处理中…' : '关闭食刻通知')
                   .width('100%').height(48).enabled(!this.loading)
-                  .backgroundColor($r('app.color.surface')).fontColor($r('app.color.ink'))
-                  .border({ width: 1, color: $r('app.color.line') })
+                  .backgroundColor($r('app.color.personal_surface')).fontColor($r('app.color.personal_ink'))
+                  .border({ width: 1, color: $r('app.color.personal_line') })
                   .onClick(() => this.disableNotifications())
               } else {
                 Button(this.loading ? '处理中…' : '开启食刻通知')
                   .width('100%').height(48).enabled(!this.loading)
-                  .backgroundColor($r('app.color.accent_action')).fontColor($r('app.color.on_accent_action'))
+                  .backgroundColor($r('app.color.personal_action')).fontColor($r('app.color.personal_surface'))
                   .onClick(() => this.enableNotifications())
               }
             }
           }
-          .width('100%').padding(16).backgroundColor($r('app.color.surface')).borderRadius(20)
-          .border({ width: 1, color: $r('app.color.line') }).alignItems(HorizontalAlign.Start)
+          .width('100%').padding(16).backgroundColor($r('app.color.personal_surface')).borderRadius(20)
+          .border({ width: 1, color: $r('app.color.personal_line') }).alignItems(HorizontalAlign.Start)
 
           Column({ space: 12 }) {
             Text('桌面卡片远程同步').fontSize(18).fontWeight(FontWeight.Bold)
-              .fontColor($r('app.color.ink')).width('100%')
+              .fontColor($r('app.color.personal_ink')).width('100%')
             Text(this.serviceCardSyncStatus).fontSize(14).fontWeight(FontWeight.Medium)
               .fontColor(this.serviceCardSyncRegistered ? $r('app.color.leaf') :
-                (this.serviceCardSyncEnabled ? $r('app.color.warning') : $r('app.color.muted')))
+                (this.serviceCardSyncEnabled ? $r('app.color.warning') : $r('app.color.personal_muted')))
               .width('100%')
             Text('默认关闭。开启后仅把已审核公开推荐摘要同步到已添加的食刻卡片；不发送定位、实拍图、好友关系或私信。')
-              .fontSize(13).lineHeight(20).fontColor($r('app.color.muted')).width('100%')
+              .fontSize(13).lineHeight(20).fontColor($r('app.color.personal_muted')).width('100%')
             if (this.serviceCardSyncSupported) {
               if (this.serviceCardSyncEnabled) {
                 if (!this.serviceCardSyncRegistered) {
                   Button(this.loading ? '处理中…' : '检查并登记桌面卡片')
                     .width('100%').height(48).enabled(!this.loading)
-                    .backgroundColor($r('app.color.accent_action')).fontColor($r('app.color.on_accent_action'))
+                    .backgroundColor($r('app.color.personal_action')).fontColor($r('app.color.personal_surface'))
                     .onClick(() => this.retryServiceCardRegistration())
                 }
                 Button(this.loading ? '处理中…' : '关闭桌面卡片远程同步')
                   .width('100%').height(48).enabled(!this.loading)
-                  .backgroundColor($r('app.color.surface')).fontColor($r('app.color.ink'))
-                  .border({ width: 1, color: $r('app.color.line') })
+                  .backgroundColor($r('app.color.personal_surface')).fontColor($r('app.color.personal_ink'))
+                  .border({ width: 1, color: $r('app.color.personal_line') })
                   .onClick(() => this.disableServiceCardSync())
               } else {
                 Button(this.loading ? '处理中…' : '开启桌面卡片远程同步')
                   .width('100%').height(48).enabled(!this.loading)
-                  .backgroundColor($r('app.color.accent_action')).fontColor($r('app.color.on_accent_action'))
+                  .backgroundColor($r('app.color.personal_action')).fontColor($r('app.color.personal_surface'))
                   .onClick(() => this.enableServiceCardSync())
               }
             }
           }
-          .width('100%').padding(16).backgroundColor($r('app.color.surface')).borderRadius(20)
-          .border({ width: 1, color: $r('app.color.line') }).alignItems(HorizontalAlign.Start)
+          .width('100%').padding(16).backgroundColor($r('app.color.personal_surface')).borderRadius(20)
+          .border({ width: 1, color: $r('app.color.personal_line') }).alignItems(HorizontalAlign.Start)
 
           Column({ space: 14 }) {
             Text('数据使用').fontSize(18).fontWeight(FontWeight.Bold)
-              .fontColor($r('app.color.ink')).width('100%')
+              .fontColor($r('app.color.personal_ink')).width('100%')
             this.dataRow('图片选择', '使用系统 Photo Picker，不申请图库全量读取权限。')
-            Divider().strokeWidth(1).color($r('app.color.line'))
+            Divider().strokeWidth(1).color($r('app.color.personal_line'))
             this.dataRow('实拍图上传', '可选实拍图和资料头像均经本机重编码、移除 EXIF/GPS 后上传到 AGC 公开路径。')
-            Divider().strokeWidth(1).color($r('app.color.line'))
+            Divider().strokeWidth(1).color($r('app.color.personal_line'))
             this.dataRow('好友与私信', '食刻号用于精确查找；好友关系、会话状态和主动发送的文字、HTTPS 链接、卡片标识保存在 AGC 云端。')
-            Divider().strokeWidth(1).color($r('app.color.line'))
+            Divider().strokeWidth(1).color($r('app.color.personal_line'))
             this.dataRow('浏览记录', '最近浏览的卡片名称、分类和时间仅保存在本机，并按登录账号隔离；可随时在浏览记录页清空。')
-            Divider().strokeWidth(1).color($r('app.color.line'))
+            Divider().strokeWidth(1).color($r('app.color.personal_line'))
             this.dataRow('通知、桌面卡片与鸿蒙多设备', '好友通知与桌面卡片远程同步分别由你主动开启；两类 Push Token 登记均在云端加密保存，卡片只处理公开摘要，跨设备只接续页面和不透明标识。')
           }
-          .width('100%').padding(16).backgroundColor($r('app.color.surface')).borderRadius(20)
-          .border({ width: 1, color: $r('app.color.line') }).alignItems(HorizontalAlign.Start)
+          .width('100%').padding(16).backgroundColor($r('app.color.personal_surface')).borderRadius(20)
+          .border({ width: 1, color: $r('app.color.personal_line') }).alignItems(HorizontalAlign.Start)
 
           Column({ space: 12 }) {
             Text('隐私与数据删除').fontSize(18).fontWeight(FontWeight.Bold)
-              .fontColor($r('app.color.ink')).width('100%')
+              .fontColor($r('app.color.personal_ink')).width('100%')
             Text('你可删除本人发布的卡片；移除好友会关闭当前会话，历史私信进入清理流程。退出登录会使当前会话失效；本机浏览记录仍按账号保留，可手动清空，注销账号时清理。')
-              .fontSize(13).lineHeight(20).fontColor($r('app.color.muted')).width('100%')
+              .fontSize(13).lineHeight(20).fontColor($r('app.color.personal_muted')).width('100%')
             Button(this.showPrivacy ? '收起完整说明' : '查看完整隐私说明')
-              .width('100%').height(48).backgroundColor($r('app.color.surface'))
-              .fontColor($r('app.color.ink')).border({ width: 1, color: $r('app.color.line') })
+              .width('100%').height(48).backgroundColor($r('app.color.personal_surface'))
+              .fontColor($r('app.color.personal_ink')).border({ width: 1, color: $r('app.color.personal_line') })
               .onClick(() => this.showPrivacy = !this.showPrivacy)
             if (this.showPrivacy) {
-              Text('食刻使用 AGC Auth 管理邮箱验证码注册、登录和最近一次重新认证；邮箱原文不写入 UserProfile，食刻也不会收集或保存邮箱密码。华为账号仅作为兼容登录入口，完成邮箱绑定后，业务数据继续使用稳定的食刻账号标识。你可在资料页主动填写昵称并选择头像；头像与实拍图均先在本机重编码、移除 EXIF/GPS，再上传到 AGC 公开路径。发布位置只上传三位小数坐标和行政区，浏览位置不写入云端。好友功能会保存食刻号、好友申请、好友关系、会话未读数，以及你主动发送的文字、HTTPS 链接和卡片标识。好友通知和桌面卡片远程同步默认关闭，分别由你主动开启；相关 Push Token 均会加密保存。远程同步只更新已审核公开推荐摘要，不携带定位、实拍图、好友关系或私信。跨设备接续只传页签、卡片 ID 或好友 ID。移除好友时当前会话从双方页面移除，历史私信进入清理流程；所有已发布卡片和商品实拍图统一公开，删除好友或拉黑不影响公开内容浏览；拉黑仍限制好友互动与私信。收藏与想吃分别保存为本人标记，旧清单会合并到收藏，旧私人备注、吃过时间和评分仅作为历史数据保留，相关编辑入口已下线。测试阶段的实拍图随卡片直接上架；正式上架前应根据平台要求补充内容审核和 HTTPS 隐私政策地址。')
-                .fontSize(13).lineHeight(21).fontColor($r('app.color.muted')).width('100%')
-                .padding(14).backgroundColor($r('app.color.canvas')).borderRadius(14)
+              Text('食刻通过邮箱验证码或华为账号验证注册身份，并支持唯一昵称与密码登录。邮箱由 AGC Auth 管理；食刻服务端仅保存加盐密码哈希，不保存明文密码。改昵称会同步改变登录名，业务资料和权限仍关联固定的食刻账号标识。你可在资料页主动填写昵称并选择头像；头像与实拍图均先在本机重编码、移除 EXIF/GPS，再上传到 AGC 公开路径。发布位置只上传三位小数坐标和行政区，浏览位置不写入云端。好友功能会保存食刻号、好友申请、好友关系、会话未读数，以及你主动发送的文字、HTTPS 链接和卡片标识。好友通知和桌面卡片远程同步默认关闭，分别由你主动开启；相关 Push Token 均会加密保存。远程同步只更新已审核公开推荐摘要，不携带定位、实拍图、好友关系或私信。跨设备接续只传页签、卡片 ID 或好友 ID。移除好友时当前会话从双方页面移除，历史私信进入清理流程；所有已发布卡片和商品实拍图统一公开，删除好友或拉黑不影响公开内容浏览；拉黑仍限制好友互动与私信。收藏保存为本人标记，旧清单会合并到收藏，已下线的历史标记、私人备注、吃过时间和评分仅作为历史数据保留，相关编辑入口已下线。测试阶段的实拍图随卡片直接上架；正式上架前应根据平台要求补充内容审核和 HTTPS 隐私政策地址。')
+                .fontSize(13).lineHeight(21).fontColor($r('app.color.personal_muted')).width('100%')
+                .padding(14).backgroundColor($r('app.color.personal_canvas')).borderRadius(14)
             }
           }
-          .width('100%').padding(16).backgroundColor($r('app.color.surface')).borderRadius(20)
-          .border({ width: 1, color: $r('app.color.line') }).alignItems(HorizontalAlign.Start)
+          .width('100%').padding(16).backgroundColor($r('app.color.personal_surface')).borderRadius(20)
+          .border({ width: 1, color: $r('app.color.personal_line') }).alignItems(HorizontalAlign.Start)
 
           if (this.status.length > 0) {
             Text(this.status).fontSize(13).lineHeight(20).fontColor($r('app.color.warning')).width('100%')
-              .padding(12).backgroundColor($r('app.color.accent_soft')).borderRadius(14)
+              .padding(12).backgroundColor($r('app.color.personal_soft')).borderRadius(14)
           }
         }
         .width('100%').padding({ left: 20, right: 20, top: 12, bottom: 28 })
         .alignItems(HorizontalAlign.Start)
       }.width('100%').height('100%').scrollBar(BarState.Off)
-      .backgroundColor($r('app.color.canvas'))
-    }.title('权限与隐私')
+      .backgroundColor($r('app.color.personal_canvas'))
+    }.attributeModifier(new AppDestinationStyle('权限与隐私', $r('app.color.personal_canvas'), $r('app.color.personal_header'), 'PERSONAL'))
   }
 }
 
@@ -533,9 +535,21 @@ export struct PermissionsPrivacyPage {
 export struct ProfileSettingsPage {
   @Consume('pathStack') pathStack: NavPathStack;
   onSessionEnded: (message: string) => void = (_message: string): void => {};
+  onProfileChanged: (profile: UserProfile) => void = (_profile: UserProfile): void => {};
   @State profile: UserProfile | undefined = undefined;
   @State status: string = '';
   @State busy: boolean = false;
+  @State passwordChangeVisible: boolean = false;
+  @State passwordSaving: boolean = false;
+  @State currentPassword: string = '';
+  @State newPassword: string = '';
+  @State confirmPassword: string = '';
+  @State currentPasswordError: string = '';
+  @State newPasswordError: string = '';
+  @State confirmPasswordError: string = '';
+  @State passwordMessage: string = '';
+  @State passwordFailed: boolean = false;
+  private active: boolean = false;
   @State deleteConfirmationVisible: boolean = false;
   @State deleteEmailAddress: string = '';
   @State deleteVerifyCode: string = '';
@@ -550,10 +564,12 @@ export struct ProfileSettingsPage {
   private emailBindingCodeTimer: number | undefined = undefined;
 
   aboutToAppear(): void {
+    this.active = true;
     this.profile = AuthService.profile();
   }
 
   aboutToDisappear(): void {
+    this.active = false;
     if (this.deleteCodeTimer !== undefined) {
       clearTimeout(this.deleteCodeTimer);
       this.deleteCodeTimer = undefined;
@@ -562,6 +578,107 @@ export struct ProfileSettingsPage {
       clearTimeout(this.emailBindingCodeTimer);
       this.emailBindingCodeTimer = undefined;
     }
+  }
+
+  private clearPasswordInputs(): void {
+    this.currentPassword = ''; this.newPassword = ''; this.confirmPassword = '';
+    this.currentPasswordError = ''; this.newPasswordError = ''; this.confirmPasswordError = '';
+  }
+
+  private showPasswordChange(): void {
+    if (this.busy || this.profile === undefined) return;
+    this.clearPasswordInputs(); this.passwordMessage = ''; this.passwordFailed = false;
+    this.emailBindingVisible = false; this.deleteConfirmationVisible = false;
+    this.passwordChangeVisible = true;
+  }
+
+  private cancelPasswordChange(): void {
+    if (this.busy) return;
+    this.clearPasswordInputs(); this.passwordChangeVisible = false;
+    this.passwordMessage = ''; this.passwordFailed = false;
+  }
+
+  private validatePasswordChange(): boolean {
+    this.currentPasswordError = ''; this.newPasswordError = ''; this.confirmPasswordError = '';
+    if (this.currentPassword.length === 0) this.currentPasswordError = '请输入当前密码';
+    try { AuthSessionStore.validateNewPassword(this.newPassword); }
+    catch (error) { this.newPasswordError = error instanceof Error ? error.message : '请输入有效的新密码'; }
+    if (this.newPasswordError.length === 0 && this.newPassword === this.currentPassword) {
+      this.newPasswordError = '新密码不能与当前密码相同';
+    }
+    if (this.confirmPassword.length === 0) this.confirmPasswordError = '请再次输入新密码';
+    else if (this.confirmPassword !== this.newPassword) this.confirmPasswordError = '两次新密码不一致';
+    return this.currentPasswordError.length === 0 && this.newPasswordError.length === 0 && this.confirmPasswordError.length === 0;
+  }
+
+  private async savePassword(): Promise<void> {
+    if (this.busy || !this.validatePasswordChange()) return;
+    this.busy = true; this.passwordSaving = true; this.passwordMessage = ''; this.passwordFailed = false;
+    try {
+      const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      const updated: UserProfile = await AuthService.changePassword(context, this.currentPassword, this.newPassword);
+      if (!this.active) return;
+      this.profile = updated; this.clearPasswordInputs(); this.passwordChangeVisible = false;
+      this.passwordMessage = '密码已更改。'; this.onProfileChanged(updated);
+    } catch (error) {
+      if (!this.active) return;
+      const message: string = AuthService.credentialError(error as Object, '更改密码未完成，请重试。');
+      if (error instanceof PasswordSavedError || AuthService.profile() === undefined) {
+        this.clearPasswordInputs(); this.passwordChangeVisible = false;
+        this.onSessionEnded(message);
+      } else {
+        const code: string = error instanceof CloudBusinessError ? error.code : '';
+        if (code === 'CURRENT_PASSWORD_INCORRECT') {
+          this.currentPassword = ''; this.currentPasswordError = '当前密码不正确';
+        }
+        if (code === 'INVALID_PASSWORD') this.newPasswordError = message;
+        this.passwordFailed = true; this.passwordMessage = message;
+      }
+    } finally {
+      if (this.active) { this.busy = false; this.passwordSaving = false; }
+    }
+  }
+
+  @Builder
+  private passwordFieldError(message: string): void {
+    if (message.length > 0) {
+      Text(message).fontSize(13).fontColor($r('app.color.danger')).width('100%').accessibilityText(message)
+    }
+  }
+
+  @Builder
+  private passwordChangeForm(): void {
+    Column({ space: 10 }) {
+      Text('当前密码').fontSize(14).fontColor($r('app.color.personal_muted')).width('100%')
+      TextInput({ text: this.currentPassword, placeholder: '输入当前密码' })
+        .type(InputType.Password).showPasswordIcon(true).maxLength(128).enterKeyType(EnterKeyType.Next)
+        .height(52).width('100%').fontSize(16).fontColor($r('app.color.personal_ink')).backgroundColor($r('app.color.personal_canvas'))
+        .border({ width: 1, color: $r('app.color.personal_line') }).borderRadius(14).enabled(!this.busy).accessibilityText('当前密码')
+        .onChange((value: string): void => { this.currentPassword = value; this.currentPasswordError = ''; this.passwordMessage = ''; })
+      this.passwordFieldError(this.currentPasswordError)
+      Text('新密码').fontSize(14).fontColor($r('app.color.personal_muted')).width('100%').margin({ top: 6 })
+      TextInput({ text: this.newPassword, placeholder: '至少 8 位，含两种字符' })
+        .type(InputType.Password).showPasswordIcon(true).maxLength(128).enterKeyType(EnterKeyType.Next)
+        .height(52).width('100%').fontSize(16).fontColor($r('app.color.personal_ink')).backgroundColor($r('app.color.personal_canvas'))
+        .border({ width: 1, color: $r('app.color.personal_line') }).borderRadius(14).enabled(!this.busy).accessibilityText('新密码')
+        .onChange((value: string): void => { this.newPassword = value; this.newPasswordError = ''; this.confirmPasswordError = ''; this.passwordMessage = ''; })
+      this.passwordFieldError(this.newPasswordError)
+      Text('确认新密码').fontSize(14).fontColor($r('app.color.personal_muted')).width('100%').margin({ top: 6 })
+      TextInput({ text: this.confirmPassword, placeholder: '再次输入新密码' })
+        .type(InputType.Password).showPasswordIcon(true).maxLength(128).enterKeyType(EnterKeyType.Done)
+        .height(52).width('100%').fontSize(16).fontColor($r('app.color.personal_ink')).backgroundColor($r('app.color.personal_canvas'))
+        .border({ width: 1, color: $r('app.color.personal_line') }).borderRadius(14).enabled(!this.busy).accessibilityText('确认新密码')
+        .onChange((value: string): void => { this.confirmPassword = value; this.confirmPasswordError = ''; this.passwordMessage = ''; })
+        .onSubmit((): void => { void this.savePassword(); })
+      this.passwordFieldError(this.confirmPasswordError)
+      Text('忘记当前密码时，可从登录页通过绑定的邮箱或华为账号找回。')
+        .fontSize(13).lineHeight(20).fontColor($r('app.color.personal_muted')).width('100%')
+      Button(this.passwordSaving ? '保存中…' : '确认更改').width('100%').height(48)
+        .backgroundColor($r('app.color.personal_action')).fontColor($r('app.color.personal_surface')).enabled(!this.busy)
+        .onClick((): void => { void this.savePassword(); })
+      Button('取消').width('100%').height(48).backgroundColor(Color.Transparent).fontColor($r('app.color.personal_muted'))
+        .enabled(!this.busy).onClick((): void => this.cancelPasswordChange())
+    }.width('100%').alignItems(HorizontalAlign.Start)
   }
 
   private async logout(): Promise<void> {
@@ -744,168 +861,206 @@ export struct ProfileSettingsPage {
                   .accessibilityText('食刻默认头像')
               }
               Column({ space: 4 }) {
-                Text(this.profile?.nickname || '食刻用户').fontSize(17)
-                  .fontWeight(FontWeight.Medium).fontColor($r('app.color.ink')).width('100%').maxLines(1)
-                Text('当前食刻账号').fontSize(12).fontColor($r('app.color.muted')).width('100%')
+                Text(this.profile?.nickname || '游客').fontSize(17)
+                  .fontWeight(FontWeight.Medium).fontColor($r('app.color.personal_ink')).width('100%').maxLines(1)
+                Text(this.profile === undefined ? '当前未登录' : '当前食刻账号').fontSize(12).fontColor($r('app.color.personal_muted')).width('100%')
               }.layoutWeight(1).alignItems(HorizontalAlign.Start)
             }
-            .width('100%').padding(16).backgroundColor($r('app.color.surface')).borderRadius(20)
-            .border({ width: 1, color: $r('app.color.line') })
+            .width('100%').padding(16).backgroundColor($r('app.color.personal_surface')).borderRadius(20)
+            .border({ width: 1, color: $r('app.color.personal_line') })
           }
 
           ListItem() {
             Row({ space: 12 }) {
               Image($r('app.media.ic_profile_privacy')).width(26).height(26)
                 .accessibilityLevel('no')
-              Text('权限与隐私').fontSize(16).fontColor($r('app.color.ink'))
+              Text('权限与隐私').fontSize(16).fontColor($r('app.color.personal_ink'))
                 .layoutWeight(1)
               Image($r('app.media.ic_chevron_right')).width(22).height(22)
                 .accessibilityLevel('no')
             }
             .width('100%').height(60).padding({ left: 16, right: 16 })
-            .backgroundColor($r('app.color.surface')).borderRadius(18)
-            .border({ width: 1, color: $r('app.color.line') })
+            .backgroundColor($r('app.color.personal_surface')).borderRadius(18)
+            .border({ width: 1, color: $r('app.color.personal_line') })
             .accessibilityGroup(true).accessibilityText('权限与隐私')
             .onClick((): void => {
+              if (this.busy) return;
               this.pathStack.pushPathByName('profile-privacy', null);
             })
           }
 
           ListItem() {
-            Column({ space: 12 }) {
-              Text('登录与会话').fontSize(18).fontWeight(FontWeight.Bold)
-                .fontColor($r('app.color.ink')).width('100%')
-              Text('切换用户会先使当前食刻会话失效并清除本机状态，之后可使用其他邮箱或华为账号登录。')
-                .fontSize(13).lineHeight(20).fontColor($r('app.color.muted')).width('100%')
-              Button(this.busy ? '处理中…' : '切换用户').enabled(!this.busy)
-                .width('100%').height(48).backgroundColor($r('app.color.accent_soft'))
-                .fontColor($r('app.color.accent_action')).onClick(() => this.switchUser())
-              Button('退出登录').enabled(!this.busy).width('100%').height(48)
-                .backgroundColor($r('app.color.surface')).fontColor($r('app.color.ink'))
-                .border({ width: 1, color: $r('app.color.line') }).onClick(() => this.logout())
-              if (!AuthService.isEmailSession()) {
-                Text('关联邮箱登录').fontSize(16).fontWeight(FontWeight.Medium)
-                  .fontColor($r('app.color.ink')).width('100%').margin({ top: 6 })
-                Text('验证邮箱后会直接关联到当前 AGC 用户；不会新建另一份食刻账号。')
-                  .fontSize(13).lineHeight(20).fontColor($r('app.color.muted')).width('100%')
-                if (this.emailBindingVisible) {
-                  Text('邮箱地址').fontSize(13).fontColor($r('app.color.muted')).width('100%')
-                  TextInput({ text: this.emailBindingAddress, placeholder: 'name@example.com' })
-                    .width('100%').height(48).backgroundColor($r('app.color.canvas'))
-                    .accessibilityText('要关联的邮箱地址')
-                    .onChange((value: string): void => {
-                      this.emailBindingAddress = value;
-                    })
-                  Row({ space: 10 }) {
-                    TextInput({ text: this.emailBindingVerifyCode, placeholder: '邮箱验证码' })
-                      .layoutWeight(1).height(48).backgroundColor($r('app.color.canvas'))
-                      .accessibilityText('关联邮箱验证码')
-                      .onChange((value: string): void => {
-                        this.emailBindingVerifyCode = value;
-                      })
-                    Button(this.emailBindingCodeCountdown > 0 ? `${this.emailBindingCodeCountdown} 秒后重发` :
-                      (this.emailBindingCodeBusy ? '发送中…' : '获取验证码'))
-                      .enabled(!this.busy && !this.emailBindingCodeBusy && this.emailBindingCodeCountdown === 0)
-                      .height(46).fontSize(13).backgroundColor($r('app.color.surface'))
-                      .fontColor($r('app.color.accent_action')).border({ width: 1, color: $r('app.color.line') })
-                      .onClick(() => this.requestEmailBindingCode())
-                  }.width('100%')
-                  Button(this.busy ? '正在关联…' : '确认关联邮箱').enabled(!this.busy && !this.emailBindingCodeBusy)
-                    .width('100%').height(48).backgroundColor($r('app.color.accent_action'))
-                    .fontColor($r('app.color.on_accent_action')).onClick(() => this.completeEmailBinding())
-                } else {
-                  Button(this.busy ? '处理中…' : '关联邮箱').enabled(!this.busy)
-                    .width('100%').height(48).backgroundColor($r('app.color.accent_soft'))
-                    .fontColor($r('app.color.accent_action')).onClick((): void => this.showEmailBinding())
-                }
-              } else {
-                Text('关联华为账号').fontSize(16).fontWeight(FontWeight.Medium)
-                  .fontColor($r('app.color.ink')).width('100%').margin({ top: 6 })
-                Text('授权后会直接关联到当前 AGC 用户；之后可用邮箱或华为账号登录同一食刻账号。')
-                  .fontSize(13).lineHeight(20).fontColor($r('app.color.muted')).width('100%')
-                Button(this.busy ? '正在关联…' : '关联华为账号').enabled(!this.busy)
-                  .width('100%').height(48).backgroundColor($r('app.color.accent_soft'))
-                  .fontColor($r('app.color.accent_action')).onClick(() => this.linkHuaweiAccount())
-              }
-            }
-            .width('100%').padding(16).backgroundColor($r('app.color.surface')).borderRadius(20)
-            .border({ width: 1, color: $r('app.color.line') }).alignItems(HorizontalAlign.Start)
+            Button() {
+              Row({ space: 12 }) {
+                Image($r('app.media.ic_profile_cards')).width(26).height(26).accessibilityLevel('no')
+                Text('管理员系统').fontSize(16).fontColor($r('app.color.personal_ink')).layoutWeight(1).textAlign(TextAlign.Start)
+                Image($r('app.media.ic_chevron_right')).width(22).height(22).accessibilityLevel('no')
+              }.width('100%')
+            }.type(ButtonType.Normal).width('100%').constraintSize({ minHeight: 60 }).padding({ left: 16, right: 16, top: 12, bottom: 12 })
+              .backgroundColor($r('app.color.personal_surface')).borderRadius(18).border({ width: 1, color: $r('app.color.personal_line') })
+              .enabled(!this.busy).accessibilityText('管理员系统，卡片举报审核')
+              .onClick((): void => this.pathStack.pushPathByName('card-review-reports', null))
           }
 
-          ListItem() {
-            Column({ space: 12 }) {
-              Text('注销食刻账号').fontSize(18).fontWeight(FontWeight.Bold)
-                .fontColor($r('app.color.danger')).width('100%')
-              Text('注销申请提交后账号将立即停用、内容不可访问；相关数据和认证身份按后台清理流程处理。此操作不可恢复。')
-                .fontSize(13).lineHeight(20).fontColor($r('app.color.muted')).width('100%')
-              if (this.deleteConfirmationVisible) {
-                Text('请再次确认：你将永久失去当前食刻账号及其相关数据。')
-                  .fontSize(13).lineHeight(20).fontColor($r('app.color.danger')).width('100%')
-                  .padding(12).backgroundColor($r('app.color.danger_soft')).borderRadius(14)
-                if (AuthService.isEmailSession()) {
-                  Text('邮箱会话需要在注销前完成最近 5 分钟内的邮箱验证码重新认证。')
-                    .fontSize(12).lineHeight(18).fontColor($r('app.color.muted')).width('100%')
-                  Text('当前认证邮箱').fontSize(13).fontColor($r('app.color.muted')).width('100%')
-                  TextInput({ text: this.deleteEmailAddress, placeholder: 'name@example.com' })
-                    .width('100%').height(48).backgroundColor($r('app.color.canvas'))
-                    .accessibilityText('当前认证邮箱')
-                    .onChange((value: string): void => {
-                      this.deleteEmailAddress = value;
-                    })
-                  Row({ space: 10 }) {
-                    TextInput({ text: this.deleteVerifyCode, placeholder: '邮箱验证码' })
-                      .layoutWeight(1).height(48)
-                      .accessibilityText('邮箱验证码')
-                      .onChange((value: string): void => {
-                        this.deleteVerifyCode = value;
-                      })
-                    Button(this.deleteCodeCountdown > 0 ? `${this.deleteCodeCountdown} 秒后重发` :
-                      (this.deleteCodeBusy ? '发送中…' : '获取验证码'))
-                      .enabled(!this.busy && !this.deleteCodeBusy && this.deleteCodeCountdown === 0)
-                      .height(46).fontSize(13)
-                      .backgroundColor($r('app.color.surface')).fontColor($r('app.color.accent_action'))
-                      .border({ width: 1, color: $r('app.color.line') })
-                      .onClick(() => this.requestDeleteCode())
-                  }.width('100%')
+          if (this.profile !== undefined) {
+            ListItem() {
+              Column({ space: 12 }) {
+                Text('登录与会话').fontSize(18).fontWeight(FontWeight.Bold)
+                  .fontColor($r('app.color.personal_ink')).width('100%')
+                Text('切换用户会先使当前食刻会话失效并清除本机状态，之后可使用其他昵称、邮箱或华为账号登录。')
+                  .fontSize(13).lineHeight(20).fontColor($r('app.color.personal_muted')).width('100%')
+                if (this.passwordChangeVisible) {
+                  Text('更改密码').fontSize(16).fontWeight(FontWeight.Medium).fontColor($r('app.color.personal_ink')).width('100%')
+                  this.passwordChangeForm()
+                } else {
+                  Button('更改密码').enabled(!this.busy).width('100%').height(48)
+                    .backgroundColor($r('app.color.personal_surface')).fontColor($r('app.color.personal_ink'))
+                    .border({ width: 1, color: $r('app.color.personal_line') }).accessibilityText('更改食刻账号密码')
+                    .onClick((): void => this.showPasswordChange())
                 }
-                Row({ space: 10 }) {
-                  Button('取消').layoutWeight(1).height(48).enabled(!this.busy)
-                    .backgroundColor($r('app.color.surface')).fontColor($r('app.color.ink'))
-                    .border({ width: 1, color: $r('app.color.line') })
-                    .onClick((): void => {
-                      this.deleteConfirmationVisible = false;
-                    })
-                  Button(this.busy ? '正在注销…' : '确认永久注销').layoutWeight(1).height(48).enabled(!this.busy)
-                    .backgroundColor($r('app.color.danger_action')).fontColor($r('app.color.on_danger_action'))
-                    .onClick((): void => {
-                      this.deleteAccount();
-                    })
-                }.width('100%')
-              } else {
-                Button('注销账号').enabled(!this.busy).width('100%').height(48)
-                  .backgroundColor($r('app.color.danger_soft')).fontColor($r('app.color.danger'))
-                  .border({ width: 1, color: $r('app.color.danger') })
-                  .onClick((): void => {
-                    this.status = '';
-                    this.deleteConfirmationVisible = true;
-                  })
+                if (this.passwordMessage.length > 0) {
+                  Text(this.passwordMessage).fontSize(13).lineHeight(20).width('100%')
+                    .fontColor(this.passwordFailed ? $r('app.color.danger') : $r('app.color.personal_muted'))
+                }
+                Button(this.busy ? '处理中…' : '切换用户').enabled(!this.busy)
+                  .width('100%').height(48).backgroundColor($r('app.color.personal_soft'))
+                  .fontColor($r('app.color.personal_action')).onClick(() => this.switchUser())
+                Button('退出登录').enabled(!this.busy).width('100%').height(48)
+                  .backgroundColor($r('app.color.personal_surface')).fontColor($r('app.color.personal_ink'))
+                  .border({ width: 1, color: $r('app.color.personal_line') }).onClick(() => this.logout())
+                if (AuthService.isNicknameSession()) {
+                  Text('忘记密码时，可在登录页通过绑定的邮箱或华为账号验证后重设。关联身份或注销账号前，请先使用绑定的邮箱或华为账号登录。昵称密码会话仅在本次应用运行期间保留；退出登录会撤销所有设备上的昵称密码会话。')
+                    .fontSize(13).lineHeight(20).fontColor($r('app.color.personal_muted')).width('100%')
+                } else if (!AuthService.isEmailSession()) {
+                  Text('关联邮箱登录').fontSize(16).fontWeight(FontWeight.Medium)
+                    .fontColor($r('app.color.personal_ink')).width('100%').margin({ top: 6 })
+                  Text('验证邮箱后会直接关联到当前 AGC 用户；不会新建另一份食刻账号。')
+                    .fontSize(13).lineHeight(20).fontColor($r('app.color.personal_muted')).width('100%')
+                  if (this.emailBindingVisible) {
+                    Text('邮箱地址').fontSize(13).fontColor($r('app.color.personal_muted')).width('100%')
+                    TextInput({ text: this.emailBindingAddress, placeholder: 'name@example.com' })
+                      .width('100%').height(48).backgroundColor($r('app.color.personal_canvas'))
+                      .accessibilityText('要关联的邮箱地址')
+                      .onChange((value: string): void => {
+                        this.emailBindingAddress = value;
+                      })
+                    Row({ space: 10 }) {
+                      TextInput({ text: this.emailBindingVerifyCode, placeholder: '邮箱验证码' })
+                        .layoutWeight(1).height(48).backgroundColor($r('app.color.personal_canvas'))
+                        .accessibilityText('关联邮箱验证码')
+                        .onChange((value: string): void => {
+                          this.emailBindingVerifyCode = value;
+                        })
+                      Button(this.emailBindingCodeCountdown > 0 ? `${this.emailBindingCodeCountdown} 秒后重发` :
+                        (this.emailBindingCodeBusy ? '发送中…' : '获取验证码'))
+                        .enabled(!this.busy && !this.emailBindingCodeBusy && this.emailBindingCodeCountdown === 0)
+                        .height(46).fontSize(13).backgroundColor($r('app.color.personal_surface'))
+                        .fontColor($r('app.color.personal_action')).border({ width: 1, color: $r('app.color.personal_line') })
+                        .onClick(() => this.requestEmailBindingCode())
+                    }.width('100%')
+                    Button(this.busy ? '正在关联…' : '确认关联邮箱').enabled(!this.busy && !this.emailBindingCodeBusy)
+                      .width('100%').height(48).backgroundColor($r('app.color.personal_action'))
+                      .fontColor($r('app.color.personal_surface')).onClick(() => this.completeEmailBinding())
+                  } else {
+                    Button(this.busy ? '处理中…' : '关联邮箱').enabled(!this.busy)
+                      .width('100%').height(48).backgroundColor($r('app.color.personal_soft'))
+                      .fontColor($r('app.color.personal_action')).onClick((): void => this.showEmailBinding())
+                  }
+                } else {
+                  Text('关联华为账号').fontSize(16).fontWeight(FontWeight.Medium)
+                    .fontColor($r('app.color.personal_ink')).width('100%').margin({ top: 6 })
+                  Text('授权后会直接关联到当前 AGC 用户；之后可用邮箱或华为账号登录同一食刻账号。')
+                    .fontSize(13).lineHeight(20).fontColor($r('app.color.personal_muted')).width('100%')
+                  Button(this.busy ? '正在关联…' : '关联华为账号').enabled(!this.busy)
+                    .width('100%').height(48).backgroundColor($r('app.color.personal_soft'))
+                    .fontColor($r('app.color.personal_action')).onClick(() => this.linkHuaweiAccount())
+                }
               }
+              .width('100%').padding(16).backgroundColor($r('app.color.personal_surface')).borderRadius(20)
+              .border({ width: 1, color: $r('app.color.personal_line') }).alignItems(HorizontalAlign.Start)
             }
-            .width('100%').padding(16).backgroundColor($r('app.color.surface')).borderRadius(20)
-            .border({ width: 1, color: $r('app.color.line') }).alignItems(HorizontalAlign.Start)
+
+            ListItem() {
+              Column({ space: 12 }) {
+                Text('注销食刻账号').fontSize(18).fontWeight(FontWeight.Bold)
+                  .fontColor($r('app.color.danger')).width('100%')
+                Text('注销申请提交后账号将立即停用、内容不可访问；相关数据和认证身份按后台清理流程处理。此操作不可恢复。')
+                  .fontSize(13).lineHeight(20).fontColor($r('app.color.personal_muted')).width('100%')
+                if (this.deleteConfirmationVisible) {
+                  Text('请再次确认：你将永久失去当前食刻账号及其相关数据。')
+                    .fontSize(13).lineHeight(20).fontColor($r('app.color.danger')).width('100%')
+                    .padding(12).backgroundColor($r('app.color.danger_soft')).borderRadius(14)
+                  if (AuthService.isEmailSession()) {
+                    Text('邮箱会话需要在注销前完成最近 5 分钟内的邮箱验证码重新认证。')
+                      .fontSize(12).lineHeight(18).fontColor($r('app.color.personal_muted')).width('100%')
+                    Text('当前认证邮箱').fontSize(13).fontColor($r('app.color.personal_muted')).width('100%')
+                    TextInput({ text: this.deleteEmailAddress, placeholder: 'name@example.com' })
+                      .width('100%').height(48).backgroundColor($r('app.color.personal_canvas'))
+                      .accessibilityText('当前认证邮箱')
+                      .onChange((value: string): void => {
+                        this.deleteEmailAddress = value;
+                      })
+                    Row({ space: 10 }) {
+                      TextInput({ text: this.deleteVerifyCode, placeholder: '邮箱验证码' })
+                        .layoutWeight(1).height(48)
+                        .accessibilityText('邮箱验证码')
+                        .onChange((value: string): void => {
+                          this.deleteVerifyCode = value;
+                        })
+                      Button(this.deleteCodeCountdown > 0 ? `${this.deleteCodeCountdown} 秒后重发` :
+                        (this.deleteCodeBusy ? '发送中…' : '获取验证码'))
+                        .enabled(!this.busy && !this.deleteCodeBusy && this.deleteCodeCountdown === 0)
+                        .height(46).fontSize(13)
+                        .backgroundColor($r('app.color.personal_surface')).fontColor($r('app.color.personal_action'))
+                        .border({ width: 1, color: $r('app.color.personal_line') })
+                        .onClick(() => this.requestDeleteCode())
+                    }.width('100%')
+                  }
+                  Row({ space: 10 }) {
+                    Button('取消').layoutWeight(1).height(48).enabled(!this.busy)
+                      .backgroundColor($r('app.color.personal_surface')).fontColor($r('app.color.personal_ink'))
+                      .border({ width: 1, color: $r('app.color.personal_line') })
+                      .onClick((): void => {
+                        this.deleteConfirmationVisible = false;
+                      })
+                    Button(this.busy ? '正在注销…' : '确认永久注销').layoutWeight(1).height(48).enabled(!this.busy)
+                      .backgroundColor($r('app.color.danger_action')).fontColor($r('app.color.on_danger_action'))
+                      .onClick((): void => {
+                        this.deleteAccount();
+                      })
+                  }.width('100%')
+                } else {
+                  Button('注销账号').enabled(!this.busy).width('100%').height(48)
+                    .backgroundColor($r('app.color.danger_soft')).fontColor($r('app.color.danger'))
+                    .border({ width: 1, color: $r('app.color.danger') })
+                    .onClick((): void => {
+                      this.status = '';
+                      this.deleteConfirmationVisible = true;
+                    })
+                }
+              }
+              .width('100%').padding(16).backgroundColor($r('app.color.personal_surface')).borderRadius(20)
+              .border({ width: 1, color: $r('app.color.personal_line') }).alignItems(HorizontalAlign.Start)
+            }
+
           }
 
           if (this.status.length > 0) {
             ListItem() {
               Text(this.status).fontSize(13).lineHeight(20).fontColor($r('app.color.warning')).width('100%')
-                .padding(12).backgroundColor($r('app.color.accent_soft')).borderRadius(14)
+                .padding(12).backgroundColor($r('app.color.personal_soft')).borderRadius(14)
             }
           }
         }
         .width('100%').layoutWeight(1).scrollBar(BarState.Off).edgeEffect(EdgeEffect.Spring)
         .padding({ left: 20, right: 20, top: 12, bottom: 28 })
-      }.width('100%').height('100%').backgroundColor($r('app.color.canvas'))
-    }.title('设置')
+      }.width('100%').height('100%').backgroundColor($r('app.color.personal_canvas'))
+    }.attributeModifier(new AppDestinationStyle('设置', $r('app.color.personal_canvas'), $r('app.color.personal_header'), 'PERSONAL'))
+      .onBackPressed((): boolean => {
+        if (this.busy) return true;
+        if (this.passwordChangeVisible) { this.cancelPasswordChange(); return true; }
+        return false;
+      })
   }
 }
 
@@ -1286,8 +1441,8 @@ export struct ProfileEditPage {
     }
     if (this.saving || this.preparingAvatar || this.preparingCover) return;
     const normalizedNickname = this.nickname.trim();
-    if (normalizedNickname.length === 0 || normalizedNickname.length > 24) {
-      this.status = '昵称需为 1–24 个字符。';
+    if (normalizedNickname.length < 2 || normalizedNickname.length > 24) {
+      this.status = '昵称需为 2–24 个字符。';
       return;
     }
     this.saving = true;
@@ -1344,10 +1499,10 @@ export struct ProfileEditPage {
         })
         .accessibilityLevel('no')
       Column().width(viewport).height(viewport)
-        .border({ width: 2, color: $r('app.color.on_accent_action') }).borderRadius(viewport / 2)
+        .border({ width: 2, color: $r('app.color.personal_surface') }).borderRadius(viewport / 2)
         .accessibilityLevel('no')
     }
-    .width(viewport).height(viewport).clip(true).backgroundColor($r('app.color.canvas'))
+    .width(viewport).height(viewport).clip(true).backgroundColor($r('app.color.personal_canvas'))
     .borderRadius(viewport / 2)
     .onTouch((event: TouchEvent): void => this.handleCropTouch(viewport, event))
     .hitTestBehavior(this.cropEditing ? HitTestMode.Block : HitTestMode.Default)
@@ -1359,13 +1514,13 @@ export struct ProfileEditPage {
     Column({ space: 14 }) {
       Row() {
         Column({ space: 4 }) {
-          Text('选定头像区域').fontSize(18).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'))
+          Text('选定头像区域').fontSize(18).fontWeight(FontWeight.Bold).fontColor($r('app.color.personal_ink'))
             .width('100%')
           Text('在固定取景框内拖动或缩放图片，框内内容会成为最终头像。')
-            .fontSize(12).fontColor($r('app.color.muted')).width('100%')
+            .fontSize(12).fontColor($r('app.color.personal_muted')).width('100%')
         }.layoutWeight(1).alignItems(HorizontalAlign.Start)
         Text('第 2 步').fontSize(12).fontWeight(FontWeight.Medium).fontColor($r('app.color.leaf'))
-          .padding({ left: 8, right: 8, top: 4, bottom: 4 }).backgroundColor($r('app.color.accent_soft')).borderRadius(10)
+          .padding({ left: 8, right: 8, top: 4, bottom: 4 }).backgroundColor($r('app.color.personal_soft')).borderRadius(10)
       }.width('100%')
 
       Row() {
@@ -1373,24 +1528,24 @@ export struct ProfileEditPage {
       }.width('100%').justifyContent(FlexAlign.Center)
 
       Text(`当前取景框：圆形；缩放 ${this.cropScale.toFixed(1)}×`)
-        .fontSize(13).fontColor($r('app.color.muted')).width('100%').textAlign(TextAlign.Center)
+        .fontSize(13).fontColor($r('app.color.personal_muted')).width('100%').textAlign(TextAlign.Center)
 
       Button('重置取景位置').height(44).width('100%')
-        .backgroundColor($r('app.color.canvas')).fontColor($r('app.color.accent_action'))
-        .border({ width: 1, color: $r('app.color.line') })
+        .backgroundColor($r('app.color.personal_canvas')).fontColor($r('app.color.personal_action'))
+        .border({ width: 1, color: $r('app.color.personal_line') })
         .onClick(() => this.resetCropPosition())
 
       Row({ space: 10 }) {
         Button('取消').height(44).layoutWeight(1).enabled(!this.preparingAvatar)
-          .backgroundColor($r('app.color.surface')).fontColor($r('app.color.ink'))
-          .border({ width: 1, color: $r('app.color.line') }).onClick(() => this.cancelAvatarCrop())
+          .backgroundColor($r('app.color.personal_surface')).fontColor($r('app.color.personal_ink'))
+          .border({ width: 1, color: $r('app.color.personal_line') }).onClick(() => this.cancelAvatarCrop())
         Button(this.preparingAvatar ? '正在处理…' : '使用此头像').height(44).layoutWeight(1)
-          .enabled(!this.preparingAvatar).backgroundColor($r('app.color.accent_action'))
-          .fontColor($r('app.color.on_accent_action')).onClick(() => this.applyAvatarCrop())
+          .enabled(!this.preparingAvatar).backgroundColor($r('app.color.personal_action'))
+          .fontColor($r('app.color.personal_surface')).onClick(() => this.applyAvatarCrop())
       }.width('100%')
     }
-    .width('100%').padding(16).backgroundColor($r('app.color.surface')).borderRadius(20)
-    .border({ width: 1, color: $r('app.color.line') }).alignItems(HorizontalAlign.Start)
+    .width('100%').padding(16).backgroundColor($r('app.color.personal_surface')).borderRadius(20)
+    .border({ width: 1, color: $r('app.color.personal_line') }).alignItems(HorizontalAlign.Start)
   }
 
   build() {
@@ -1402,7 +1557,7 @@ export struct ProfileEditPage {
               this.cropEditor()
             } else {
               Column({ space: 14 }) {
-                Text('头像').fontSize(18).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink')).width('100%')
+                Text('头像').fontSize(18).fontWeight(FontWeight.Bold).fontColor($r('app.color.personal_ink')).width('100%')
                 Row({ space: 16 }) {
                   if (this.preparedAvatar !== undefined && this.cropSourceUri.length > 0) {
                     this.avatarCropPreview(76, '待保存的用户头像')
@@ -1416,21 +1571,21 @@ export struct ProfileEditPage {
                   Column({ space: 6 }) {
                     Button('更换头像').height(44).fontSize(14)
                       .enabled(!this.saving && !this.preparingAvatar && !this.preparingCover)
-                      .backgroundColor($r('app.color.accent_soft')).fontColor($r('app.color.accent_action'))
+                      .backgroundColor($r('app.color.personal_soft')).fontColor($r('app.color.personal_action'))
                       .onClick(() => this.chooseAvatar())
                     Text('选择后可在取景框中拖动或缩放；保存前不会上传。')
-                      .fontSize(12).lineHeight(18).fontColor($r('app.color.muted')).width('100%')
+                      .fontSize(12).lineHeight(18).fontColor($r('app.color.personal_muted')).width('100%')
                   }.layoutWeight(1).alignItems(HorizontalAlign.Start)
                 }.width('100%')
               }
-              .width('100%').padding(16).backgroundColor($r('app.color.surface')).borderRadius(20)
-              .border({ width: 1, color: $r('app.color.line') }).alignItems(HorizontalAlign.Start)
+              .width('100%').padding(16).backgroundColor($r('app.color.personal_surface')).borderRadius(20)
+              .border({ width: 1, color: $r('app.color.personal_line') }).alignItems(HorizontalAlign.Start)
             }
           }
 
           ListItem() {
             Column({ space: 12 }) {
-              Text('主页背景').fontSize(18).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink')).width('100%')
+              Text('主页背景').fontSize(18).fontWeight(FontWeight.Bold).fontColor($r('app.color.personal_ink')).width('100%')
               Stack({ alignContent: Alignment.Center }) {
                 if (this.coverPreviewUri.length > 0) {
                   Image(this.coverPreviewUri).width('100%').height(132).objectFit(ImageFit.Cover)
@@ -1438,70 +1593,70 @@ export struct ProfileEditPage {
                 } else {
                   Column({ space: 6 }) {
                     Text('食刻好友主页').fontSize(20).fontWeight(FontWeight.Bold)
-                      .fontColor($r('app.color.accent_action'));
+                      .fontColor($r('app.color.personal_action'));
                     Text('把喜欢的味道分享给朋友').fontSize(13).fontColor($r('app.color.leaf'));
                   }
                   .width('100%').height(132).justifyContent(FlexAlign.Center)
-                  .backgroundColor($r('app.color.accent_soft')).borderRadius(16);
+                  .backgroundColor($r('app.color.personal_soft')).borderRadius(16);
                 }
               }.width('100%').height(132);
               Row({ space: 8 }) {
                 Button(this.preparingCover ? '正在处理…' : '更换背景').height(44).layoutWeight(1)
                   .enabled(!this.saving && !this.preparingCover && !this.preparingAvatar)
-                  .backgroundColor($r('app.color.accent_soft')).fontColor($r('app.color.accent_action'))
+                  .backgroundColor($r('app.color.personal_soft')).fontColor($r('app.color.personal_action'))
                   .onClick((): void => {
                     this.chooseCover();
                   });
                 Button('恢复默认').height(44).layoutWeight(1)
                   .enabled(!this.saving && !this.preparingCover &&
                     (this.coverPreviewUri.length > 0 || (this.profile?.coverPath || '').length > 0))
-                  .backgroundColor($r('app.color.surface')).fontColor($r('app.color.ink'))
-                  .border({ width: 1, color: $r('app.color.line') }).onClick((): void => {
+                  .backgroundColor($r('app.color.personal_surface')).fontColor($r('app.color.personal_ink'))
+                  .border({ width: 1, color: $r('app.color.personal_line') }).onClick((): void => {
                     this.clearCover();
                   });
               }.width('100%');
               Text('背景图片会显示在你的好友主页；选择后先在本机移除图片位置等元数据，保存时再上传。')
-                .fontSize(12).lineHeight(18).fontColor($r('app.color.muted')).width('100%');
+                .fontSize(12).lineHeight(18).fontColor($r('app.color.personal_muted')).width('100%');
             }
-            .width('100%').padding(16).backgroundColor($r('app.color.surface')).borderRadius(20)
-            .border({ width: 1, color: $r('app.color.line') }).alignItems(HorizontalAlign.Start)
+            .width('100%').padding(16).backgroundColor($r('app.color.personal_surface')).borderRadius(20)
+            .border({ width: 1, color: $r('app.color.personal_line') }).alignItems(HorizontalAlign.Start)
           }
 
           ListItem() {
             Column({ space: 10 }) {
-              Text('昵称').fontSize(18).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink')).width('100%')
+              Text('昵称').fontSize(18).fontWeight(FontWeight.Bold).fontColor($r('app.color.personal_ink')).width('100%')
               TextInput({ text: this.nickname, placeholder: '请输入昵称' })
-                .width('100%').height(48).fontSize(16).backgroundColor($r('app.color.canvas'))
-                .fontColor($r('app.color.ink')).placeholderColor($r('app.color.muted'))
-                .border({ width: 1, color: $r('app.color.line') }).borderRadius(14)
+                .width('100%').height(48).fontSize(16).backgroundColor($r('app.color.personal_canvas'))
+                .fontColor($r('app.color.personal_ink')).placeholderColor($r('app.color.personal_muted'))
+                .border({ width: 1, color: $r('app.color.personal_line') }).borderRadius(14)
                 .padding({ left: 14, right: 14 })
                 .onChange((value: string) => this.nickname = value)
-              Text('昵称仅用于食刻内展示，长度为 1–24 个字符。')
-                .fontSize(12).lineHeight(18).fontColor($r('app.color.muted')).width('100%')
+              Text('昵称也是登录名，需唯一；修改后请使用新昵称登录。')
+                .fontSize(12).lineHeight(18).fontColor($r('app.color.personal_muted')).width('100%')
             }
-            .width('100%').padding(16).backgroundColor($r('app.color.surface')).borderRadius(20)
-            .border({ width: 1, color: $r('app.color.line') }).alignItems(HorizontalAlign.Start)
+            .width('100%').padding(16).backgroundColor($r('app.color.personal_surface')).borderRadius(20)
+            .border({ width: 1, color: $r('app.color.personal_line') }).alignItems(HorizontalAlign.Start)
           }
 
           ListItem() {
             Button(this.cropEditing ? '请先确认头像取景' : (this.saving ? '正在保存…' : '保存资料'))
               .enabled(!this.saving && !this.cropEditing && !this.preparingAvatar && !this.preparingCover)
               .width('100%').height(50)
-              .backgroundColor($r('app.color.accent_action')).fontColor($r('app.color.on_accent_action'))
+              .backgroundColor($r('app.color.personal_action')).fontColor($r('app.color.personal_surface'))
               .onClick(() => this.save())
           }
 
           if (this.status.length > 0) {
             ListItem() {
               Text(this.status).fontSize(13).lineHeight(20).width('100%')
-                .fontColor(this.status.includes('失败') ? $r('app.color.warning') : $r('app.color.muted'))
-                .padding(12).backgroundColor($r('app.color.accent_soft')).borderRadius(14)
+                .fontColor(this.status.includes('失败') ? $r('app.color.warning') : $r('app.color.personal_muted'))
+                .padding(12).backgroundColor($r('app.color.personal_soft')).borderRadius(14)
             }
           }
         }
         .width('100%').layoutWeight(1).scrollBar(BarState.Off).edgeEffect(EdgeEffect.Spring)
         .padding({ left: 20, right: 20, top: 12, bottom: 28 })
-      }.width('100%').height('100%').backgroundColor($r('app.color.canvas'))
-    }.title('编辑资料')
+      }.width('100%').height('100%').backgroundColor($r('app.color.personal_canvas'))
+    }.attributeModifier(new AppDestinationStyle('编辑资料', $r('app.color.personal_canvas'), $r('app.color.personal_header'), 'PERSONAL'))
   }
 }

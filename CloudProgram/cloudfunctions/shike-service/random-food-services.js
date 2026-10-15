@@ -32,12 +32,12 @@ function createRandomFoodServices(ctx) {
         .map(row => row.memberAUid === uid ? row.memberBUid : row.memberAUid));
       return rows.filter(row => owners.has(row.ownerUid));
     }
-    const referenceIds = rows.flatMap(row => ['WANT_TO_EAT', 'FAVORITE'].map(kind => ctx.actionId('card:' + kind, uid, row.id)));
+    const referenceIds = rows.map(row => ctx.actionId('card:FAVORITE', uid, row.id));
     const present = new Set();
     for (let start = 0; start < referenceIds.length; start += 10) {
       const batch = referenceIds.slice(start, start + 10);
       const refs = await collection(env, 'CardAction').query().in('id', batch).limit(batch.length).get();
-      for (const ref of refs) if (ref.actorUid === uid && ['WANT_TO_EAT', 'FAVORITE'].includes(ref.kind)) present.add(ref.cardId);
+      for (const ref of refs) if (ref.actorUid === uid && ref.kind === 'FAVORITE') present.add(ref.cardId);
     }
     return rows.filter(row => present.has(row.id));
   }
@@ -52,14 +52,13 @@ function createRandomFoodServices(ctx) {
     await requireSource(uid, selected, env);
     let rows = [], rangeLabel = '', scanned = 0;
     if (selected === 'MY') {
-      const [wanted, favorites] = await Promise.all(['WANT_TO_EAT', 'FAVORITE'].map(kind =>
-        collection(env, 'CardAction').query().equalTo('actorUid', uid).equalTo('kind', kind)
-          .orderByDesc('createdAt').orderByAsc('id').limit(150).get()));
-      const ids = [...new Set([...wanted, ...favorites].map(row => row.cardId).filter(Boolean))];
-      scanned = wanted.length + favorites.length;
+      const favorites = await collection(env, 'CardAction').query().equalTo('actorUid', uid).equalTo('kind', 'FAVORITE')
+        .orderByDesc('createdAt').orderByAsc('id').limit(150).get();
+      const ids = [...new Set(favorites.map(row => row.cardId).filter(Boolean))];
+      scanned = favorites.length;
       const byId = await ctx.readCardRowsByIds(ids, env);
       rows = ids.map(cardId => byId.get(cardId)).filter(Boolean);
-      rangeLabel = '想吃、收藏各最近最多150条引用，去重后准备本轮';
+      rangeLabel = '从我的收藏最近最多150条引用中去重，准备本轮';
     } else if (selected === 'PUBLIC') {
       rows = await collection(env, 'FoodCard').query().equalTo('status', 'APPROVED').orderByDesc('createdAt').orderByAsc('id').limit(300).get();
       scanned = rows.length;
@@ -122,9 +121,8 @@ function createRandomFoodServices(ctx) {
       const card = await read('FoodCard', 'id', cardId), author = card ? await read('UserProfile', 'uid', card.ownerUid) : null;
       if (!readableCardState(card) || !isAccountActive(author)) throw fail('卡片已不可用，未保存选择。', 'CONTENT_UNAVAILABLE');
       if (selected === 'MY') {
-        const wanted = await read('CardAction', 'id', ctx.actionId('card:WANT_TO_EAT', uid, cardId));
         const favorite = await read('CardAction', 'id', ctx.actionId('card:FAVORITE', uid, cardId));
-        if (!wanted && !favorite) throw fail('这张卡片已不在你的想吃或收藏中。', 'CONTENT_UNAVAILABLE');
+        if (!favorite) throw fail('这张卡片已不在你的收藏中。', 'CONTENT_UNAVAILABLE');
       }
       if (selected === 'FRIENDS') {
         const relation = await read('Friendship', 'id', ctx.socialPairId('friend', uid, card.ownerUid));

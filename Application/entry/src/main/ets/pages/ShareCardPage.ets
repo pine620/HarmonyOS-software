@@ -1,3 +1,4 @@
+import { AppDestinationStyle } from '../common/AppPageUi';
 import { CardRepository } from '../repository/CardRepository';
 import { AccountRequestGuard } from '../service/AccountRequestGuard';
 import { common } from '@kit.AbilityKit';
@@ -156,14 +157,14 @@ export struct ShareCardPage {
           Text('准备发送').fontSize(11).fontColor($r('app.color.leaf'));
         }.width('100%');
         Text(this.card.productName || '食刻卡片').fontSize(17).fontWeight(FontWeight.Bold)
-          .fontColor($r('app.color.ink')).width('100%').maxLines(2)
+          .fontColor($r('app.color.social_ink')).width('100%').maxLines(2)
           .textOverflow({ overflow: TextOverflow.Ellipsis });
         Text(`${foodCardCategoryLabel(this.card)} · ${this.priceText()}`)
-          .fontSize(13).fontColor($r('app.color.muted')).width('100%');
+          .fontSize(13).fontColor($r('app.color.social_muted')).width('100%');
       }.layoutWeight(1).alignItems(HorizontalAlign.Start);
     }
-    .width('100%').padding(14).backgroundColor($r('app.color.accent_soft')).borderRadius(20)
-    .border({ width: 1, color: $r('app.color.line') });
+    .width('100%').padding(14).backgroundColor($r('app.color.social_soft')).borderRadius(20)
+    .border({ width: 1, color: $r('app.color.social_line') });
   }
 
   @Builder
@@ -171,14 +172,14 @@ export struct ShareCardPage {
     Row({ space: 12 }) {
       SocialAvatar({ user: friend, avatarSize: 52 });
       Column({ space: 4 }) {
-        Text(friend.nickname).fontSize(16).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'))
+        Text(friend.nickname).fontSize(16).fontWeight(FontWeight.Bold).fontColor($r('app.color.social_ink'))
           .width('100%').maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
-        Text(friend.friendCode).fontSize(12).fontColor($r('app.color.muted')).width('100%').maxLines(1);
+        Text(friend.friendCode).fontSize(12).fontColor($r('app.color.social_muted')).width('100%').maxLines(1);
       }.layoutWeight(1).alignItems(HorizontalAlign.Start);
       Button(this.sendingUid === friend.uid ? '发送中' : (this.sentUid === friend.uid ? '打开聊天' : '发送'))
         .height(48)
-        .enabled(this.contentAllowed && this.sendingUid.length === 0).backgroundColor($r('app.color.accent_action'))
-        .fontColor($r('app.color.on_accent_action')).onClick((): void => {
+        .enabled(this.contentAllowed && this.sendingUid.length === 0).backgroundColor($r('app.color.social_action'))
+        .fontColor($r('app.color.social_surface')).onClick((): void => {
           this.handleFriendAction(friend);
         });
     }
@@ -188,17 +189,17 @@ export struct ShareCardPage {
   @Builder
   private groupRow(group: GroupConversationSummary): void {
     Row({ space: 12 }) {
-      Text('群').fontSize(15).fontWeight(FontWeight.Bold).fontColor($r('app.color.on_accent_action'))
+      Text('群').fontSize(15).fontWeight(FontWeight.Bold).fontColor($r('app.color.social_surface'))
         .width(48).height(48).textAlign(TextAlign.Center).padding({ top: 13 })
         .backgroundColor($r('app.color.leaf')).borderRadius(16).accessibilityLevel('no');
       Column({ space: 4 }) {
-        Text(group.name).fontSize(16).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'))
+        Text(group.name).fontSize(16).fontWeight(FontWeight.Bold).fontColor($r('app.color.social_ink'))
           .width('100%').maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
-        Text(`${group.memberCount} 人群聊`).fontSize(12).fontColor($r('app.color.muted')).width('100%');
+        Text(`${group.memberCount} 人群聊`).fontSize(12).fontColor($r('app.color.social_muted')).width('100%');
       }.layoutWeight(1).alignItems(HorizontalAlign.Start);
       Button(this.sendingGroupId === group.id ? '发送中' : (this.sentGroupId === group.id ? '打开群聊' : '发送'))
-        .height(48).enabled(this.contentAllowed && this.sendingGroupId.length === 0).backgroundColor($r('app.color.accent_action'))
-        .fontColor($r('app.color.on_accent_action')).onClick((): void => {
+        .height(48).enabled(this.contentAllowed && this.sendingGroupId.length === 0).backgroundColor($r('app.color.social_action'))
+        .fontColor($r('app.color.social_surface')).onClick((): void => {
           this.handleGroupAction(group);
         });
     }
@@ -209,31 +210,31 @@ export struct ShareCardPage {
     NavDestination() {
       Column({ space: 16 }) {
         Column({ space: 4 }) {
-          Text('发送给好友').fontSize(25).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'))
+          Text('发送给好友').fontSize(25).fontWeight(FontWeight.Bold).fontColor($r('app.color.social_ink'))
             .width('100%');
-          Text('只显示已互相确认的食刻好友').fontSize(13).fontColor($r('app.color.muted')).width('100%');
+          Text('只显示已互相确认的食刻好友').fontSize(13).fontColor($r('app.color.social_muted')).width('100%');
         }.width('100%').alignItems(HorizontalAlign.Start);
         if (this.contentAllowed) { this.cardPreview(); } else { Text('正在加载卡片，稍后可发送。'); }
         if (this.status.length > 0) {
           Text(this.status).fontSize(12).lineHeight(18).fontColor($r('app.color.warning')).width('100%')
-            .padding(10).backgroundColor($r('app.color.accent_soft')).borderRadius(12);
+            .padding(10).backgroundColor($r('app.color.social_soft')).borderRadius(12);
         }
         if (this.loading) {
           Column({ space: 10 }) {
-            LoadingProgress().width(34).height(34).color($r('app.color.accent_action'));
-            Text('正在加载好友').fontSize(13).fontColor($r('app.color.muted'));
+            LoadingProgress().width(34).height(34).color($r('app.color.social_action'));
+            Text('正在加载好友').fontSize(13).fontColor($r('app.color.social_muted'));
           }.width('100%').layoutWeight(1).justifyContent(FlexAlign.Center);
         } else if (this.friends.length === 0 && !this.groupsLoading && this.groups.length === 0) {
           Column({ space: 10 }) {
             Image($r('app.media.ic_message')).width(54).height(54).objectFit(ImageFit.Contain)
               .accessibilityLevel('no');
             Text('还没有可发送的好友').fontSize(18).fontWeight(FontWeight.Bold)
-              .fontColor($r('app.color.ink'));
+              .fontColor($r('app.color.social_ink'));
             Text('先到“好友”页搜索食刻号并互相确认，再回来发送这张卡片。')
-              .fontSize(13).lineHeight(20).fontColor($r('app.color.muted')).textAlign(TextAlign.Center)
+              .fontSize(13).lineHeight(20).fontColor($r('app.color.social_muted')).textAlign(TextAlign.Center)
               .width('82%');
-            Button('重新加载').height(48).backgroundColor($r('app.color.accent_soft'))
-              .fontColor($r('app.color.accent_action')).onClick((): void => {
+            Button('重新加载').height(48).backgroundColor($r('app.color.social_soft'))
+              .fontColor($r('app.color.social_action')).onClick((): void => {
                 this.loadFriends();
               });
           }.width('100%').layoutWeight(1).justifyContent(FlexAlign.Center);
@@ -241,7 +242,7 @@ export struct ShareCardPage {
           List() {
             if (this.friends.length > 0) {
               ListItem() {
-                Text('好友').fontSize(15).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink')).width('100%')
+                Text('好友').fontSize(15).fontWeight(FontWeight.Bold).fontColor($r('app.color.social_ink')).width('100%')
                   .padding({ top: 8, bottom: 4 });
               }
             }
@@ -249,13 +250,13 @@ export struct ShareCardPage {
               ListItem() {
                 Column() {
                   this.friendRow(friend);
-                  Divider().strokeWidth(1).color($r('app.color.line'));
+                  Divider().strokeWidth(1).color($r('app.color.social_line'));
                 }.width('100%');
               }
             }, (friend: SocialUser): string => friend.uid);
             if (this.groups.length > 0) {
               ListItem() {
-                Text('群聊').fontSize(15).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink')).width('100%')
+                Text('群聊').fontSize(15).fontWeight(FontWeight.Bold).fontColor($r('app.color.social_ink')).width('100%')
                   .padding({ top: 12, bottom: 4 });
               }
             }
@@ -263,18 +264,18 @@ export struct ShareCardPage {
               ListItem() {
                 Column() {
                   this.groupRow(group);
-                  Divider().strokeWidth(1).color($r('app.color.line'));
+                  Divider().strokeWidth(1).color($r('app.color.social_line'));
                 }.width('100%');
               }
             }, (group: GroupConversationSummary): string => group.id);
           }
           .width('100%').layoutWeight(1).scrollBar(BarState.Off).edgeEffect(EdgeEffect.Spring)
-          .padding({ left: 14, right: 14 }).backgroundColor($r('app.color.surface')).borderRadius(20)
-          .border({ width: 1, color: $r('app.color.line') });
+          .padding({ left: 14, right: 14 }).backgroundColor($r('app.color.social_surface')).borderRadius(20)
+          .border({ width: 1, color: $r('app.color.social_line') });
         }
       }
       .width('100%').height('100%').padding({ left: 16, right: 16, top: 14, bottom: 20 })
-      .backgroundColor($r('app.color.canvas')).alignItems(HorizontalAlign.Start);
-    }.title('发送卡片').onShown((): void => { this.shareVisible = true; this.aboutToAppear(); }).onHidden((): void => { this.shareVisible = false; this.aboutToDisappear(); });
+      .backgroundColor($r('app.color.social_canvas')).alignItems(HorizontalAlign.Start);
+    }.attributeModifier(new AppDestinationStyle('发送卡片', $r('app.color.social_canvas'), $r('app.color.social_header'), 'SOCIAL')).onShown((): void => { this.shareVisible = true; this.aboutToAppear(); }).onHidden((): void => { this.shareVisible = false; this.aboutToDisappear(); });
   }
 }

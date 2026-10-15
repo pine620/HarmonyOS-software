@@ -1,3 +1,4 @@
+import { PagePaletteName, pageColor } from './PagePaletteUi';
 import { accessibility } from '@kit.AccessibilityKit';
 import { CloudBusinessError } from '../service/CloudReadErrors';
 
@@ -53,18 +54,22 @@ function randomAction(button: ButtonAttribute): void {
     .fontSize(16).fontWeight(FontWeight.Bold).labelStyle(label).focusable(true).opacity(1);
 }
 export class RandomPrimaryStyle implements AttributeModifier<ButtonAttribute> {
+  private palette: PagePaletteName;
+  constructor(palette: PagePaletteName = 'NOTE') { this.palette = palette; }
   applyNormalAttribute(button: ButtonAttribute): void {
     randomAction(button);
-    button.backgroundColor($r('app.color.random_accent')).fontColor($r('app.color.random_on_accent')).border({ width: 0 });
+    button.backgroundColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'gold') : $r('app.color.random_accent'))).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'on_gold') : $r('app.color.random_on_accent'))).border({ width: 0 });
   }
   applyDisabledAttribute(button: ButtonAttribute): void { button.opacity(0.45); }
   applyPressedAttribute(button: ButtonAttribute): void { button.opacity(0.86); }
 }
 export class RandomSecondaryStyle implements AttributeModifier<ButtonAttribute> {
+  private palette: PagePaletteName;
+  constructor(palette: PagePaletteName = 'NOTE') { this.palette = palette; }
   applyNormalAttribute(button: ButtonAttribute): void {
     randomAction(button);
-    button.backgroundColor($r('app.color.random_surface')).fontColor($r('app.color.random_ink'))
-      .border({ width: 1, color: $r('app.color.random_line') });
+    button.backgroundColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'surface') : $r('app.color.random_surface'))).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'ink') : $r('app.color.random_ink')))
+      .border({ width: 1, color: (this.palette === 'PERSONAL' ? pageColor(this.palette, 'line') : $r('app.color.random_line')) });
   }
   applyDisabledAttribute(button: ButtonAttribute): void { button.opacity(0.45); }
   applyPressedAttribute(button: ButtonAttribute): void { button.opacity(0.86); }

@@ -102,6 +102,7 @@ export interface ExchangeHuaweiAccountRequest {
 
 export interface MigrationTicketRequest {
   ticket: string;
+  registerOnly?: boolean;
 }
 
 export interface MigrationTicketResponse {
@@ -290,7 +291,6 @@ export interface FoodCard {
   mediaContentChanged?: boolean;
   mediaAccessDenied?: boolean;
   authorUid?: string;
-  viewerWanted?: boolean;
   collectionReady?: boolean;
   collectionStatus?: string;
   collectionReason?: string;
@@ -488,4 +488,28 @@ export interface OperationResponse {
 export interface DeleteAccountResponse extends OperationResponse {
   cleanupPending: boolean;
   jobId: string;
+}
+
+export interface NicknamePasswordRequest {
+  nickname: string;
+  password: string;
+}
+
+export interface PasswordAccountStatus {
+  configured: boolean;
+}
+
+export interface NicknameAuthSession {
+  accessToken: string;
+  expiresAt: number;
+}
+
+export interface PasswordAccountSetupResponse extends NicknameAuthSession {
+  profile: UserProfile;
+}
+
+export interface ChangePasswordRequest {
+  currentPassword: string;
+  newPassword: string;
+  expectedUid: string;
 }

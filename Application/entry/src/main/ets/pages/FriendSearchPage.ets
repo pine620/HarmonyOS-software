@@ -1,3 +1,6 @@
+import { PagePaletteName, pageColor } from '../common/PagePaletteUi';
+import { NoteInputStyle, WarmNoteBackdrop } from '../common/WarmNoteUi';
+import { AppDestinationStyle } from '../common/AppPageUi';
 import { common } from '@kit.AbilityKit';
 import { pasteboard } from '@kit.BasicServicesKit';
 import { UserProfile } from '../model/CloudContracts';
@@ -9,6 +12,7 @@ import { ErrorDetail, errorText } from '../common/ErrorKit';
 
 @Component
 export struct FriendSearchPage {
+  @Prop palette: PagePaletteName = 'SOCIAL';
   onOpenChat: (friend: SocialUser) => void = (_friend: SocialUser): void => {};
   onFriendRequestChanged: () => void = (): void => {};
   @State profile: UserProfile | undefined = undefined;
@@ -105,18 +109,18 @@ export struct FriendSearchPage {
     Row({ space: 12 }) {
       SocialAvatar({ user: user, avatarSize: 52 });
       Column({ space: 4 }) {
-        Text(user.nickname).fontSize(16).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'))
+        Text(user.nickname).fontSize(16).fontWeight(FontWeight.Bold).fontColor(pageColor(this.palette, 'ink'))
           .width('100%').maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
         Text(`${user.friendCode} · 已发布 ${user.publishCount} 张`)
-          .fontSize(12).fontColor($r('app.color.muted')).width('100%').maxLines(1)
+          .fontSize(12).fontColor(pageColor(this.palette, 'muted')).width('100%').maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis });
       }.layoutWeight(1).alignItems(HorizontalAlign.Start);
       Button(this.actionUid === user.uid ? '处理中' : this.searchActionText(user))
         .height(48).enabled(this.searchActionEnabled(user)).fontSize(13)
         .backgroundColor(user.friendshipState === 'NONE' || user.friendshipState === 'FRIEND'
-          ? $r('app.color.accent_action') : $r('app.color.accent_soft'))
+          ? pageColor(this.palette, 'gold') : pageColor(this.palette, 'soft'))
         .fontColor(user.friendshipState === 'NONE' || user.friendshipState === 'FRIEND'
-          ? $r('app.color.on_accent_action') : $r('app.color.muted'))
+          ? pageColor(this.palette, 'on_gold') : pageColor(this.palette, 'muted'))
         .onClick((): void => {
           this.handleSearchAction(user);
         });
@@ -125,36 +129,34 @@ export struct FriendSearchPage {
 
   build() {
     NavDestination() {
+      Stack() {
+        WarmNoteBackdrop({ palette: this.palette });
       Column({ space: 16 }) {
-        Column({ space: 4 }) {
-          Text('通过食刻号添加好友').fontSize(24).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'))
-            .width('100%');
-          Text('食刻号更准确，也可以用完整昵称查找。').fontSize(13).fontColor($r('app.color.muted')).width('100%');
-        }.width('100%').alignItems(HorizontalAlign.Start);
+        Text('找到一起分享好味道的人').fontSize(15).fontColor(pageColor(this.palette, 'muted')).width('100%');
 
         Column({ space: 12 }) {
-          Text('我的食刻号').fontSize(14).fontWeight(FontWeight.Medium).fontColor($r('app.color.ink')).width('100%');
+          Text('我的食刻号').fontSize(14).fontWeight(FontWeight.Medium).fontColor(pageColor(this.palette, 'ink')).width('100%');
           Row({ space: 8 }) {
-            Text(this.ownFriendCode()).fontSize(14).fontColor($r('app.color.leaf')).layoutWeight(1).maxLines(1)
+            Text(this.ownFriendCode()).fontSize(20).fontWeight(FontWeight.Bold).fontColor(pageColor(this.palette, 'action')).layoutWeight(1).maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis }).copyOption(CopyOptions.LocalDevice)
               .accessibilityDescription('长按可选择并复制食刻号');
-            Button('复制').height(48).fontSize(13).backgroundColor($r('app.color.accent_soft'))
-              .fontColor($r('app.color.accent_action')).accessibilityText('复制我的食刻号').onClick((): void => {
+            Button('复制').height(48).fontSize(13).backgroundColor(pageColor(this.palette, 'soft'))
+              .fontColor(pageColor(this.palette, 'action')).accessibilityText('复制我的食刻号').onClick((): void => {
                 this.copyOwnFriendCode();
               });
           }.width('100%').alignItems(VerticalAlign.Center);
-          Divider().strokeWidth(1).color($r('app.color.line'));
-          Text('查找用户').fontSize(14).fontWeight(FontWeight.Medium).fontColor($r('app.color.ink')).width('100%');
-          Text('输入完整昵称，或输入对方的食刻号。').fontSize(12).fontColor($r('app.color.muted')).width('100%');
+          Divider().strokeWidth(1).color(pageColor(this.palette, 'line'));
+          Text('查找用户').fontSize(14).fontWeight(FontWeight.Medium).fontColor(pageColor(this.palette, 'ink')).width('100%');
+          Text('输入完整昵称，或输入对方的食刻号。').fontSize(12).fontColor(pageColor(this.palette, 'muted')).width('100%');
           Row({ space: 10 }) {
             TextInput({ text: this.searchKeyword, placeholder: '昵称或 SK-XXXX-XXXX-XXXX' })
-              .layoutWeight(1).height(52).fontSize(15).backgroundColor($r('app.color.canvas')).borderRadius(14)
+              .layoutWeight(1).height(52).fontSize(15).backgroundColor(pageColor(this.palette, 'canvas')).borderRadius(14).attributeModifier(new NoteInputStyle(this.palette))
               .onChange((value: string): void => {
                 this.searchKeyword = value;
                 this.status = '';
               });
             Button(this.searching ? '查找中' : '查找').height(52).enabled(!this.searching)
-              .backgroundColor($r('app.color.accent_action')).fontColor($r('app.color.on_accent_action'))
+              .backgroundColor(pageColor(this.palette, 'gold')).fontColor(pageColor(this.palette, 'on_gold'))
               .onClick((): void => {
                 this.search();
               });
@@ -163,30 +165,31 @@ export struct FriendSearchPage {
             Text(this.searchError).fontSize(12).lineHeight(18).fontColor($r('app.color.warning')).width('100%');
           }
         }
-        .width('100%').padding(16).backgroundColor($r('app.color.surface')).borderRadius(20)
-        .border({ width: 1, color: $r('app.color.line') }).alignItems(HorizontalAlign.Start);
+        .width('100%').padding(16).backgroundColor(pageColor(this.palette, 'surface')).borderRadius(20)
+        .border({ width: 1, color: pageColor(this.palette, 'line') }).alignItems(HorizontalAlign.Start);
 
         if (this.status.length > 0) {
           Text(this.status).fontSize(12).lineHeight(18).fontColor($r('app.color.warning')).width('100%')
-            .padding(10).backgroundColor($r('app.color.accent_soft')).borderRadius(12);
+            .padding(10).backgroundColor(pageColor(this.palette, 'soft')).borderRadius(12);
         }
         if (this.searchPerformed && this.searchResults.length > 0) {
           Text(`找到 ${this.searchResults.length} 位用户`).fontSize(15).fontWeight(FontWeight.Bold)
-            .fontColor($r('app.color.ink')).width('100%');
+            .fontColor(pageColor(this.palette, 'ink')).width('100%');
           List({ space: 8 }) {
             ForEach(this.searchResults, (user: SocialUser): void => {
               ListItem() { this.searchResultRow(user); }
             }, (user: SocialUser): string => user.uid);
           }
           .width('100%').layoutWeight(1).scrollBar(BarState.Off).edgeEffect(EdgeEffect.Spring)
-          .padding(12).backgroundColor($r('app.color.surface')).borderRadius(18)
-          .border({ width: 1, color: $r('app.color.line') });
+          .padding(12).backgroundColor(pageColor(this.palette, 'surface')).borderRadius(18)
+          .border({ width: 1, color: pageColor(this.palette, 'line') });
         } else {
           Blank().layoutWeight(1);
         }
       }
       .width('100%').height('100%').padding({ left: 16, right: 16, top: 14, bottom: 20 })
-      .backgroundColor($r('app.color.canvas')).alignItems(HorizontalAlign.Start);
-    }.title('添加好友');
+      .backgroundColor(Color.Transparent).alignItems(HorizontalAlign.Start);
+      }.width('100%').height('100%');
+    }.attributeModifier(new AppDestinationStyle('添加好友', pageColor(this.palette, 'canvas'), pageColor(this.palette, 'header'), this.palette));
   }
 }

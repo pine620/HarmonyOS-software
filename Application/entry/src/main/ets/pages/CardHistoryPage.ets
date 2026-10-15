@@ -1,3 +1,4 @@
+import { AppDestinationStyle } from '../common/AppPageUi';
 import { common } from '@kit.AbilityKit';
 import { FoodCard } from '../model/CloudContracts';
 import { CardRepository } from '../repository/CardRepository';
@@ -68,20 +69,20 @@ export struct CardHistoryPage {
       Column({ space: 12 }) {
         Row() {
           Column({ space: 3 }) {
-            Text(`浏览记录 · ${this.count} 条`).fontSize(18).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'));
-            Text('仅保存在本机，最多保留最近 100 张卡片').fontSize(12).fontColor($r('app.color.muted'));
+            Text(`浏览记录 · ${this.count} 条`).fontSize(18).fontWeight(FontWeight.Bold).fontColor($r('app.color.personal_ink'));
+            Text('仅保存在本机，最多保留最近 100 张卡片').fontSize(12).fontColor($r('app.color.personal_muted'));
           }.layoutWeight(1).alignItems(HorizontalAlign.Start);
           Button(this.clearPending ? '取消' : '清空').constraintSize({ minWidth: 48, minHeight: 48 })
             .fontSize(12).backgroundColor(Color.Transparent).fontColor($r('app.color.danger'))
             .enabled(this.count > 0 && !this.opening).onClick((): void => { this.clearPending = !this.clearPending; });
-        }.width('100%').padding(12).backgroundColor($r('app.color.surface')).borderRadius(16);
+        }.width('100%').padding(12).backgroundColor($r('app.color.personal_surface')).borderRadius(16);
         if (this.clearPending) { Button('确认清空本机浏览记录').width('100%').constraintSize({ minHeight: 48 })
           .backgroundColor($r('app.color.danger_action')).fontColor($r('app.color.on_danger_action'))
           .onClick((): void => this.clear()); }
-        if (this.message.length > 0) { Text(this.message).fontSize(13).fontColor($r('app.color.muted')).width('100%'); }
+        if (this.message.length > 0) { Text(this.message).fontSize(13).fontColor($r('app.color.personal_muted')).width('100%'); }
         Button('重新读取预览').constraintSize({ minHeight: 48 }).fontSize(13).enabled(!this.opening)
-          .fontColor($r('app.color.action_text')).backgroundColor(Color.Transparent).onClick((): void => this.refresh());
-        if (this.count === 0) { Text('还没有本机浏览记录').fontSize(16).fontColor($r('app.color.muted')).width('100%').padding(20); }
+          .fontColor($r('app.color.personal_action')).backgroundColor(Color.Transparent).onClick((): void => this.refresh());
+        if (this.count === 0) { Text('还没有本机浏览记录').fontSize(16).fontColor($r('app.color.personal_muted')).width('100%').padding(20); }
         List({ space: 10 }) {
           LazyForEach(this.source, (row: PersonalPreviewRow): void => {
             ListItem() { PersonalPreviewTile({ row, busy: this.opening,
@@ -89,8 +90,8 @@ export struct CardHistoryPage {
           }, (row: PersonalPreviewRow): string => row.cardId);
         }.width('100%').layoutWeight(1).cachedCount(2).onScrollIndex((first: number, last: number): void => this.window(first, last));
       }.width('100%').height('100%').padding({ left: 16, right: 16, top: 8, bottom: 12 })
-        .backgroundColor($r('app.color.canvas')).alignItems(HorizontalAlign.Start);
-    }.title('浏览记录').onShown((): void => { this.visible = true; this.activate(); })
+        .backgroundColor($r('app.color.personal_canvas')).alignItems(HorizontalAlign.Start);
+    }.attributeModifier(new AppDestinationStyle('浏览记录', $r('app.color.personal_canvas'), $r('app.color.personal_header'), 'PERSONAL')).onShown((): void => { this.visible = true; this.activate(); })
       .onHidden((): void => { this.visible = false; this.deactivate(); });
   }
 }

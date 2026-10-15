@@ -1,10 +1,11 @@
 import { FoodCard } from './CloudContracts';
 
-export type PersonalCollectionKind = 'FAVORITE' | 'WANT_TO_EAT';
+export type PersonalCollectionKind = 'FAVORITE';
 export interface SetPersonalCollectionRequest {
   cardId: string;
   active: boolean;
   requestId: string;
+  responseMode?: 'ACK';
 }
 export interface PersonalCollectionAction {
   cardId: string;
@@ -17,7 +18,7 @@ export interface PersonalCollectionAction {
   favoriteCount?: number;
   myReaction?: 'LIKE' | 'DISLIKE' | '';
   viewerFavorited?: boolean;
-  viewerWanted?: boolean;
+  committed?: boolean;
   collectionReady?: boolean;
 }
 export interface CardPreviewsRequest { cardIds: Array<string>; includeDetailPhotos?: boolean; }

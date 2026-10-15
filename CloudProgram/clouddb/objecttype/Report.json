@@ -63,6 +63,42 @@
     {
       "fieldName": "resolvedAt",
       "fieldType": "Long"
+    },
+    {
+      "fieldName": "reasonType",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "description",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "cardTitle",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "reportedRevision",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "submissionRequestId",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "submissionPayloadHash",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "resolutionRequestId",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "resolutionPayloadHash",
+      "fieldType": "String"
+    },
+    {
+      "fieldName": "resolvedCardRevision",
+      "fieldType": "String"
     }
   ],
   "indexes": [

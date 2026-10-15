@@ -1,5 +1,5 @@
 {
-	"schemaVersion":54,
+	"schemaVersion":58,
 	"objectTypes":[
 		{
 			"objectTypeName":"GroupMember",
@@ -629,6 +629,83 @@
 					]
 				}
 			]
+		},
+		{
+			"objectTypeName":"PasswordCredential",
+			"fields":[
+				{
+					"fieldName":"uid",
+					"fieldType":"String",
+					"belongPrimaryKey":true,
+					"notNull":true,
+					"isNeedEncrypt":false,
+					"isSensitive":false
+				},
+				{
+					"fieldName":"nicknameKey",
+					"fieldType":"String",
+					"belongPrimaryKey":false,
+					"notNull":true,
+					"isNeedEncrypt":false,
+					"isSensitive":false,
+					"defaultValue":""
+				},
+				{
+					"fieldName":"salt",
+					"fieldType":"String",
+					"belongPrimaryKey":false,
+					"notNull":true,
+					"isNeedEncrypt":false,
+					"isSensitive":false,
+					"defaultValue":""
+				},
+				{
+					"fieldName":"passwordHash",
+					"fieldType":"String",
+					"belongPrimaryKey":false,
+					"notNull":true,
+					"isNeedEncrypt":false,
+					"isSensitive":false,
+					"defaultValue":""
+				},
+				{
+					"fieldName":"generation",
+					"fieldType":"String",
+					"belongPrimaryKey":false,
+					"notNull":true,
+					"isNeedEncrypt":false,
+					"isSensitive":false,
+					"defaultValue":""
+				},
+				{
+					"fieldName":"customAgcUid",
+					"fieldType":"String",
+					"belongPrimaryKey":false,
+					"notNull":true,
+					"isNeedEncrypt":false,
+					"isSensitive":false,
+					"defaultValue":""
+				},
+				{
+					"fieldName":"createdAt",
+					"fieldType":"Long",
+					"belongPrimaryKey":false,
+					"notNull":true,
+					"isNeedEncrypt":false,
+					"isSensitive":false,
+					"defaultValue":"0"
+				},
+				{
+					"fieldName":"updatedAt",
+					"fieldType":"Long",
+					"belongPrimaryKey":false,
+					"notNull":true,
+					"isNeedEncrypt":false,
+					"isSensitive":false,
+					"defaultValue":"0"
+				}
+			],
+			"indexes":[]
 		},
 		{
 			"objectTypeName":"FoodList",
@@ -3034,6 +3111,78 @@
 					"notNull":false,
 					"isNeedEncrypt":false,
 					"isSensitive":false
+				},
+				{
+					"fieldName":"reasonType",
+					"fieldType":"String",
+					"belongPrimaryKey":false,
+					"notNull":false,
+					"isNeedEncrypt":false,
+					"isSensitive":false
+				},
+				{
+					"fieldName":"description",
+					"fieldType":"String",
+					"belongPrimaryKey":false,
+					"notNull":false,
+					"isNeedEncrypt":false,
+					"isSensitive":false
+				},
+				{
+					"fieldName":"cardTitle",
+					"fieldType":"String",
+					"belongPrimaryKey":false,
+					"notNull":false,
+					"isNeedEncrypt":false,
+					"isSensitive":false
+				},
+				{
+					"fieldName":"reportedRevision",
+					"fieldType":"String",
+					"belongPrimaryKey":false,
+					"notNull":false,
+					"isNeedEncrypt":false,
+					"isSensitive":false
+				},
+				{
+					"fieldName":"submissionRequestId",
+					"fieldType":"String",
+					"belongPrimaryKey":false,
+					"notNull":false,
+					"isNeedEncrypt":false,
+					"isSensitive":false
+				},
+				{
+					"fieldName":"submissionPayloadHash",
+					"fieldType":"String",
+					"belongPrimaryKey":false,
+					"notNull":false,
+					"isNeedEncrypt":false,
+					"isSensitive":false
+				},
+				{
+					"fieldName":"resolutionRequestId",
+					"fieldType":"String",
+					"belongPrimaryKey":false,
+					"notNull":false,
+					"isNeedEncrypt":false,
+					"isSensitive":false
+				},
+				{
+					"fieldName":"resolutionPayloadHash",
+					"fieldType":"String",
+					"belongPrimaryKey":false,
+					"notNull":false,
+					"isNeedEncrypt":false,
+					"isSensitive":false
+				},
+				{
+					"fieldName":"resolvedCardRevision",
+					"fieldType":"String",
+					"belongPrimaryKey":false,
+					"notNull":false,
+					"isNeedEncrypt":false,
+					"isSensitive":false
 				}
 			],
 			"indexes":[
@@ -3216,6 +3365,57 @@
 					"indexList":[
 						{
 							"fieldName":"recipientUid",
+							"sortType":"ASC"
+						}
+					]
+				}
+			]
+		},
+		{
+			"objectTypeName":"NicknameClaim",
+			"fields":[
+				{
+					"fieldName":"key",
+					"fieldType":"String",
+					"belongPrimaryKey":true,
+					"notNull":true,
+					"isNeedEncrypt":false,
+					"isSensitive":false
+				},
+				{
+					"fieldName":"ownerUid",
+					"fieldType":"String",
+					"belongPrimaryKey":false,
+					"notNull":true,
+					"isNeedEncrypt":false,
+					"isSensitive":false,
+					"defaultValue":""
+				},
+				{
+					"fieldName":"nickname",
+					"fieldType":"String",
+					"belongPrimaryKey":false,
+					"notNull":true,
+					"isNeedEncrypt":false,
+					"isSensitive":false,
+					"defaultValue":""
+				},
+				{
+					"fieldName":"updatedAt",
+					"fieldType":"Long",
+					"belongPrimaryKey":false,
+					"notNull":true,
+					"isNeedEncrypt":false,
+					"isSensitive":false,
+					"defaultValue":"0"
+				}
+			],
+			"indexes":[
+				{
+					"indexName":"ownerUid",
+					"indexList":[
+						{
+							"fieldName":"ownerUid",
 							"sortType":"ASC"
 						}
 					]
@@ -3602,6 +3802,38 @@
 					]
 				}
 			]
+		},
+		{
+			"objectTypeName":"PasswordThrottle",
+			"fields":[
+				{
+					"fieldName":"id",
+					"fieldType":"String",
+					"belongPrimaryKey":true,
+					"notNull":true,
+					"isNeedEncrypt":false,
+					"isSensitive":false
+				},
+				{
+					"fieldName":"windowAt",
+					"fieldType":"Long",
+					"belongPrimaryKey":false,
+					"notNull":true,
+					"isNeedEncrypt":false,
+					"isSensitive":false,
+					"defaultValue":"0"
+				},
+				{
+					"fieldName":"count",
+					"fieldType":"Integer",
+					"belongPrimaryKey":false,
+					"notNull":true,
+					"isNeedEncrypt":false,
+					"isSensitive":false,
+					"defaultValue":"0"
+				}
+			],
+			"indexes":[]
 		},
 		{
 			"objectTypeName":"MealPoll",
@@ -4119,6 +4351,27 @@
 					]
 				},
 				{
+					"indexName":"card_actor_kind_id",
+					"indexList":[
+						{
+							"fieldName":"cardId",
+							"sortType":"ASC"
+						},
+						{
+							"fieldName":"actorUid",
+							"sortType":"ASC"
+						},
+						{
+							"fieldName":"kind",
+							"sortType":"ASC"
+						},
+						{
+							"fieldName":"id",
+							"sortType":"ASC"
+						}
+					]
+				},
+				{
 					"indexName":"actor_kind_created_id",
 					"indexList":[
 						{
@@ -4422,6 +4675,14 @@
 				{
 					"fieldName":"expiresAt",
 					"fieldType":"Date",
+					"belongPrimaryKey":false,
+					"notNull":false,
+					"isNeedEncrypt":false,
+					"isSensitive":false
+				},
+				{
+					"fieldName":"resultJson",
+					"fieldType":"Text",
 					"belongPrimaryKey":false,
 					"notNull":false,
 					"isNeedEncrypt":false,
@@ -4791,6 +5052,31 @@
 		}
 	],
 	"permissions":[
+		{
+			"objectTypeName":"PasswordCredential",
+			"permissions":[
+				{
+					"role":"World",
+					"rights":[]
+				},
+				{
+					"role":"Authenticated",
+					"rights":[]
+				},
+				{
+					"role":"Creator",
+					"rights":[]
+				},
+				{
+					"role":"Administrator",
+					"rights":[
+						"Read",
+						"Upsert",
+						"Delete"
+					]
+				}
+			]
+		},
 		{
 			"objectTypeName":"PersonalFoodState",
 			"permissions":[
@@ -5317,7 +5603,57 @@
 			]
 		},
 		{
+			"objectTypeName":"NicknameClaim",
+			"permissions":[
+				{
+					"role":"World",
+					"rights":[]
+				},
+				{
+					"role":"Authenticated",
+					"rights":[]
+				},
+				{
+					"role":"Creator",
+					"rights":[]
+				},
+				{
+					"role":"Administrator",
+					"rights":[
+						"Read",
+						"Upsert",
+						"Delete"
+					]
+				}
+			]
+		},
+		{
 			"objectTypeName":"FriendContentAccessGrant",
+			"permissions":[
+				{
+					"role":"World",
+					"rights":[]
+				},
+				{
+					"role":"Authenticated",
+					"rights":[]
+				},
+				{
+					"role":"Creator",
+					"rights":[]
+				},
+				{
+					"role":"Administrator",
+					"rights":[
+						"Read",
+						"Upsert",
+						"Delete"
+					]
+				}
+			]
+		},
+		{
+			"objectTypeName":"PasswordThrottle",
 			"permissions":[
 				{
 					"role":"World",

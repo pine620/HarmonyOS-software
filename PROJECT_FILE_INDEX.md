@@ -1,6 +1,6 @@
 # 项目文件索引
 
-按 2026-10-11 的现有发布文件结构整理，重点覆盖 `Application` 与 `CloudProgram`。先看下面的职责说明，完整文件清单在文末。首次运行见 [README](README.md)，后端操作见 [云端指南](CloudProgram/README.md)。
+按 2026-10-15 的现有发布文件结构整理，重点覆盖 `Application` 与 `CloudProgram`。先看下面的职责说明，完整文件清单在文末。首次运行见 [README](README.md)，后端操作见 [云端指南](CloudProgram/README.md)。
 
 路径从项目根目录起算。GitHub 仓库包含 Application 与 CloudProgram 的源码；三个不含签名的 build profile 随源码共享；本地签名、SDK 和云工程关联配置另列，不提交配置值。
 
@@ -26,8 +26,7 @@ Application/
 └── scripts/                  离线指标汇总
 CloudProgram/
 ├── cloud-config.json         本地生成的团队/项目/应用关联元数据
-├── cloudfunctions/           四个云对象与三个独立云函数
-├── hosting/share/            公开分享网页与托管约定
+├── cloudfunctions/           四个云对象与两个独立云函数
 ├── scripts/                  云对象、分享及维护打包工具
 ├── clouddb/objecttype/       当前数据库对象定义
 ├── clouddb/db-config.json    默认存储区与数据处理位置
@@ -40,17 +39,11 @@ CloudProgram/
 
 | 路径 | 职责与注意事项 |
 | --- | --- |
-| `AppScope/app.json5` | 包名、vendor、versionName/versionCode、全局图标与名称；版本源 |
-| `hvigorfile.ts`、`hvigor/hvigor-config.json5` | 工程级 Hvigor 构建入口和配置 |
-| `oh-package.json5` | 工程级 OHPM 元信息与依赖 |
-| `entry/hvigorfile.ts`、`entry/oh-package.json5`、`entry/oh-package-lock.json5` | entry HAP 构建任务、AGC SDK/本地 HAR 依赖与解析锁文件 |
 | `entry/src/main/module.json5` | EntryAbility、设备类型、权限、URI/域名验证、服务卡片和接续声明 |
-| `cloud_objects/oh-package.json5`、`cloud_objects/hvigorfile.ts`、`cloud_objects/src/main/module.json5` | 代理 HAR 的包声明、构建与模块配置 |
 | `cloud_objects/Index.ets` | 四个云对象代理、importObject、CloudEnvelope 公共导出 |
 | `cloud_objects/BuildProfile.ets` | 构建生成的 HAR 版本/模式常量，不是业务配置源 |
 | `.idea/.gitignore` | 保留工程目录，供 DevEco 26.0 打开对话框识别；不共享 workspace、缓存或个人设置 |
 | `.gitignore` | 忽略签名文件、SDK 配置、依赖和产物；共享 build profile 中不提交个人签名信息 |
-| `package-lock.json` | 历史 npm 锁文件；客户端业务依赖以 OHPM 为准，不能用 npm install 替代 |
 
 以上路径相对于 `Application/`。三个 build-profile.json5 是共享的工程/模块构建配置，默认不带签名；首次需要下载的 rawfile/agconnect-services.json 单独说明于 README。
 
@@ -88,6 +81,8 @@ CloudProgram/
 | `FoodChoiceHistoryPage.ets` | 本人选择历史、内容读取与删除 |
 | `MyContentStatusPage.ets` | 本人内容状态与后续操作 |
 
+| `CardReportListPage.ets`、`CardReportDetailPage.ets` | 举报列表、详情、图片与处理动作 |
+
 ## Application：业务封装、服务与模型
 
 以下路径相对于 `Application/entry/src/main/ets/`。
@@ -108,7 +103,6 @@ CloudProgram/
 | `service/PhotoUploadService.ets` | 鉴权媒体上传、游客/账号媒体读取、Base64 到本机文件、文件缓存与下载队列 |
 | `service/NearbyPerformanceTrace.ets` | 附近/详情的固定指标与 trace，供人工采样 |
 | `service/CardVisitStore.ets` | 按账号保存访问历史与数量控制 |
-| `service/CardAppLink.ets` | 受控 HTTPS 卡片链接生成/解析、cardId 校验、待处理状态 |
 | `service/ContinuationState.ets` | 最小接续上下文、Want 路由参数与待处理通知；不迁移 Token |
 | `service/PushNotificationService.ets` | 系统通知同意、Token/安装标识、云登记/解绑及重试 |
 | `service/ServiceCardStore.ets` | 本地公开摘要、两种尺寸、封面身份匹配与 Form Kit 图片绑定 |
@@ -154,8 +148,13 @@ CloudProgram/
 | `repository/RandomFoodRepository.ets`、`model/RandomFoodModels.ets` | 候选池、轮盘内容、选择回执与历史 |
 | `service/RandomFoodRoundStore.ets` | 按账号/来源保存轮次，校验本机恢复数据 |
 | `repository/ContentStatusRepository.ets`、`model/ContentStatusModels.ets` | 本人内容状态 |
-| `repository/FeatureRepository.ets`、`model/FeatureModels.ets`、`service/ContentPageGuard.ets` | 功能能力与页面请求有效性 |
 | `components/FoodRankingTile.ets`、`common/RandomFoodUi.ets`、`common/ContentStatusUi.ets` | 榜单/轮盘/状态共用 UI |
+
+| `service/CardDeepLink.ets` | 应用内分享链接与待处理卡片入口 |
+| `service/CardInteractionController.ets`、`repository/CardInteractionRepository.ets`、`model/CardInteractionModels.ets` | 卡片互动协调、意图持久化、写回执与计数 |
+| `repository/CardReportRepository.ets`、`model/CardReportModels.ets`、`components/CardReportPhoto.ets` | 举报请求、响应模型和图片读取 |
+| `common/AppPageUi.ets`、`PagePaletteUi.ets`、`WarmNoteUi.ets`、`CreateCardUi.ets` | 页面、色板、笔记与制作共用 UI |
+| `components/CardInteractionButton.ets`、`NotePreviewTile.ets`、`DiscoveryVisuals.ets` | 互动按钮、笔记预览与发现页视觉组件 |
 
 ## Application：代理、资源与脚本
 
@@ -164,7 +163,6 @@ CloudProgram/
 | `cloud_objects/src/main/ets/ImportObject.ts` | 生成的 importObject 与代理调用包装 |
 | `cloud_objects/src/main/ets/shike-*/Shike*.ts` | auth/media/service/location 四类调用代理；Generated/DO NOT EDIT 文件通过 Generate Invoke Interface 更新 |
 | `entry/src/main/resources/base/profile/main_pages.json` | 普通应用入口，Index 内管理子页面导航 |
-| `entry/src/main/resources/base/profile/form_config.json` | 2×2 摘要、2×4 封面服务卡片、尺寸调整与数据代理配置 |
 | `entry/src/main/resources/base/element/`、`entry/src/main/resources/dark/element/` | 字符串、亮/暗色主题颜色 |
 | `entry/src/main/resources/base/media/create_category_*.svg` | 制作页六种分类图标 |
 | `entry/src/main/resources/base/media/food_*.png` | 分类兜底封面；staple=米饭、bakery=汤粉、drink=饮品、snack=炸鸡、fresh=烧烤、other=其他，文件名为兼容保留 |
@@ -177,9 +175,6 @@ CloudProgram/
 
 | 路径 | 职责与注意事项 |
 | --- | --- |
-| `cloud-config.json` | IDE 生成的团队、项目、应用、站点关联元数据；决定部署目标，不授予成员权限 |
-| `package.json`、`package-lock.json` | 云工程公共 TS/Node 类型依赖；test 是占位脚本，各对象另有独立依赖 |
-| `clouddb/db-config.json` | 默认存储区 shike 与位置 |
 | `AppScope/resources/rawfile/schema.json` | 平台生成 schema 快照；当前部署以 clouddb/objecttype 为准 |
 | `README.md` | 从零后端准备、部署/调试与变量说明 |
 
@@ -196,18 +191,21 @@ CloudProgram/
 
 共享策略、错误与图片协议统一维护在 `cloudfunctions/shared/`；service 另带 当前保留的 `stage1-services.js`、`stage2-services.js`、`stage3-services.js`、`stage6-services.js`、`stage7-services.js`、`stages47-common.js`、`personal-collections.js`、`content-status-services.js`、`food-ranking-services.js`、`random-food-services.js`、`lifecycle-services.js`、`authentication-cleanup.js`。部署时必须随 runtime 同包，完整打包/已知问题见云端指南。`CloudProgram/scripts/package-cloud-object.mjs` 为部署成员准备编译入口、随包 JS 模块和独立依赖；不会自动部署 AGC。
 
-独立入口：`cloudfunctions/shike-share/shikeShare.js` 提供公开分享 HTTP，`cloudfunctions/shike-maintenance/shikeMaintenance.js` 提供受秘密校验的定时任务。`hosting/share/` 是分享页；`scripts/package-share-http.mjs`、`configure-share-hosting.mjs`、`package-maintenance.mjs` 准备部署产物，`check-release-source.mjs` 供负责人手动检查。部署约定 JSON 不表示平台已配置。
+独立入口为 `shike-image` 图片读取和 `shike-maintenance` 维护函数。旧分享函数/网站已移除，端侧采用 `service/CardDeepLink.ets` 的应用内分享路由。
 
 环境变量名称、用途及团队配置流程见云端指南；秘密只保存在 AGC 配置或团队约定的安全渠道。
 
 `cloudfunctions/shike-image/` 为鉴权图片事件入口，`cloudfunctions/shared/` 为唯一维护的共享模块。media 增加封面 converter/worker。`scripts/package-functions.mjs` / `function-layout.mjs` / `check-artifact.mjs` 统一准备独立部署产物；`prepare-deveco.mjs` 为 IDE 生成函数内依赖，副本不提交。`tests/*.test.cjs` 是负责人手动执行的契约测试源码。
 
-## CloudProgram：33 个当前数据库对象
+## CloudProgram：36 个当前数据库对象
 
 均位于 `CloudProgram/clouddb/objecttype/<对象名>.json`，包含字段、主键、索引和权限。
 
 | 对象 | 职责 |
 | --- | --- |
+| NicknameClaim | 昵称占用与账号归属 |
+| PasswordCredential | 昵称密码认证材料，仅受控服务端访问 |
+| PasswordThrottle | 登录节流状态 |
 | UserProfile | 用户资料、食刻号、头像/头图媒体引用 |
 | FoodCard | 商品、价格、口味、E3 发布位置、归属和公开状态 |
 | Merchant | 商家来源、坐标系、审核、地图资格与三类公开推荐计数 |
@@ -258,7 +256,7 @@ CloudProgram/
 以下按当前源码重新生成，排除依赖、构建产物、缓存、日志和本地配置。克隆 GitHub 仓库可获得下列文件；首次需补齐的两个 AGC 配置路径单独列在末尾。
 
 <details>
-<summary>Application：224 个文件</summary>
+<summary>Application：290 个文件</summary>
 
 ```text
 Application/.gitignore
@@ -291,27 +289,37 @@ Application/entry/build-profile.json5
 Application/entry/hvigorfile.ts
 Application/entry/oh-package-lock.json5
 Application/entry/oh-package.json5
+Application/entry/src/main/ets/common/AppPageUi.ets
 Application/entry/src/main/ets/common/BreakpointSystem.ets
 Application/entry/src/main/ets/common/ContentStatusUi.ets
+Application/entry/src/main/ets/common/CreateCardUi.ets
 Application/entry/src/main/ets/common/ErrorKit.ets
+Application/entry/src/main/ets/common/PagePaletteUi.ets
 Application/entry/src/main/ets/common/RandomFoodUi.ets
 Application/entry/src/main/ets/common/Stage47Ui.ets
+Application/entry/src/main/ets/common/WarmNoteUi.ets
+Application/entry/src/main/ets/components/CardInteractionButton.ets
+Application/entry/src/main/ets/components/CardReportPhoto.ets
 Application/entry/src/main/ets/components/DiscoveryCard.ets
 Application/entry/src/main/ets/components/DiscoveryMap.ets
+Application/entry/src/main/ets/components/DiscoveryVisuals.ets
+Application/entry/src/main/ets/components/EmailLoginPage.ets
 Application/entry/src/main/ets/components/FoodCover.ets
 Application/entry/src/main/ets/components/FoodRankingTile.ets
 Application/entry/src/main/ets/components/MerchantRecommendationSheet.ets
+Application/entry/src/main/ets/components/NotePreviewTile.ets
 Application/entry/src/main/ets/components/PersonalPreviewTile.ets
 Application/entry/src/main/ets/components/review/ReviewDisplay.ets
 Application/entry/src/main/ets/components/social/SocialDisplay.ets
 Application/entry/src/main/ets/entryability/EntryAbility.ets
 Application/entry/src/main/ets/mapper/CloudCardViewMapper.ets
+Application/entry/src/main/ets/model/CardInteractionModels.ets
 Application/entry/src/main/ets/model/CardPrice.ets
+Application/entry/src/main/ets/model/CardReportModels.ets
 Application/entry/src/main/ets/model/CloudContracts.ets
 Application/entry/src/main/ets/model/ContentStatusModels.ets
 Application/entry/src/main/ets/model/DiscoveryModels.ets
 Application/entry/src/main/ets/model/DraftModels.ets
-Application/entry/src/main/ets/model/FeatureModels.ets
 Application/entry/src/main/ets/model/FoodRankingModels.ets
 Application/entry/src/main/ets/model/FriendModels.ets
 Application/entry/src/main/ets/model/ImageModels.ets
@@ -324,6 +332,8 @@ Application/entry/src/main/ets/model/SocialDiscoveryModels.ets
 Application/entry/src/main/ets/model/TasteScore.ets
 Application/entry/src/main/ets/pages/CardDetailPage.ets
 Application/entry/src/main/ets/pages/CardHistoryPage.ets
+Application/entry/src/main/ets/pages/CardReportDetailPage.ets
+Application/entry/src/main/ets/pages/CardReportListPage.ets
 Application/entry/src/main/ets/pages/ChatPage.ets
 Application/entry/src/main/ets/pages/CreateCardPage.ets
 Application/entry/src/main/ets/pages/DeletedCardsPage.ets
@@ -347,10 +357,11 @@ Application/entry/src/main/ets/pages/ShareCardPage.ets
 Application/entry/src/main/ets/pages/SocialDiscoveryPages.ets
 Application/entry/src/main/ets/pages/UserProfileContent.ets
 Application/entry/src/main/ets/repository/CardEditRepository.ets
+Application/entry/src/main/ets/repository/CardInteractionRepository.ets
+Application/entry/src/main/ets/repository/CardReportRepository.ets
 Application/entry/src/main/ets/repository/CardRepository.ets
 Application/entry/src/main/ets/repository/ContentStatusRepository.ets
 Application/entry/src/main/ets/repository/DiscoveryRepository.ets
-Application/entry/src/main/ets/repository/FeatureRepository.ets
 Application/entry/src/main/ets/repository/FoodRankingRepository.ets
 Application/entry/src/main/ets/repository/FriendRepository.ets
 Application/entry/src/main/ets/repository/MealRepository.ets
@@ -361,7 +372,8 @@ Application/entry/src/main/ets/repository/SocialDiscoveryRepository.ets
 Application/entry/src/main/ets/service/AccountRequestGuard.ets
 Application/entry/src/main/ets/service/AuthService.ets
 Application/entry/src/main/ets/service/AuthSessionStore.ets
-Application/entry/src/main/ets/service/CardAppLink.ets
+Application/entry/src/main/ets/service/CardDeepLink.ets
+Application/entry/src/main/ets/service/CardInteractionController.ets
 Application/entry/src/main/ets/service/CardVisitStore.ets
 Application/entry/src/main/ets/service/CloudGateway.ets
 Application/entry/src/main/ets/service/CloudReadErrors.ets
@@ -422,19 +434,43 @@ Application/entry/src/main/resources/base/media/ic_action_favorite.svg
 Application/entry/src/main/resources/base/media/ic_action_favorite_on.svg
 Application/entry/src/main/resources/base/media/ic_action_like.svg
 Application/entry/src/main/resources/base/media/ic_action_like_on.svg
-Application/entry/src/main/resources/base/media/ic_action_wanted.svg
-Application/entry/src/main/resources/base/media/ic_action_wanted_on.svg
 Application/entry/src/main/resources/base/media/ic_card_share.svg
 Application/entry/src/main/resources/base/media/ic_chevron_right.svg
+Application/entry/src/main/resources/base/media/ic_create_chevron.svg
+Application/entry/src/main/resources/base/media/ic_create_photo.svg
+Application/entry/src/main/resources/base/media/ic_create_plus.svg
+Application/entry/src/main/resources/base/media/ic_discovery_all.svg
+Application/entry/src/main/resources/base/media/ic_discovery_bakery.svg
+Application/entry/src/main/resources/base/media/ic_discovery_dessert.svg
+Application/entry/src/main/resources/base/media/ic_discovery_drink.svg
+Application/entry/src/main/resources/base/media/ic_discovery_filter.svg
+Application/entry/src/main/resources/base/media/ic_discovery_grill.svg
+Application/entry/src/main/resources/base/media/ic_discovery_history.svg
+Application/entry/src/main/resources/base/media/ic_discovery_hotpot.svg
+Application/entry/src/main/resources/base/media/ic_discovery_more.svg
+Application/entry/src/main/resources/base/media/ic_discovery_noodles.svg
+Application/entry/src/main/resources/base/media/ic_discovery_other.svg
+Application/entry/src/main/resources/base/media/ic_discovery_packaged.svg
+Application/entry/src/main/resources/base/media/ic_discovery_refresh.svg
+Application/entry/src/main/resources/base/media/ic_discovery_rice.svg
+Application/entry/src/main/resources/base/media/ic_discovery_search.svg
+Application/entry/src/main/resources/base/media/ic_discovery_snack.svg
+Application/entry/src/main/resources/base/media/ic_discovery_western.svg
 Application/entry/src/main/resources/base/media/ic_link.svg
+Application/entry/src/main/resources/base/media/ic_me_cards.svg
+Application/entry/src/main/resources/base/media/ic_me_chevron.svg
+Application/entry/src/main/resources/base/media/ic_me_choice.svg
+Application/entry/src/main/resources/base/media/ic_me_deleted.svg
+Application/entry/src/main/resources/base/media/ic_me_draft.svg
+Application/entry/src/main/resources/base/media/ic_me_favorite.svg
+Application/entry/src/main/resources/base/media/ic_me_history.svg
+Application/entry/src/main/resources/base/media/ic_me_report.svg
+Application/entry/src/main/resources/base/media/ic_me_settings.svg
 Application/entry/src/main/resources/base/media/ic_message.svg
 Application/entry/src/main/resources/base/media/ic_more.svg
+Application/entry/src/main/resources/base/media/ic_note_share.svg
 Application/entry/src/main/resources/base/media/ic_planning_draft.svg
-Application/entry/src/main/resources/base/media/ic_planning_grant.svg
-Application/entry/src/main/resources/base/media/ic_planning_meal.svg
-Application/entry/src/main/resources/base/media/ic_planning_preference.svg
 Application/entry/src/main/resources/base/media/ic_profile_cards.svg
-Application/entry/src/main/resources/base/media/ic_profile_comments.svg
 Application/entry/src/main/resources/base/media/ic_profile_favorite.svg
 Application/entry/src/main/resources/base/media/ic_profile_history.svg
 Application/entry/src/main/resources/base/media/ic_profile_privacy.svg
@@ -464,13 +500,41 @@ Application/entry/src/main/resources/dark/media/ic_action_favorite.svg
 Application/entry/src/main/resources/dark/media/ic_action_favorite_on.svg
 Application/entry/src/main/resources/dark/media/ic_action_like.svg
 Application/entry/src/main/resources/dark/media/ic_action_like_on.svg
-Application/entry/src/main/resources/dark/media/ic_action_wanted.svg
-Application/entry/src/main/resources/dark/media/ic_action_wanted_on.svg
 Application/entry/src/main/resources/dark/media/ic_card_share.svg
 Application/entry/src/main/resources/dark/media/ic_chevron_right.svg
+Application/entry/src/main/resources/dark/media/ic_create_chevron.svg
+Application/entry/src/main/resources/dark/media/ic_create_photo.svg
+Application/entry/src/main/resources/dark/media/ic_create_plus.svg
+Application/entry/src/main/resources/dark/media/ic_discovery_all.svg
+Application/entry/src/main/resources/dark/media/ic_discovery_bakery.svg
+Application/entry/src/main/resources/dark/media/ic_discovery_dessert.svg
+Application/entry/src/main/resources/dark/media/ic_discovery_drink.svg
+Application/entry/src/main/resources/dark/media/ic_discovery_filter.svg
+Application/entry/src/main/resources/dark/media/ic_discovery_grill.svg
+Application/entry/src/main/resources/dark/media/ic_discovery_history.svg
+Application/entry/src/main/resources/dark/media/ic_discovery_hotpot.svg
+Application/entry/src/main/resources/dark/media/ic_discovery_more.svg
+Application/entry/src/main/resources/dark/media/ic_discovery_noodles.svg
+Application/entry/src/main/resources/dark/media/ic_discovery_other.svg
+Application/entry/src/main/resources/dark/media/ic_discovery_packaged.svg
+Application/entry/src/main/resources/dark/media/ic_discovery_refresh.svg
+Application/entry/src/main/resources/dark/media/ic_discovery_rice.svg
+Application/entry/src/main/resources/dark/media/ic_discovery_search.svg
+Application/entry/src/main/resources/dark/media/ic_discovery_snack.svg
+Application/entry/src/main/resources/dark/media/ic_discovery_western.svg
 Application/entry/src/main/resources/dark/media/ic_link.svg
+Application/entry/src/main/resources/dark/media/ic_me_cards.svg
+Application/entry/src/main/resources/dark/media/ic_me_chevron.svg
+Application/entry/src/main/resources/dark/media/ic_me_choice.svg
+Application/entry/src/main/resources/dark/media/ic_me_deleted.svg
+Application/entry/src/main/resources/dark/media/ic_me_draft.svg
+Application/entry/src/main/resources/dark/media/ic_me_favorite.svg
+Application/entry/src/main/resources/dark/media/ic_me_history.svg
+Application/entry/src/main/resources/dark/media/ic_me_report.svg
+Application/entry/src/main/resources/dark/media/ic_me_settings.svg
 Application/entry/src/main/resources/dark/media/ic_message.svg
 Application/entry/src/main/resources/dark/media/ic_more.svg
+Application/entry/src/main/resources/dark/media/ic_note_share.svg
 Application/entry/src/main/resources/dark/media/ic_profile_privacy.svg
 Application/entry/src/main/resources/dark/media/ic_profile_publish.svg
 Application/entry/src/main/resources/dark/media/ic_profile_settings.svg
@@ -490,7 +554,7 @@ Application/scripts/summarize_preload_metrics.py
 </details>
 
 <details>
-<summary>CloudProgram：124 个文件</summary>
+<summary>CloudProgram：127 个文件</summary>
 
 ```text
 CloudProgram/AppScope/resources/rawfile/schema.json
@@ -521,7 +585,10 @@ CloudProgram/clouddb/objecttype/MealPoll.json
 CloudProgram/clouddb/objecttype/MealPollOption.json
 CloudProgram/clouddb/objecttype/MealPollVote.json
 CloudProgram/clouddb/objecttype/Merchant.json
+CloudProgram/clouddb/objecttype/NicknameClaim.json
 CloudProgram/clouddb/objecttype/NotificationEvent.json
+CloudProgram/clouddb/objecttype/PasswordCredential.json
+CloudProgram/clouddb/objecttype/PasswordThrottle.json
 CloudProgram/clouddb/objecttype/PersonalFoodState.json
 CloudProgram/clouddb/objecttype/PublishRequestRecord.json
 CloudProgram/clouddb/objecttype/PushRegistration.json
@@ -529,6 +596,7 @@ CloudProgram/clouddb/objecttype/Report.json
 CloudProgram/clouddb/objecttype/TastePreference.json
 CloudProgram/clouddb/objecttype/UserProfile.json
 CloudProgram/clouddb/objecttype/WidgetRegistration.json
+CloudProgram/cloudfunctions/shared/card-review-access.js
 CloudProgram/cloudfunctions/shared/content-policy.js
 CloudProgram/cloudfunctions/shared/image-models.js
 CloudProgram/cloudfunctions/shared/image-reader.js
@@ -567,10 +635,13 @@ CloudProgram/cloudfunctions/shike-media/runtime.js
 CloudProgram/cloudfunctions/shike-media/shikeMedia.ts
 CloudProgram/cloudfunctions/shike-media/tsconfig.json
 CloudProgram/cloudfunctions/shike-service/authentication-cleanup.js
+CloudProgram/cloudfunctions/shike-service/card-interaction-services.js
+CloudProgram/cloudfunctions/shike-service/card-report-services.js
 CloudProgram/cloudfunctions/shike-service/content-status-services.js
 CloudProgram/cloudfunctions/shike-service/food-ranking-services.js
 CloudProgram/cloudfunctions/shike-service/function-config.json
 CloudProgram/cloudfunctions/shike-service/lifecycle-services.js
+CloudProgram/cloudfunctions/shike-service/nickname-auth.js
 CloudProgram/cloudfunctions/shike-service/package-lock.json
 CloudProgram/cloudfunctions/shike-service/package.json
 CloudProgram/cloudfunctions/shike-service/personal-collections.js
@@ -584,36 +655,32 @@ CloudProgram/cloudfunctions/shike-service/stage6-services.js
 CloudProgram/cloudfunctions/shike-service/stage7-services.js
 CloudProgram/cloudfunctions/shike-service/stages47-common.js
 CloudProgram/cloudfunctions/shike-service/tsconfig.json
-CloudProgram/cloudfunctions/shike-share/function-config.json
-CloudProgram/cloudfunctions/shike-share/gateway-contract.json
-CloudProgram/cloudfunctions/shike-share/package-lock.json
-CloudProgram/cloudfunctions/shike-share/package.json
-CloudProgram/cloudfunctions/shike-share/shikeShare.js
 CloudProgram/env-templates/shike-image.env.example.json
-CloudProgram/hosting/share/app.js
-CloudProgram/hosting/share/config.json
-CloudProgram/hosting/share/hosting-contract.json
-CloudProgram/hosting/share/index.html
-CloudProgram/hosting/share/style.css
+CloudProgram/env-templates/shike-maintenance-nickname-auth.env.example.json
+CloudProgram/env-templates/shike-service-nickname-auth.env.example.json
+CloudProgram/env-templates/shike-tester-review-access.env.example.json
 CloudProgram/package-lock.json
 CloudProgram/package.json
 CloudProgram/scripts/check-artifact.mjs
 CloudProgram/scripts/check-release-source.mjs
-CloudProgram/scripts/configure-share-hosting.mjs
 CloudProgram/scripts/function-layout.mjs
 CloudProgram/scripts/package-cloud-object.mjs
 CloudProgram/scripts/package-functions.mjs
 CloudProgram/scripts/package-maintenance.mjs
-CloudProgram/scripts/package-share-http.mjs
 CloudProgram/scripts/prepare-deveco.mjs
 CloudProgram/tests/admin-notification-removal.test.cjs
 CloudProgram/tests/author-direct-edit.test.cjs
 CloudProgram/tests/card-history-maintenance.test.cjs
+CloudProgram/tests/card-interaction-optimization.test.cjs
+CloudProgram/tests/card-interaction-v3.test.cjs
+CloudProgram/tests/card-report-image-access.test.cjs
+CloudProgram/tests/card-report-services.test.cjs
 CloudProgram/tests/feature-reduction.test.cjs
 CloudProgram/tests/food-ranking-contracts.test.cjs
 CloudProgram/tests/home-detail-prefetch.test.cjs
 CloudProgram/tests/image-handler-contracts.test.cjs
 CloudProgram/tests/image-read-contracts.test.cjs
+CloudProgram/tests/nickname-auth.test.cjs
 CloudProgram/tests/optimization-contracts.test.cjs
 CloudProgram/tests/random-food.test.cjs
 CloudProgram/tests/repair-contracts.test.cjs
@@ -626,4 +693,3 @@ CloudProgram/tests/repair-contracts.test.cjs
 | 路径 | 获取方式 |
 | --- | --- |
 | `Application/AppScope/resources/rawfile/agconnect-services.json` | 从目标 AGC 应用下载；当前 AGC SDK 默认从应用级 rawfile 读取 |
-| `CloudProgram/cloud-config.json` | 云开发向导关联目标应用生成，或由管理员安全提供测试项目的配置 |

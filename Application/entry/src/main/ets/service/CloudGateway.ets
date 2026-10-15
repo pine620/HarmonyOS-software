@@ -1,4 +1,5 @@
 import { bundleManager } from '@kit.AbilityKit';
+import { util } from '@kit.ArkTS';
 import { ImageDescriptors } from './ImageDescriptors';
 import { ImageReadItem, ImageReadRequest } from '../model/ImageModels';
 import { CardDetailRequest, CardRevisionResponse } from '../model/CloudContracts';
@@ -14,17 +15,25 @@ export { CloudBusinessError } from './CloudReadErrors';
 type MediaOperation = 'prepare-card-photo' | 'upload-card-photo' | 'get-public-media';
 type MediaErrorSource = 'cloud-call' | 'business-response';
 type MediaCloudObjectName = 'shike-media' | 'shike-service';
-type Stage47ServiceMethod = 'getRandomFoodPool' | 'getRandomFoodCards' | 'saveFoodChoice' | 'listFoodChoices' | 'deleteFoodChoice' | 'getStage47Capabilities' | 'getMealCandidates' |
+type NicknameAuthMethod = 'getPasswordAccount' | 'configurePasswordAccount' | 'changePasswordAccount' | 'loginWithNickname' | 'logoutNickname';
+interface NicknameAuthInvocation {
+  method: NicknameAuthMethod;
+  params: Array<CloudEnvelope>;
+}
+type Stage47ServiceMethod = 'getCardReportAccess' | 'getCardReportContext' | 'submitCardReport' | 'listMyCardReports' | 'getMyCardReport' | 'listCardReviewReports' | 'getCardReviewReport' | 'resolveCardReport' | 'getRandomFoodPool' | 'getRandomFoodCards' | 'saveFoodChoice' | 'listFoodChoices' | 'deleteFoodChoice' | 'getStage47Capabilities' | 'getMealCandidates' |
+  'getCardInteractionState' | 'setCardInteraction' | 'getCardInteractionReceipt' | 'getCardInteractionCounts' |
   'createMealPoll' | 'getMealPoll' | 'addMealPollOption' |
   'voteMealPoll' | 'closeMealPoll' | 'cancelMealPoll' | 'stopMealPollOptions' | 'getUserPage' |
   'listFoodRankings' | 'setCardReactionV2' |
   'getCardPreviews' | 'listPersonalCollection' | 'getPersonalCollectionMigration' |
-  'startPersonalCollectionMigration' | 'resumePersonalCollectionMigration' | 'setCardFavorite' | 'setCardWanted' | 'listMyReports' | 'reportMerchant' | 'listOwnReviewRequests' | 'listDeletedCards' | 'restoreDeletedCard' | 'getReviewMedia';
+  'startPersonalCollectionMigration' | 'resumePersonalCollectionMigration' | 'setCardFavorite' | 'listMyReports' | 'reportMerchant' | 'listOwnReviewRequests' | 'listDeletedCards' | 'restoreDeletedCard' | 'getReviewMedia';
 
 interface ReadCloudEnvelope extends CloudEnvelope {
   readRequestId: string;
   readAttempt: number;
 }
+interface InteractionPatchTrace { reaction?: string; favorited?: boolean; }
+interface InteractionRequestTrace { requestId: string; patch?: InteractionPatchTrace; }
 
 interface ImageFunctionEnvelope extends ImageReadRequest {
   accessToken: string;
@@ -43,6 +52,9 @@ interface CloudHandlerErrorDetail {
 }
 
 const MEDIA_CIRCUIT_BREAK_MS: number = 30 * 1000;
+// Per-call deadlines for the card interaction RPCs (global default stays 70 s).
+const INTERACTION_WRITE_TIMEOUT_MS: number = 12 * 1000;
+const INTERACTION_READ_TIMEOUT_MS: number = 10 * 1000;
 const MEDIA_UNAVAILABLE_MESSAGE: string = '实拍图服务暂时不可用，请稍后重试。';
 
 export class MediaServiceUnavailableError extends Error {
@@ -204,16 +216,44 @@ export class CloudGateway {
   }
 
   private static async invokeStage47(method: Stage47ServiceMethod,
-    envelope: CloudEnvelope): Promise<CloudObjectResponse> {
+    envelope: CloudEnvelope, timeoutMs: number = 0): Promise<CloudObjectResponse> {
     // Match the generated importObject protocol while its declarations contain only older methods.
     const invocation: Stage47ServiceInvocation = { method, params: [envelope] };
-    const parameters: cloudFunction.FunctionParams = {
+    // Interaction calls use a short per-call deadline instead of the global 70 s.
+    // A write timeout is an unknown result; the controller recovers it with the
+    // same request UUID, so the server never applies one tap twice.
+    let parameters: cloudFunction.FunctionParams = {
       name: 'shike-service',
       version: '$latest',
       data: invocation
     };
+    if (timeoutMs > 0) parameters = { name: 'shike-service', version: '$latest', data: invocation, timeout: timeoutMs };
     const response: cloudFunction.FunctionResult = await cloudFunction.call(parameters);
     return decode<object>(response.result as string | object);
+  }
+
+  private static async invokeNicknameAuth(method: NicknameAuthMethod,
+    envelope: ReadCloudEnvelope): Promise<CloudObjectResponse> {
+    const started: number = Date.now();
+    const invocation: NicknameAuthInvocation = { method, params: [envelope] };
+    const parameters: cloudFunction.FunctionParams = {
+      name: 'shike-service', version: '$latest', data: invocation, timeout: 45000
+    };
+    console.info('[NicknameAuthClient] requestId=' + envelope.readRequestId + ' method=' + method + ' stage=sent');
+    try {
+      const response: cloudFunction.FunctionResult = await cloudFunction.call(parameters);
+      const decoded: CloudObjectResponse = decode<object>(response.result as string | object);
+      console.info('[NicknameAuthClient] requestId=' + envelope.readRequestId + ' method=' + method +
+        ' stage=response code=' + (decoded.code || (decoded.ok ? 'OK' : 'REQUEST_FAILED')) +
+        ' elapsedMs=' + (Date.now() - started));
+      return decoded;
+    } catch (error) {
+      const failure: Error = cloudReadError(error as Object, method, envelope.readRequestId);
+      const code: string = failure instanceof CloudBusinessError ? failure.code : 'REQUEST_FAILED';
+      console.error('[NicknameAuthClient] requestId=' + envelope.readRequestId + ' method=' + method +
+        ' stage=cloud-call code=' + code + ' elapsedMs=' + (Date.now() - started));
+      throw failure;
+    }
   }
 
   private static initialize(): void {
@@ -261,6 +301,27 @@ export class CloudGateway {
   }
 
   private static async dispatchRead<T>(name: string, payload: object, authenticated: boolean, options: ReadRequestOptions): Promise<T> {
+    if (name === 'set-card-interaction') {
+      const request: InteractionRequestTrace = payload as InteractionRequestTrace;
+      return CloudGateway.execute<T>(name, payload, authenticated, request.requestId);
+    }
+    if (['get-card-interaction-state', 'get-card-interaction-receipt', 'get-card-interaction-counts'].includes(name)) {
+      // These reads have per-card coalescing in the controller. Never let an
+      // old detail/image/aggregation request occupy their admission slots.
+      if (options.mayContinue !== undefined && !await options.mayContinue()) throw new ReadCancelledError();
+      const requestId: string = util.generateRandomUUID(true); const started: number = Date.now();
+      let received: boolean = false;
+      console.info('[CardInteraction] requestId=' + requestId + ' operation=' + name + ' stage=read_start');
+      try {
+        const result: T = await CloudGateway.execute<T>(name, payload, authenticated, requestId);
+        received = true;
+        if (options.mayContinue !== undefined && !await options.mayContinue()) throw new ReadCancelledError();
+        return result;
+      } finally {
+        console.info('[CardInteraction] requestId=' + requestId + ' operation=' + name + ' stage=read_end received=' +
+          received + ' elapsedMs=' + (Date.now() - started));
+      }
+    }
     if (!ReadScheduler.allows(name)) return CloudGateway.execute<T>(name, payload, authenticated);
     const value: object = await ReadScheduler.schedule(name, payload, authenticated, options,
       (requestId: string, attempt: number): Promise<object> => CloudGateway.execute<object>(name, payload, authenticated, requestId, attempt));
@@ -276,7 +337,8 @@ export class CloudGateway {
 
   private static changesReadContent(name: string): boolean {
     switch (name) {
-      case 'set-card-favorite': case 'set-card-wanted': case 'set-card-reaction-v2':
+      case 'set-card-interaction':
+      case 'set-card-favorite': case 'set-card-reaction-v2':
       case 'start-personal-collection-migration': case 'resume-personal-collection-migration':
       case 'toggle-card-action':
       case 'delete-own-card': case 'delete-account-data': case 'publish-card': case 'publish-cards':
@@ -308,7 +370,11 @@ export class CloudGateway {
 
   private static async execute<T>(name: string, payload: object, authenticated: boolean,
     readRequestId: string = '', readAttempt: number = 1): Promise<T> {
+    if (['get-password-account', 'configure-password-account', 'change-password-account', 'login-with-nickname', 'logout-nickname'].includes(name) &&
+      readRequestId.length === 0) readRequestId = util.generateRandomUUID();
     // All callers are reachable only after the startup privacy consent gate.
+    const interactionStarted: number = Date.now();
+    if (name === 'set-card-interaction') console.info('[CardInteraction] requestId=' + readRequestId + ' stage=gateway_start');
     const mediaOperation: MediaOperation | undefined = CloudGateway.mediaOperationFor(name);
     CloudGateway.initialize();
     const session: number = AuthSessionStore.generation();
@@ -328,12 +394,21 @@ export class CloudGateway {
     if (authenticated && accessToken.length === 0) {
       throw new CloudBusinessError('会话需要恢复，请重新登录或重试恢复。', 'AUTH_REQUIRED');
     }
+    if (name === 'set-card-interaction') console.info('[CardInteraction] requestId=' + readRequestId + ' stage=auth_ready elapsedMs=' + (Date.now() - interactionStarted));
     if (mediaOperation !== undefined && CloudGateway.isMediaServiceUnavailable()) {
       throw new MediaServiceUnavailableError();
     }
     const envelope: ReadCloudEnvelope = { accessToken, payload, readRequestId, readAttempt };
     let raw: CloudObjectResponse | undefined = undefined;
     switch (name) {
+      case 'get-card-interaction-state':
+        raw = await CloudGateway.invokeStage47('getCardInteractionState', envelope, INTERACTION_READ_TIMEOUT_MS); break;
+      case 'set-card-interaction':
+        raw = await CloudGateway.invokeStage47('setCardInteraction', envelope, INTERACTION_WRITE_TIMEOUT_MS); break;
+      case 'get-card-interaction-receipt':
+        raw = await CloudGateway.invokeStage47('getCardInteractionReceipt', envelope, INTERACTION_READ_TIMEOUT_MS); break;
+      case 'get-card-interaction-counts':
+        raw = await CloudGateway.invokeStage47('getCardInteractionCounts', envelope, INTERACTION_READ_TIMEOUT_MS); break;
       case 'image-read-batch': {
         const imageRequest: ImageReadRequest = payload as ImageReadRequest;
         const imageEnvelope: ImageFunctionEnvelope = { protocolVersion: imageRequest.protocolVersion, items: imageRequest.items,
@@ -355,8 +430,22 @@ export class CloudGateway {
         raw = await CloudGateway.invokeStage47('resumePersonalCollectionMigration', envelope); break;
       case 'set-card-favorite':
         raw = await CloudGateway.invokeStage47('setCardFavorite', envelope); break;
-      case 'set-card-wanted':
-        raw = await CloudGateway.invokeStage47('setCardWanted', envelope); break;
+      case 'get-card-report-access':
+        raw = await CloudGateway.invokeStage47('getCardReportAccess', envelope); break;
+      case 'get-card-report-context':
+        raw = await CloudGateway.invokeStage47('getCardReportContext', envelope); break;
+      case 'submit-card-report':
+        raw = await CloudGateway.invokeStage47('submitCardReport', envelope); break;
+      case 'list-my-card-reports':
+        raw = await CloudGateway.invokeStage47('listMyCardReports', envelope); break;
+      case 'get-my-card-report':
+        raw = await CloudGateway.invokeStage47('getMyCardReport', envelope); break;
+      case 'list-card-review-reports':
+        raw = await CloudGateway.invokeStage47('listCardReviewReports', envelope); break;
+      case 'get-card-review-report':
+        raw = await CloudGateway.invokeStage47('getCardReviewReport', envelope); break;
+      case 'resolve-card-report':
+        raw = await CloudGateway.invokeStage47('resolveCardReport', envelope); break;
       case 'list-my-reports':
         raw = await CloudGateway.invokeStage47('listMyReports', envelope); break;
       case 'report-merchant':
@@ -426,6 +515,21 @@ export class CloudGateway {
         break;
       case 'get-merchant-recommendations':
         raw = await (CloudGateway.serviceObject as ShikeService).getMerchantRecommendations(envelope);
+        break;
+      case 'get-password-account':
+        raw = await CloudGateway.invokeNicknameAuth('getPasswordAccount', envelope);
+        break;
+      case 'configure-password-account':
+        raw = await CloudGateway.invokeNicknameAuth('configurePasswordAccount', envelope);
+        break;
+      case 'change-password-account':
+        raw = await CloudGateway.invokeNicknameAuth('changePasswordAccount', envelope);
+        break;
+      case 'login-with-nickname':
+        raw = await CloudGateway.invokeNicknameAuth('loginWithNickname', envelope);
+        break;
+      case 'logout-nickname':
+        raw = await CloudGateway.invokeNicknameAuth('logoutNickname', envelope);
         break;
       case 'exchange-huawei-account':
         raw = await (CloudGateway.authObject as ShikeAuth).exchangeHuaweiAccount(envelope);
@@ -624,7 +728,21 @@ export class CloudGateway {
       throw new CloudBusinessError(message, code, decoded.retryable === undefined ? code === '3007009' : decoded.retryable,
         decoded.retryAfterMs || 0, decoded.requestId || readRequestId, decoded.operation || name, decoded.stage || 'business-response');
     }
-    if (session === AuthSessionStore.generation() && CloudGateway.changesReadContent(name)) ReadScheduler.contentChanged();
+    if (name === 'set-card-interaction') console.info('[CardInteraction] requestId=' + readRequestId + ' stage=gateway_response elapsedMs=' + (Date.now() - interactionStarted));
+    if (session === AuthSessionStore.generation() && CloudGateway.changesReadContent(name)) {
+      // A vote changes no list or media content. Only a favorite change can make
+      // an in-flight collection read stale; detail/interaction reads carry their
+      // own version guards. Feeds, rankings and random food are not reset.
+      if (name === 'set-card-interaction') {
+        const request: InteractionRequestTrace = payload as InteractionRequestTrace;
+        if (request.patch !== undefined && request.patch.favorited !== undefined) ReadScheduler.contentChanged(['get-card-detail',
+          'get-card-interaction-state', 'get-card-interaction-receipt', 'get-card-interaction-counts']);
+      } else if (name === 'set-card-favorite') ReadScheduler.contentChanged(['get-card-detail', 'get-card-interaction-state',
+        'get-card-interaction-receipt', 'get-card-interaction-counts']);
+      else ReadScheduler.contentChanged();
+    }
+    if (session === AuthSessionStore.generation() && name === 'set-card-favorite')
+      AppStorage.setOrCreate('favoritesMutationRevision', (AppStorage.get<number>('favoritesMutationRevision') || 0) + 1);
     if (session === AuthSessionStore.generation() && name === 'submit-card-revision') {
       const result: CardRevisionResponse = decoded.data as CardRevisionResponse;
       if (result.revision.status === 'APPROVED') {

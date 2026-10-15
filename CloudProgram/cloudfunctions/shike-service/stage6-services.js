@@ -14,11 +14,9 @@ function createStage6Services(ctx){
   if(source==='ALL'||source==='MY_COLLECTIONS'){
    const migration=await ctx.collections().status(uid,env);
    if(!migration.collectionReady)throw fail('请先在我的收藏中完成整理。','COLLECTION_MIGRATING');
-   const [states,favorites]=await Promise.all([
-    collection(env,'CardAction').query().equalTo('actorUid',uid).equalTo('kind','WANT_TO_EAT').orderByDesc('createdAt').orderByAsc('id').limit(100).get(),
-    collection(env,'CardAction').query().equalTo('actorUid',uid).equalTo('kind','FAVORITE').orderByDesc('createdAt').orderByAsc('id').limit(100).get()
-   ]);scanned+=states.length+favorites.length;const refs=[...states,...favorites];
-   const rows=[];for(const ref of refs)rows.push(await one(collection(env,'FoodCard').query().equalTo('id',ref.cardId)));layers.push({rows:rows.filter(Boolean),reason:'来自我的想吃或收藏'});
+   const refs=await collection(env,'CardAction').query().equalTo('actorUid',uid).equalTo('kind','FAVORITE').orderByDesc('createdAt').orderByAsc('id').limit(100).get();
+   scanned+=refs.length;
+   const rows=[];for(const ref of refs)rows.push(await one(collection(env,'FoodCard').query().equalTo('id',ref.cardId)));layers.push({rows:rows.filter(Boolean),reason:'来自我的收藏'});
   }
   if(source==='ALL'||source==='FRIENDS_ONLY'){
    const relations=await ctx.friendshipRowsFor(uid,env);const friends=[...new Set(relations.filter(r=>r.status==='ACCEPTED').map(r=>r.memberAUid===uid?r.memberBUid:r.memberAUid))].sort().slice(0,30);const rows=[];

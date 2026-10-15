@@ -27,7 +27,8 @@ export class PersonalCollectionRepository {
     return AccountRequestGuard.authenticated<PersonalCollectionMigration>('resume-personal-collection-migration', request);
   }
   async set(kind: PersonalCollectionKind, request: SetPersonalCollectionRequest): Promise<PersonalCollectionAction> {
-    return AccountRequestGuard.authenticated<PersonalCollectionAction>(
-      kind === 'FAVORITE' ? 'set-card-favorite' : 'set-card-wanted', request);
+    const mutation: SetPersonalCollectionRequest = { cardId: request.cardId, active: request.active,
+      requestId: request.requestId, responseMode: 'ACK' };
+    return AccountRequestGuard.authenticated<PersonalCollectionAction>('set-card-favorite', mutation);
   }
 }

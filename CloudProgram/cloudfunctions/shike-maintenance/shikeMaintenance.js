@@ -1,6 +1,6 @@
 'use strict';
 const crypto=require('crypto');
-const {runMaintenance,normalizePublicContent,maintainCardHistory,safeLogError}=require('./service/runtime');
+const {runMaintenance,migrateNicknameClaims,normalizePublicContent,maintainCardHistory,maintainReactionHistory,safeLogError}=require('./service/runtime');
 const {runCoverBackfill}=require('./media/runtime');
 const {READ_OPT_VERSION,errorCode}=require('./shared/read-errors');
 const {buildInfo}=require('./shared/release-info');
@@ -10,9 +10,11 @@ exports.handler=async(event,context,callback)=>{
     if(input&&typeof input.userData==='string')input=JSON.parse(input.userData);
     const expected=String(process.env.SHIKE_MAINTENANCE_TRIGGER_KEY||''),actual=String(input&&input.workerToken||'');
     if(! /^[A-Za-z0-9_-]{32,256}$/.test(expected)||actual.length!==expected.length||! /^[A-Za-z0-9_-]{32,256}$/.test(actual)||!crypto.timingSafeEqual(Buffer.from(expected),Buffer.from(actual)))throw Object.assign(new Error('Timer credential invalid.'),{code:'TRIGGER_ACCESS_DENIED'});
-    if(input.action!==undefined&&!['public-content','media-covers','lifecycle','card-history'].includes(input.action))throw Object.assign(new Error('Unknown maintenance action.'),{code:'VALIDATION_ERROR'});
+    if(input.action!==undefined&&!['public-content','media-covers','lifecycle','card-history','reaction-history','nickname-claims'].includes(input.action))throw Object.assign(new Error('Unknown maintenance action.'),{code:'VALIDATION_ERROR'});
     let result;
-    if(input.action==='card-history')result=await maintainCardHistory({mode:input.mode},process.env);
+    if(input.action==='nickname-claims')result=await migrateNicknameClaims(process.env);
+    else if(input.action==='reaction-history')result=await maintainReactionHistory({mode:input.mode},process.env);
+    else if(input.action==='card-history')result=await maintainCardHistory({mode:input.mode},process.env);
     else if(input.action==='public-content')result=await normalizePublicContent(process.env,input.cursor===undefined?'':input.cursor);
     else if(input.action==='media-covers')result=await runCoverBackfill(process.env,input.retryFailed===true);
     else result=await runMaintenance(process.env);

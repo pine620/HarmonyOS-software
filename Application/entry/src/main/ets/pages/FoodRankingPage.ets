@@ -39,6 +39,12 @@ export struct FoodRankingPage {
   @State largeText: boolean = false;
   @State emptyHeight: number = 0;
   private readonly skeletonRows: Array<number> = [0, 1, 2, 3];
+  private readonly headerBackgroundOptions: BackgroundOptions = {
+    align: Alignment.Top, ignoresLayoutSafeAreaEdges: []
+  };
+  private readonly canvasBackgroundOptions: BackgroundOptions = {
+    ignoresLayoutSafeAreaEdges: [LayoutSafeAreaEdge.BOTTOM]
+  };
   private active: boolean = false;
   private visibleLifecycle: boolean = true;
   private generation: number = 0;
@@ -201,15 +207,26 @@ export struct FoodRankingPage {
   @Builder private tab(kind: FoodRankingKind, label: string) {
     Button({ type: ButtonType.Normal, stateEffect: true }) {
       Text(label).fontSize(16).maxFontScale(2).fontWeight(this.kind === kind ? FontWeight.Bold : FontWeight.Medium)
-        .fontColor(this.kind === kind ? $r('app.color.food_ranking_on_action') : $r('app.color.food_ranking_ink'))
+        .fontColor(this.kind === kind ? $r('app.color.food_ranking_canvas') : $r('app.color.food_ranking_ink'))
         .maxLines(this.largeText ? 3 : 2).textOverflow({ overflow: TextOverflow.Ellipsis })
         .textAlign(TextAlign.Center).width('100%');
     }.layoutWeight(kind === 'HIGH_SCORE' ? 2 : 3).constraintSize({ minHeight: 48 })
       .padding({ left: 8, right: 8, top: 8, bottom: 8 }).borderRadius(24)
-      .backgroundColor(this.kind === kind ? $r('app.color.food_ranking_action') : Color.Transparent)
+      .backgroundColor(this.kind === kind ? $r('app.color.food_ranking_accent') : Color.Transparent)
       .enabled(!this.busy && !this.opening).accessibilityGroup(true).accessibilityText(label)
       .accessibilitySelected(this.kind === kind)
       .onClick((): void => this.switchKind(kind));
+  }
+  private headerGradient(): LinearGradient {
+    const colors: Array<[ResourceColor, number]> = [
+      [$r('app.color.food_ranking_header'), 0], [$r('app.color.food_ranking_canvas'), 1]
+    ];
+    const gradient: LinearGradient = { angle: 180, colors };
+    return gradient;
+  }
+  @Builder private headerBackdrop(): void {
+    Column() {}.width('100%').height('100%').linearGradient(this.headerGradient())
+      .hitTestBehavior(HitTestMode.None).accessibilityLevel('no');
   }
   @Builder private header() {
     Stack({ alignContent: Alignment.TopEnd }) {
@@ -240,9 +257,7 @@ export struct FoodRankingPage {
           .fontSize(12).maxFontScale(1.4).fontColor($r('app.color.food_ranking_muted')).textAlign(TextAlign.Center)
           .width('100%').padding({ top: 8, bottom: 8 });
       }.width('100%').padding({ left: 16, right: 16, top: 4 });
-    }.width('100%').clip(true)
-      .linearGradient({ angle: 180, colors: [[$r('app.color.food_ranking_header'), 0],
-        [$r('app.color.food_ranking_canvas'), 1]] });
+    }.width('100%').background(this.headerBackdrop, this.headerBackgroundOptions);
   }
   @Builder private loadingState() {
     List({ space: 8 }) {
@@ -330,7 +345,7 @@ export struct FoodRankingPage {
           .onScrollIndex((first: number, last: number): void => this.window(first, last));
       }
     }.width('100%').height('100%').padding({ bottom: 8 })
-      .backgroundColor($r('app.color.food_ranking_canvas')).alignItems(HorizontalAlign.Start)
+      .background($r('app.color.food_ranking_canvas'), this.canvasBackgroundOptions).alignItems(HorizontalAlign.Start)
       .onAreaChange((_oldArea: Area, newArea: Area): void => {
         const width: number = Number(newArea.width);
         if (Number.isFinite(width) && width > 0 && width !== this.pageWidth) this.pageWidth = width;

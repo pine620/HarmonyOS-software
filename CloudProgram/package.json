@@ -7,8 +7,6 @@
     "package:cloud": "node scripts/package-cloud-object.mjs",
     "package:cloud:all": "node scripts/package-cloud-object.mjs --all",
     "test": "echo \"Error: no test specified\" && exit 1",
-    "package:share": "node scripts/package-share-http.mjs",
-    "package:share:web": "node scripts/configure-share-hosting.mjs",
     "package:maintenance": "node scripts/package-maintenance.mjs",
     "test:optimization": "node --test tests/optimization-contracts.test.cjs",
     "check:release-source": "node scripts/check-release-source.mjs",
@@ -24,7 +22,9 @@
     "prepare:deveco": "node scripts/prepare-deveco.mjs",
     "check:deveco": "node scripts/prepare-deveco.mjs --check",
     "test:food-ranking": "node --test tests/food-ranking-contracts.test.cjs",
-    "test:card-history": "node --test tests/card-history-maintenance.test.cjs"
+    "test:card-history": "node --test tests/card-history-maintenance.test.cjs",
+    "test:card-report": "node --test tests/card-report-services.test.cjs tests/card-report-image-access.test.cjs",
+    "test:card-interaction": "node --test tests/card-interaction-v3.test.cjs"
   },
   "author": "",
   "license": "ISC",

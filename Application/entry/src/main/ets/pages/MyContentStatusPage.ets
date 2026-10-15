@@ -1,3 +1,4 @@
+import { AppDestinationStyle } from '../common/AppPageUi';
 import { QuietActionStyle, SecondaryActionStyle, stage47ErrorText, invalidatesProtectedPage } from '../common/Stage47Ui';
 import { contentDate, contentStateLabel } from '../common/ContentStatusUi';
 import { ContentStatusScope, ContentStatusRow, ContentStatusPage } from '../model/ContentStatusModels';
@@ -47,26 +48,26 @@ export struct MyContentStatusPage {
   @Builder
   private row(row: ContentStatusRow) {
     Column({ space: 8 }) {
-      Text(row.title).fontSize(16).fontWeight(FontWeight.Medium).fontColor($r('app.color.ink')).width('100%')
-      Text(contentStateLabel(row.state) + ' · ' + contentDate(row.createdAt)).fontSize(13).fontColor($r('app.color.muted')).width('100%')
-      if (row.reason.length > 0) { Text(row.reason).fontSize(14).fontColor($r('app.color.ink')).width('100%') }
+      Text(row.title).fontSize(16).fontWeight(FontWeight.Medium).fontColor($r('app.color.personal_ink')).width('100%')
+      Text(contentStateLabel(row.state) + ' · ' + contentDate(row.createdAt)).fontSize(13).fontColor($r('app.color.personal_muted')).width('100%')
+      if (row.reason.length > 0) { Text(row.reason).fontSize(14).fontColor($r('app.color.personal_ink')).width('100%') }
       if (this.scope !== 'REPORTS') {
         Button('修改并保存').width('100%').enabled(this.permitted && !this.busy)
-          .attributeModifier(new SecondaryActionStyle()).onClick((): void => this.open(row))
+          .attributeModifier(new SecondaryActionStyle('PERSONAL')).onClick((): void => this.open(row))
       }
-    }.alignItems(HorizontalAlign.Start).width('100%').padding(14).backgroundColor($r('app.color.surface')).borderRadius(16)
-      .border({ width: 1, color: $r('app.color.line') })
+    }.alignItems(HorizontalAlign.Start).width('100%').padding(14).backgroundColor($r('app.color.personal_surface')).borderRadius(16)
+      .border({ width: 1, color: $r('app.color.personal_line') })
   }
   build() {
     NavDestination() {
       Column({ space: 12 }) {
-        Text(this.message).fontSize(14).fontColor($r('app.color.ink')).width('100%').accessibilityText(this.message)
-        Button('刷新').width('100%').attributeModifier(new QuietActionStyle()).enabled(!this.busy).onClick((): void => this.shown())
+        Text(this.message).fontSize(14).fontColor($r('app.color.personal_ink')).width('100%').accessibilityText(this.message)
+        Button('刷新').width('100%').attributeModifier(new QuietActionStyle('PERSONAL')).enabled(!this.busy).onClick((): void => this.shown())
         List({ space: 12 }) {
           LazyForEach(this.source, (row: ContentStatusRow): void => { ListItem() { this.row(row) } }, (row: ContentStatusRow): string => row.kind + ':' + row.id)
-          if (this.cursor.length > 0) { ListItem() { Button(this.busy ? '加载中…' : '加载更多').width('100%').enabled(!this.busy).attributeModifier(new SecondaryActionStyle()).onClick((): void => { void this.load(true); }) } }
+          if (this.cursor.length > 0) { ListItem() { Button(this.busy ? '加载中…' : '加载更多').width('100%').enabled(!this.busy).attributeModifier(new SecondaryActionStyle('PERSONAL')).onClick((): void => { void this.load(true); }) } }
         }.width('100%').layoutWeight(1).scrollBar(BarState.Auto)
       }.padding(16).width('100%').height('100%').constraintSize({ maxWidth: 840 }).alignItems(HorizontalAlign.Start)
-    }.title(this.title()).backgroundColor($r('app.color.canvas')).onShown((): void => this.shown()).onHidden((): void => this.hidden())
+    }.attributeModifier(new AppDestinationStyle(this.title(), $r('app.color.personal_canvas'), $r('app.color.personal_header'), 'PERSONAL')).backgroundColor($r('app.color.personal_canvas')).onShown((): void => this.shown()).onHidden((): void => this.hidden())
   }
 }

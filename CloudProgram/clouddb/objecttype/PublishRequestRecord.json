@@ -30,6 +30,10 @@
       "fieldType": "String"
     },
     {
+      "fieldName": "resultJson",
+      "fieldType": "Text"
+    },
+    {
       "fieldName": "status",
       "fieldType": "String",
       "notNull": true,

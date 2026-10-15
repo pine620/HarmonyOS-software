@@ -50,18 +50,22 @@ export function emptyReviewCardViewData(): ReviewCardViewData {
 export struct FoodTag {
   @Prop label: string = '';
   @Prop selected: boolean = false;
+  @Prop marketStyle: boolean = false;
 
   build() {
     Text(this.label.length > 0 ? this.label : '未分类')
       .fontSize(12)
       .fontWeight(this.selected ? FontWeight.Bold : FontWeight.Medium)
-      .fontColor(this.selected ? $r('app.color.on_accent_action') : $r('app.color.ink'))
+      .fontColor(this.marketStyle ? (this.selected ? $r('app.color.discovery_on_gold') : $r('app.color.discovery_ink')) :
+        (this.selected ? $r('app.color.on_accent_action') : $r('app.color.ink')))
       .maxLines(1)
       .textOverflow({ overflow: TextOverflow.Ellipsis })
       .padding({ left: 10, right: 10, top: 6, bottom: 6 })
-      .backgroundColor(this.selected ? $r('app.color.accent_action') : $r('app.color.accent_soft'))
-      .border({ width: this.selected ? 2 : 1, color: this.selected
-        ? $r('app.color.on_accent_action') : $r('app.color.line') })
+      .backgroundColor(this.marketStyle ? (this.selected ? $r('app.color.discovery_gold') : $r('app.color.discovery_soft')) :
+        (this.selected ? $r('app.color.accent_action') : $r('app.color.accent_soft')))
+      .border({ width: this.selected ? 2 : 1, color: this.marketStyle ?
+        (this.selected ? $r('app.color.discovery_on_gold') : $r('app.color.discovery_line')) :
+        (this.selected ? $r('app.color.on_accent_action') : $r('app.color.line')) })
       .borderRadius(14)
       .accessibilityText(`${this.label.length > 0 ? this.label : '未分类'}标签` +
         `${this.selected ? '，已选中' : ''}`);
@@ -72,13 +76,14 @@ export struct FoodTag {
 export struct PriceBadge {
   @Prop priceText: string = '价格待补充';
   @Prop originalPriceText: string = '';
+  @Prop marketStyle: boolean = false;
 
   build() {
     Row({ space: 6 }) {
       Text(this.priceText)
-        .fontSize(16)
+        .fontSize(this.marketStyle ? 18 : 16)
         .fontWeight(FontWeight.Bold)
-        .fontColor($r('app.color.accent_action'))
+        .fontColor(this.marketStyle ? $r('app.color.discovery_accent') : $r('app.color.accent_action'))
         .layoutWeight(1)
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis });
@@ -86,7 +91,7 @@ export struct PriceBadge {
         Text(`原价 ${this.originalPriceText}`)
           .width('42%')
           .fontSize(12)
-          .fontColor($r('app.color.muted'))
+          .fontColor(this.marketStyle ? $r('app.color.discovery_muted') : $r('app.color.muted'))
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis });
       }
@@ -102,10 +107,11 @@ export struct PriceBadge {
 export struct EvidenceBadge {
   @Prop label: string = '待确认';
   @Prop tone: EvidenceTone = 'pending';
+  @Prop marketStyle: boolean = false;
 
   private textColor(): Resource {
     if (this.tone === 'verified') return $r('app.color.leaf');
-    if (this.tone === 'assisted') return $r('app.color.accent_action');
+    if (this.tone === 'assisted') return this.marketStyle ? $r('app.color.discovery_accent') : $r('app.color.accent_action');
     return $r('app.color.warning');
   }
 
@@ -123,7 +129,7 @@ export struct EvidenceBadge {
       .maxLines(1)
       .textOverflow({ overflow: TextOverflow.Ellipsis })
       .padding({ left: 8, right: 8, top: 5, bottom: 5 })
-      .backgroundColor($r('app.color.surface'))
+      .backgroundColor(this.marketStyle ? $r('app.color.discovery_surface') : $r('app.color.surface'))
       .border({ width: 1, color: this.textColor() })
       .borderRadius(12)
       .accessibilityText(`${this.label.length > 0 ? this.label : '待确认'}，${this.description()}`);
@@ -135,6 +141,8 @@ export struct ReviewCard {
   @Prop @Watch('onDataChanged') data: ReviewCardViewData = emptyReviewCardViewData();
   @Prop featured: boolean = false;
   @Prop coverScale: number = 1;
+  @Prop marketStyle: boolean = false;
+  @Prop motionEnabled: boolean = true;
   onOpen: (id: string) => void = (_id: string): void => {};
   @State nativeCoverFailed: string = '';
   onCoverFailed: () => void = (): void => {};
@@ -149,12 +157,18 @@ export struct ReviewCard {
     return size;
   }
   private photoHeight(): number {
-    return Math.round((this.featured ? 224 : 142) * this.coverScale);
+    const height: number = this.marketStyle ? this.featured ? 186 : 132 : this.featured ? 224 : 142;
+    return Math.round(height * this.coverScale);
   }
 
   private reviewLineCount(): number {
-    return this.featured ? 3 : 2;
+    return this.marketStyle ? 1 : this.featured ? 3 : 2;
   }
+  private inkColor(): Resource { return this.marketStyle ? $r('app.color.discovery_ink') : $r('app.color.ink'); }
+  private mutedColor(): Resource { return this.marketStyle ? $r('app.color.discovery_muted') : $r('app.color.muted'); }
+  private accentColor(): Resource { return this.marketStyle ? $r('app.color.discovery_accent') : $r('app.color.accent_action'); }
+  private surfaceColor(): Resource { return this.marketStyle ? $r('app.color.discovery_surface') : $r('app.color.surface'); }
+  private softColor(): Resource { return this.marketStyle ? $r('app.color.discovery_soft') : $r('app.color.accent_soft'); }
 
   private coverStatusText(): string {
     if (this.data.coverLoading) return '正在加载实拍图';
@@ -191,7 +205,7 @@ export struct ReviewCard {
   }
 
   build() {
-    Column({ space: 10 }) {
+    Column({ space: this.marketStyle ? 0 : 10 }) {
       Stack({ alignContent: Alignment.BottomStart }) {
         if (this.data.coverUrl.length > 0 && this.nativeCoverFailed !== this.data.coverUrl) {
           Image(this.data.coverUrl)
@@ -199,7 +213,7 @@ export struct ReviewCard {
             .height(this.photoHeight())
             .objectFit(ImageFit.Contain)
             .autoResize(true).syncLoad(false).sourceSize(this.decodeSize())
-            .borderRadius(18)
+            .borderRadius(this.marketStyle ? 16 : 18)
             .onError((): void => {
               this.nativeCoverFailed = this.data.coverUrl;
               void ImageRepository.reportDecodeFailureByUrl(this.getUIContext().getHostContext() as common.Context, this.data.coverUrl).catch((): void => {});
@@ -217,105 +231,134 @@ export struct ReviewCard {
             Text(this.coverStatusText())
               .fontSize(14)
               .fontWeight(FontWeight.Medium)
-              .fontColor($r('app.color.ink'));
+              .fontColor(this.inkColor());
             Text(this.coverDescription())
               .fontSize(12)
-              .fontColor($r('app.color.muted'));
+              .fontColor(this.mutedColor());
           }
           .width('100%')
           .height(this.photoHeight())
           .justifyContent(FlexAlign.Center)
-          .backgroundColor($r('app.color.accent_soft'))
+          .backgroundColor(this.softColor())
           .borderRadius(16)
           .accessibilityText(this.data.productName + '，' + this.coverStatusText());
         }
 
-        Row() {
-          Blank();
-          Text(this.data.categoryLabel.length > 0 ? this.data.categoryLabel : '其他')
-            .fontSize(12)
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.on_accent_action'));
+        // Discovery (market) cards keep only name, shop, price and taste; the category is shown by the filter row.
+        if (!this.marketStyle) {
+          Row() {
+            Blank();
+            Text(this.data.categoryLabel.length > 0 ? this.data.categoryLabel : '其他')
+              .fontSize(12)
+              .fontWeight(FontWeight.Medium)
+              .fontColor($r('app.color.on_accent_action'));
+          }
+          .width('100%')
+          .padding({ left: 10, right: 10, top: 7, bottom: 7 })
+          .backgroundColor($r('app.color.accent_action'));
         }
-        .width('100%')
-        .padding({ left: 10, right: 10, top: 7, bottom: 7 })
-        .backgroundColor($r('app.color.accent_action'));
       }
       .width('100%');
 
-      Row({ space: 8 }) {
-        Text(this.data.productName)
-          .fontSize(17)
-          .fontWeight(FontWeight.Bold)
-          .fontColor($r('app.color.ink'))
-          .layoutWeight(1)
-          .maxLines(2)
-          .textOverflow({ overflow: TextOverflow.Ellipsis });
-        if (this.featured) {
-          EvidenceBadge({ label: this.data.evidenceLabel, tone: this.data.evidenceTone });
+      Column({ space: this.marketStyle ? 7 : 10 }) {
+        Row({ space: 8 }) {
+          Text(this.data.productName)
+            .fontSize(this.marketStyle ? 15 : 17)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(this.inkColor())
+            .layoutWeight(1)
+            .maxLines(2)
+            .textOverflow({ overflow: TextOverflow.Ellipsis });
+          if (this.featured && !this.marketStyle) {
+            EvidenceBadge({ label: this.data.evidenceLabel, tone: this.data.evidenceTone });
+          }
         }
-      }
-      .width('100%')
-      .alignItems(VerticalAlign.Top);
+        .width('100%')
+        .alignItems(VerticalAlign.Top);
 
-      if (this.data.shop.length > 0) {
-        Text(this.data.shop)
-          .width('100%')
-          .fontSize(12)
-          .fontColor($r('app.color.muted'))
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis });
-      }
-
-      PriceBadge({ priceText: this.data.priceText, originalPriceText: this.data.originalPriceText });
-
-      if (this.data.tasteScoreText.length > 0) {
-        Text('口味 ' + this.data.tasteScoreText)
-          .fontSize(12)
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.accent_action'))
-          .padding({ left: 8, right: 8, top: 5, bottom: 5 })
-          .backgroundColor($r('app.color.accent_soft'))
-          .borderRadius(10)
-          .accessibilityText('口味评分 ' + this.data.tasteScoreText);
-      }
-
-      if (this.data.reviewSummary.length > 0) {
-        Text(this.data.reviewSummary)
-          .width('100%')
-          .fontSize(14)
-          .lineHeight(21)
-          .fontColor($r('app.color.ink'))
-          .maxLines(this.reviewLineCount())
-          .textOverflow({ overflow: TextOverflow.Ellipsis });
-      }
-
-      if (this.featured && this.data.tags.length > 0) {
-        Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
-          ForEach(this.data.tags.slice(0, 3), (tag: string) => {
-            Column() {
-              FoodTag({ label: tag });
-            }.margin({ right: 6, bottom: 6 });
-          }, (tag: string, index: number): string => `${tag}-${index}`)
+        if (this.data.shop.length > 0) {
+          Text(this.data.shop)
+            .width('100%')
+            .fontSize(12)
+            .fontColor(this.mutedColor())
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis });
         }
-        .width('100%');
-      }
 
-      if (this.metadataText().length > 0) {
-        Text(this.metadataText())
+        if (this.marketStyle) {
+          Row({ space: 6 }) {
+            PriceBadge({ priceText: this.data.priceText, originalPriceText: this.data.originalPriceText, marketStyle: true })
+              .layoutWeight(1);
+            if (this.data.tasteScoreText.length > 0) {
+              Text('口味 ' + this.data.tasteScoreText)
+                .fontSize(11)
+                .fontWeight(FontWeight.Bold)
+                .fontColor(this.accentColor())
+                .maxLines(1)
+                .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+                .backgroundColor(this.softColor())
+                .borderRadius(10)
+                .accessibilityText('口味评分 ' + this.data.tasteScoreText);
+            }
+          }
           .width('100%')
-          .fontSize(12)
-          .fontColor($r('app.color.muted'))
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis });
-      }
+          .alignItems(VerticalAlign.Center);
+        } else {
+          PriceBadge({ priceText: this.data.priceText, originalPriceText: this.data.originalPriceText, marketStyle: this.marketStyle });
+
+          if (this.data.tasteScoreText.length > 0) {
+            Text('口味 ' + this.data.tasteScoreText)
+              .fontSize(12)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(this.accentColor())
+              .padding({ left: 8, right: 8, top: 5, bottom: 5 })
+              .backgroundColor(this.softColor())
+              .borderRadius(10)
+              .accessibilityText('口味评分 ' + this.data.tasteScoreText);
+          }
+        }
+
+        if (this.data.reviewSummary.length > 0 && !this.marketStyle) {
+          Text(this.data.reviewSummary)
+            .width('100%')
+            .fontSize(14)
+            .lineHeight(21)
+            .fontColor(this.inkColor())
+            .maxLines(this.reviewLineCount())
+            .textOverflow({ overflow: TextOverflow.Ellipsis });
+        }
+
+        if (this.featured && this.data.tags.length > 0) {
+          Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
+            ForEach(this.data.tags.slice(0, this.marketStyle ? 1 : 3), (tag: string) => {
+              Column() {
+                FoodTag({ label: tag, marketStyle: this.marketStyle });
+              }.margin({ right: 6, bottom: 6 });
+            }, (tag: string, index: number): string => `${tag}-${index}`)
+          }
+          .width('100%');
+        }
+
+        if (this.metadataText().length > 0 && !this.marketStyle) {
+          Text(this.metadataText())
+            .width('100%')
+            .fontSize(12)
+            .fontColor(this.mutedColor())
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis });
+        }
+        if (this.marketStyle && this.featured) {
+          EvidenceBadge({ label: this.data.evidenceLabel, tone: this.data.evidenceTone, marketStyle: true });
+        }
+      }.width('100%').padding(this.marketStyle ? 10 : 0)
     }
     .width('100%')
-    .padding(12)
-    .backgroundColor($r('app.color.surface'))
-    .border({ width: 1, color: $r('app.color.line') })
-    .borderRadius(20)
-    .clickEffect({ level: ClickEffectLevel.MIDDLE, scale: 0.98 })
+    .padding(this.marketStyle ? 0 : 12)
+    .backgroundColor(this.surfaceColor())
+    .border({ width: this.marketStyle ? 1.2 : 1, color: this.marketStyle ? $r('app.color.discovery_line') : $r('app.color.line'),
+      style: this.marketStyle ? BorderStyle.Dashed : BorderStyle.Solid })
+    .borderRadius(this.marketStyle ? 16 : 20).clip(this.marketStyle)
+    .clickEffect({ level: this.motionEnabled ? ClickEffectLevel.MIDDLE : ClickEffectLevel.LIGHT, scale: this.motionEnabled ? this.marketStyle ? 0.985 : 0.98 : 1 })
     .accessibilityGroup(true)
     .accessibilityRole(AccessibilityRoleType.BUTTON)
     .accessibilityText(this.accessibilitySummary())

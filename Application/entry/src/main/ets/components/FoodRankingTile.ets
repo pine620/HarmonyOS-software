@@ -14,6 +14,9 @@ export struct FoodRankingTile {
     if (this.row.state === 'ERROR') return '图片未加载';
     return this.row.state === 'NO_IMAGE' ? '暂无图片' : '加载中';
   }
+  private topRank(): boolean { return this.rank >= 1 && this.rank <= 3; }
+  // Rows after the podium stay pictured but slightly smaller, so the top three read first.
+  private resolvedPhotoSize(): number { return this.topRank() ? this.photoSize : Math.round(this.photoSize * 0.78); }
   private score(): string { return this.row.card === undefined ? '—' : this.row.card.tasteScore.toString(); }
   private rankBackground(): ResourceColor {
     if (this.rank === 1) return $r('app.color.food_ranking_rank_top');
@@ -30,24 +33,32 @@ export struct FoodRankingTile {
   @Builder private photo() {
     Stack({ alignContent: Alignment.TopStart }) {
       if (this.row.state === 'READY' && this.row.card !== undefined && this.row.card.photoUrl.length > 0) {
-        Image(this.row.card.photoUrl).width(this.photoSize).height(this.photoSize).objectFit(ImageFit.Cover)
+        Image(this.row.card.photoUrl).width(this.resolvedPhotoSize()).height(this.resolvedPhotoSize()).objectFit(ImageFit.Cover)
           .borderRadius(10).onError((): void => { this.row.state = 'ERROR'; });
       } else {
         Column({ space: 4 }) {
           Image($r('app.media.ic_service_card_photo')).width(28).height(28);
           Text(this.photoLabel()).fontSize(11).maxFontScale(1.3)
             .fontColor($r('app.color.food_ranking_muted')).textAlign(TextAlign.Center).maxLines(2);
-        }.width(this.photoSize).height(this.photoSize).padding(4).justifyContent(FlexAlign.Center)
+        }.width(this.resolvedPhotoSize()).height(this.resolvedPhotoSize()).padding(4).justifyContent(FlexAlign.Center)
           .backgroundColor($r('app.color.food_ranking_placeholder')).borderRadius(10);
       }
-      Text(this.rank.toString()).fontSize(15).maxFontScale(1.4).fontWeight(FontWeight.Bold).maxLines(1)
-        .constraintSize({ minWidth: 32, minHeight: 24 }).padding({ left: 6, right: 6, top: 3, bottom: 3 })
-        .textAlign(TextAlign.Center)
-        .fontColor(this.rank >= 1 && this.rank <= 3 ? $r('app.color.food_ranking_rank_top_text') :
-          $r('app.color.food_ranking_rank_text'))
-        .backgroundColor(this.rankBackground()).borderRadius(6)
-        .border({ width: 1, color: $r('app.color.food_ranking_surface') });
-    }.width(this.photoSize).height(this.photoSize).accessibilityLevel('no-hide-descendants');
+      if (this.topRank()) {
+        // Podium ranks use a hand-stamped seal: dashed ring, slightly tilted.
+        Text(this.rank.toString()).fontSize(15).maxFontScale(1.4).fontWeight(FontWeight.Bold).maxLines(1)
+          .width(30).height(30).textAlign(TextAlign.Center).offset({ x: -4, y: -4 })
+          .fontColor($r('app.color.food_ranking_accent')).backgroundColor($r('app.color.food_ranking_surface'))
+          .borderRadius(15).border({ width: 1.6, color: $r('app.color.food_ranking_accent'), style: BorderStyle.Dashed })
+          .rotate({ angle: -8 });
+      } else {
+        Text(this.rank.toString()).fontSize(13).maxFontScale(1.4).fontWeight(FontWeight.Bold).maxLines(1)
+          .constraintSize({ minWidth: 26, minHeight: 20 }).padding({ left: 5, right: 5, top: 2, bottom: 2 })
+          .textAlign(TextAlign.Center)
+          .fontColor($r('app.color.food_ranking_rank_text'))
+          .backgroundColor(this.rankBackground()).borderRadius(6)
+          .border({ width: 1, color: $r('app.color.food_ranking_surface') });
+      }
+    }.width(this.resolvedPhotoSize()).height(this.resolvedPhotoSize()).accessibilityLevel('no-hide-descendants');
   }
   @Builder private scoreNumber() {
     Row({ space: 2 }) {
@@ -61,7 +72,7 @@ export struct FoodRankingTile {
       Row({ space: 12 }) {
         this.photo();
         Column({ space: 4 }) {
-          Text(this.row.card?.productName || '卡片暂不可访问').fontSize(17).fontWeight(FontWeight.Bold)
+          Text(this.row.card?.productName || '卡片暂不可访问').fontSize(this.topRank() ? 17 : 15).fontWeight(FontWeight.Bold)
             .fontColor($r('app.color.food_ranking_ink')).maxLines(this.largeText ? 3 : 2)
             .textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%');
           if (this.merchantName.trim().length > 0) {
@@ -91,9 +102,9 @@ export struct FoodRankingTile {
         }
       }.width('100%').alignItems(this.largeText ? VerticalAlign.Top : VerticalAlign.Center);
     }.width('100%').padding(8).backgroundColor($r('app.color.food_ranking_surface')).borderRadius(14)
-      .border({ width: 1, color: this.rank >= 1 && this.rank <= 3 ? $r('app.color.food_ranking_top_line') :
-        Color.Transparent })
-      .constraintSize({ minHeight: 100 }).enabled(!this.busy && this.row.card !== undefined)
+      .border({ width: this.topRank() ? 1.4 : 1, color: this.topRank() ? $r('app.color.food_ranking_accent') :
+        $r('app.color.food_ranking_line'), style: BorderStyle.Dashed })
+      .constraintSize({ minHeight: this.topRank() ? 100 : 80 }).enabled(!this.busy && this.row.card !== undefined)
       .accessibilityGroup(true).accessibilityText(this.accessibleLabel())
       .onClick((): void => this.onOpen(this.row.cardId));
   }

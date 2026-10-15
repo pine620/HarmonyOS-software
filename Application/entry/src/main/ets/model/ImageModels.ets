@@ -1,4 +1,4 @@
-export type ImageMode = 'PUBLIC' | 'REVIEW' | 'REVISION';
+export type ImageMode = 'PUBLIC' | 'REVIEW' | 'REVISION' | 'REPORT';
 export type ImageVariant = 'COVER_480' | 'ORIGINAL';
 export type MediaPriority = 'high' | 'normal' | 'prefetch' | 'low';
 export type MediaRequestGuard = () => Promise<boolean>;

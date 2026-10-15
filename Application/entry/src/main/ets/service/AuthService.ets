@@ -5,6 +5,11 @@ import { authentication } from '@kit.AccountKit';
 import util from '@ohos.util';
 import {
   AuthSession,
+  ChangePasswordRequest,
+  NicknameAuthSession,
+  NicknamePasswordRequest,
+  PasswordAccountStatus,
+  PasswordAccountSetupResponse,
   DeleteAccountResponse,
   EmptyRequest,
   ExchangeHuaweiAccountRequest,
@@ -22,7 +27,11 @@ import { ServiceCardRemoteSyncService } from './ServiceCardRemoteSyncService';
 import { DiscoveryFeedState } from './DiscoveryFeedState';
 import { SessionRestoreStore, SessionProviderHint } from './SessionRestoreStore';
 
-type AuthMode = 'none' | 'email' | 'huawei';
+type AuthMode = 'none' | 'email' | 'huawei' | 'nickname';
+
+export class PasswordSavedError extends Error {
+  constructor() { super('密码已保存，请使用昵称和新密码登录。'); this.name = 'PasswordSavedError'; }
+}
 
 interface AuthErrorDetail {
   code?: number | string;
@@ -55,13 +64,168 @@ export class AuthService {
     return AuthService.currentProfile;
   }
 
+  static isNicknameSession(): boolean { return AuthService.authMode === 'nickname'; }
+
   static isEmailSession(): boolean {
     return AuthService.authMode === 'email' && AuthSessionStore.isNativeEmailSession();
   }
 
-  static async requestEmailCode(context: common.Context, rawEmail: string): Promise<void> {
+  static async requestEmailCode(context: common.Context, rawEmail: string, resetPassword: boolean = false): Promise<void> {
     AuthSessionStore.initialize(context);
-    await AuthSessionStore.requestEmailVerifyCode(rawEmail);
+    await AuthSessionStore.requestEmailVerifyCode(rawEmail, resetPassword);
+  }
+
+  static async nicknameLogin(context: common.Context, nickname: string, password: string): Promise<UserProfile> {
+    const intent: number = ++AuthService.intent;
+    AuthSessionStore.initialize(context);
+    await SessionRestoreStore.save(context, 'SIGNED_OUT');
+    await AuthSessionStore.signOut();
+    AuthService.assertIntent(intent);
+    AuthService.clearLocalSession();
+    const request: NicknamePasswordRequest = { nickname: nickname.trim(), password };
+    const session: NicknameAuthSession = await CloudGateway.callPublic<NicknameAuthSession>('login-with-nickname', request);
+    AuthService.assertIntent(intent);
+    AuthService.validateNicknameSession(session);
+    AuthSessionStore.setLegacyAccessToken(session.accessToken, session.expiresAt);
+    AuthService.authMode = 'nickname';
+    await SessionRestoreStore.save(context, 'NICKNAME');
+    AuthService.assertIntent(intent);
+    AppStorage.setOrCreate('sessionRestoreMessage', '');
+    try { return await AuthService.loadProfile(context, intent); }
+    catch (error) {
+      if (intent === AuthService.intent) AuthService.clearLocalSession();
+      if (error instanceof Error) throw error;
+      throw new Error(AuthService.credentialError(error as Object, '登录资料加载失败，请重试。'));
+    }
+  }
+
+  private static validateNicknameSession(session: NicknameAuthSession): void {
+    if (session === undefined || session === null || typeof session.accessToken !== 'string' || session.accessToken.length === 0 ||
+      !Number.isFinite(session.expiresAt) || session.expiresAt <= Date.now()) {
+      throw new Error('服务端未返回有效的昵称登录凭证，请更新登录服务后重试。');
+    }
+  }
+
+  static async cancelAuthentication(context: common.Context): Promise<void> {
+    AuthService.intent++;
+    await SessionRestoreStore.save(context, 'SIGNED_OUT');
+    try { await AuthSessionStore.signOut(); }
+    finally { AuthService.clearLocalSession(); }
+  }
+
+  static async passwordAccountStatus(): Promise<PasswordAccountStatus> {
+    const request: EmptyRequest = {};
+    return CloudGateway.callAuthenticated<PasswordAccountStatus>('get-password-account', request);
+  }
+
+  static async configurePasswordAccount(context: common.Context, nickname: string, password: string): Promise<UserProfile> {
+    const intent: number = AuthService.intent;
+    AuthSessionStore.validateNewPassword(password);
+    const request: NicknamePasswordRequest = { nickname: nickname.trim(), password };
+    const expectedUid: string = AuthService.currentProfile?.uid || '';
+    const result: PasswordAccountSetupResponse = await CloudGateway.callAuthenticated<PasswordAccountSetupResponse>('configure-password-account', request);
+    return AuthService.finishPasswordUpdate(context, result, expectedUid, intent);
+  }
+
+  static async changePassword(context: common.Context, currentPassword: string, newPassword: string): Promise<UserProfile> {
+    const intent: number = AuthService.intent;
+    const expectedUid: string = AuthService.currentProfile?.uid || '';
+    if (expectedUid.length === 0) throw new Error('请先登录后更改密码。');
+    if (currentPassword.length === 0) throw new Error('请输入当前密码。');
+    AuthSessionStore.validateNewPassword(newPassword);
+    if (currentPassword === newPassword) throw new Error('新密码不能与当前密码相同。');
+    await AuthService.ensureSession(context);
+    AuthService.assertIntent(intent);
+    if (AuthService.currentProfile?.uid !== expectedUid) throw new Error('当前账号已变化，请重新登录后更改密码。');
+    await DraftStore.flushActive();
+    AuthService.assertIntent(intent);
+    const request: ChangePasswordRequest = { currentPassword, newPassword, expectedUid };
+    const result: PasswordAccountSetupResponse = await CloudGateway.callAuthenticated<PasswordAccountSetupResponse>('change-password-account', request);
+    return AuthService.finishPasswordUpdate(context, result, expectedUid, intent);
+  }
+
+  private static async finishPasswordUpdate(context: common.Context, result: PasswordAccountSetupResponse,
+    expectedUid: string, intent: number): Promise<UserProfile> {
+    AuthService.assertIntent(intent);
+    const previousProfile: UserProfile | undefined = AuthService.currentProfile;
+    try {
+      AuthService.validateNicknameSession(result);
+      const savedProfile: UserProfile = result.profile;
+      if (savedProfile === undefined || savedProfile === null || expectedUid.length === 0 || savedProfile.uid !== expectedUid) {
+        throw new Error('保存后返回的账号身份不一致，请重新验证。');
+      }
+      await SessionRestoreStore.save(context, 'SIGNED_OUT');
+      AuthService.assertIntent(intent);
+      await AuthSessionStore.signOut();
+      AuthService.assertIntent(intent);
+      AuthService.clearLocalSession();
+      AuthSessionStore.setLegacyAccessToken(result.accessToken, result.expiresAt);
+      AuthService.authMode = 'nickname';
+      await SessionRestoreStore.save(context, 'NICKNAME');
+      AuthService.assertIntent(intent);
+    } catch (error) {
+      if (intent !== AuthService.intent) throw new Error('登录操作已被新的账号操作取代。');
+      AuthService.clearLocalSession();
+      throw new PasswordSavedError();
+    }
+    const profile: UserProfile = result.profile;
+    if (previousProfile !== undefined && previousProfile.uid === profile.uid) {
+      if (profile.avatarPath === previousProfile.avatarPath && profile.avatarBucket === previousProfile.avatarBucket) {
+        profile.avatarUrl = previousProfile.avatarUrl;
+      }
+      if (profile.coverPath === previousProfile.coverPath && profile.coverBucket === previousProfile.coverBucket) {
+        profile.coverUrl = previousProfile.coverUrl;
+      }
+    }
+    AuthService.currentProfile = profile;
+    AuthSessionStore.setBusinessOwner(profile.uid);
+    ImageRepository.setCacheOwner(profile.uid);
+    DraftStore.activateOwner(profile.uid);
+    AppStorage.setOrCreate('sessionRestoreMessage', '');
+    return profile;
+  }
+
+  static async registerVerifiedEmail(context: common.Context, email: string, code: string): Promise<UserProfile> {
+    const intent: number = ++AuthService.intent;
+    AuthSessionStore.initialize(context);
+    AuthService.clearLocalSession();
+    await SessionRestoreStore.save(context, 'SIGNED_OUT');
+    try { await AuthSessionStore.registerEmail(email, code); }
+    catch (error) {
+      if (authErrorCode(error as Object) === '203818130') throw new Error('该邮箱已注册，请使用验证码登录。');
+      throw new Error(AuthService.credentialError(error as Object, '邮箱验证失败，请重试。'));
+    }
+    AuthService.assertIntent(intent);
+    AuthService.authMode = 'email';
+    await SessionRestoreStore.save(context, 'EMAIL');
+    return AuthService.loadProfile(context, intent);
+  }
+
+  static credentialError(error: Object, fallback: string): string {
+    const code: string = authErrorCode(error);
+    switch (code) {
+      case 'CURRENT_PASSWORD_INCORRECT': return '当前密码不正确。';
+      case 'PASSWORD_UNCHANGED': return '新密码不能与当前密码相同。';
+      case 'PASSWORD_NOT_SET': return '当前账号尚未设置密码，请通过绑定的邮箱或华为账号先设置。';
+      case 'PASSWORD_STATE_CHANGED': return '密码已被更改，请重新登录后再操作。';
+      case 'ACCOUNT_MISMATCH': return '当前账号已变化，请重新登录后更改密码。';
+      case 'NICKNAME_TAKEN': return '该昵称已被使用，请换一个。';
+      case 'INVALID_NICKNAME': return '昵称需为 2–24 个字，仅支持文字、数字、下划线、点和短横线。';
+      case 'INVALID_PASSWORD': return '密码需为 8–128 个字符，至少包含两种字符，且不能与昵称相同。';
+      case 'INVALID_CREDENTIALS': return '昵称或密码不正确。';
+      case 'AUTH_RATE_LIMITED': return '尝试次数过多，请 15 分钟后再试。';
+      case 'REAUTH_REQUIRED': return '验证已过期，请返回登录，重新验证邮箱或华为账号。';
+      case 'FEATURE_NOT_READY': return '昵称登录尚未启用或迁移尚未完成，请完成云端配置后重试。';
+      case 'AUTH_CONFIGURATION_REQUIRED': return '昵称登录签名配置无效，请核对云端配置。';
+      case 'AUTH_UPSTREAM_HTTP': case 'AUTH_UPSTREAM_RESPONSE': case 'AUTH_UPSTREAM_TIMEOUT':
+      case 'AUTH_UPSTREAM_NETWORK': case 'AUTH_AGC_CLIENT_REJECTED': case 'AUTH_AGC_SIGN_IN_REJECTED':
+      case 'AUTH_AGC_TOKEN_INVALID':
+        return `${(error as AuthErrorDetail).message || fallback}（${code}）`;
+      case 'AUTH_UPSTREAM_FAILED': return 'AGC 会话交换失败，请更新云端登录服务后查看具体错误。';
+    }
+    if (code.length > 0 && /^[A-Za-z0-9_-]{1,40}$/.test(code)) return `${fallback}（${code}）`;
+    if (error instanceof Error && code.length === 0) return error.message || fallback;
+    return fallback;
   }
 
   static async emailLogin(
@@ -73,6 +237,9 @@ export class AuthService {
     const intent: number = ++AuthService.intent;
     AppStorage.setOrCreate('sessionRestoreMessage', '');
     AuthSessionStore.initialize(context);
+    await SessionRestoreStore.save(context, 'SIGNED_OUT');
+    AuthService.assertIntent(intent);
+    AuthService.clearLocalSession();
     try {
       if (register) {
         try {
@@ -102,13 +269,18 @@ export class AuthService {
     }
   }
 
-  static async login(context: common.Context, interactive: boolean = true): Promise<UserProfile> {
+  static async login(context: common.Context, interactive: boolean = true, registerOnly: boolean = false): Promise<UserProfile> {
     if (interactive) { AuthService.intent++; AppStorage.setOrCreate('sessionRestoreMessage', ''); }
     const intent: number = AuthService.intent;
     AuthSessionStore.initialize(context);
     // Never let a native email user or an expired legacy AGC token become the
     // credential for the next Huawei compatibility exchange.
-    if (interactive) await AuthSessionStore.signOut();
+    if (interactive) {
+      await SessionRestoreStore.save(context, 'SIGNED_OUT');
+      await AuthSessionStore.signOut();
+      AuthService.assertIntent(intent);
+      AuthService.clearLocalSession();
+    }
     const state: string = util.generateRandomUUID();
     const nonce: string = util.generateRandomUUID();
     // Huawei ID remains a compatibility entry point. It is exchanged for an
@@ -147,7 +319,7 @@ export class AuthService {
     }
     AuthSessionStore.setLegacyAccessToken(session.accessToken, session.expiresAt);
     try {
-      const migrationRequest: MigrationTicketRequest = { ticket: session.migrationTicket };
+      const migrationRequest: MigrationTicketRequest = { ticket: session.migrationTicket, registerOnly };
       const migrationResult: OperationResponse =
         await CloudGateway.callAuthenticated<OperationResponse>('complete-legacy-login', migrationRequest);
       if (!migrationResult.success) {
@@ -158,6 +330,9 @@ export class AuthService {
       await SessionRestoreStore.save(context, 'HUAWEI');
     } catch (error) {
       if (intent === AuthService.intent) AuthSessionStore.clearLegacyAccessToken();
+      if (authErrorCode(error as Object) === 'ACCOUNT_ALREADY_EXISTS') {
+        throw new Error('该华为账号已有食刻账号，请返回登录。');
+      }
       throw new Error(`华为账号迁移失败：${authErrorText(error as Object)}`);
     }
     try {
@@ -285,11 +460,19 @@ export class AuthService {
 
   static async restore(context: common.Context, allowHuaweiRestore: boolean = true): Promise<UserProfile | undefined> {
     const intent: number = AuthService.intent;
+    const hadProfile: boolean = AuthService.currentProfile !== undefined;
     AuthSessionStore.initialize(context);
     AppStorage.setOrCreate('sessionRestoreMessage', '');
     try {
       const hint: SessionProviderHint = await SessionRestoreStore.read(context);
       if (intent !== AuthService.intent) return AuthService.currentProfile;
+      if (hint === 'NICKNAME') {
+        if (AuthService.authMode === 'nickname' && AuthService.currentProfile !== undefined &&
+          (await AuthSessionStore.getAccessToken()).length > 0) return AuthService.currentProfile;
+        AuthService.clearLocalSession();
+        AppStorage.setOrCreate('sessionRestoreMessage', '请使用昵称和密码登录。');
+        return undefined;
+      }
       if (hint === 'SIGNED_OUT') { AuthService.clearLocalSession(); return undefined; }
       const currentUser = await AuthSessionStore.getCurrentUser();
       if (intent !== AuthService.intent) return AuthService.currentProfile;
@@ -298,13 +481,31 @@ export class AuthService {
         await AuthSessionStore.getAccessToken(false);
         const profile: UserProfile = await AuthService.loadProfile(context, intent);
         if (intent !== AuthService.intent) return AuthService.currentProfile;
+        const status: PasswordAccountStatus = await AuthService.passwordAccountStatus();
+        if (intent !== AuthService.intent) return AuthService.currentProfile;
+        if (!status.configured) {
+          AuthService.clearLocalSession();
+          AppStorage.setOrCreate('sessionRestoreMessage', '请验证账号并设置唯一昵称和密码。');
+          return undefined;
+        }
         await SessionRestoreStore.save(context, 'EMAIL');
         return profile;
       }
-      if (allowHuaweiRestore && hint === 'HUAWEI') return await AuthService.login(context, false);
+      if (allowHuaweiRestore && hint === 'HUAWEI') {
+        const profile: UserProfile = await AuthService.login(context, false);
+        const status: PasswordAccountStatus = await AuthService.passwordAccountStatus();
+        if (intent !== AuthService.intent) return AuthService.currentProfile;
+        if (!status.configured) {
+          AuthService.clearLocalSession();
+          AppStorage.setOrCreate('sessionRestoreMessage', '请验证账号并设置唯一昵称和密码。');
+          return undefined;
+        }
+        return profile;
+      }
       return undefined;
     } catch (error) {
       if (intent !== AuthService.intent) return AuthService.currentProfile;
+      if (!hadProfile) AuthService.clearLocalSession();
       const code: string = authErrorCode(error as Object);
       if (code === 'ACCOUNT_INACTIVE' || code === 'AUTH_REQUIRED') {
         AuthService.clearLocalSession();
@@ -388,9 +589,13 @@ export class AuthService {
       await PushNotificationService.disable(context);
     } finally {
       try {
-        await AuthSessionStore.signOut();
+        if (AuthService.authMode === 'nickname') {
+          const request: EmptyRequest = {};
+          await CloudGateway.callAuthenticated<OperationResponse>('logout-nickname', request);
+        }
       } finally {
-        AuthService.clearLocalSession();
+        try { await AuthSessionStore.signOut(); }
+        finally { AuthService.clearLocalSession(); }
       }
     }
   }
@@ -412,6 +617,10 @@ export class AuthService {
     emailAddress: string = '',
     verifyCode: string = ''
   ): Promise<string> {
+    if (AuthService.authMode === 'nickname') {
+      throw new Error('请退出后，使用此账号绑定的邮箱验证码或华为账号登录，再进行注销。');
+    }
+    const expectedUid: string = AuthService.currentProfile === undefined ? '' : AuthService.currentProfile.uid;
     AuthService.intent++;
     const nativeEmailSession: boolean = AuthService.isEmailSession();
     if (nativeEmailSession) {
@@ -421,6 +630,9 @@ export class AuthService {
       // Destructive legacy-account deletion requires a fresh interactive
       // Huawei authorization before the cloud cleanup starts.
       await AuthService.login(context, true);
+    }
+    if (expectedUid.length === 0 || AuthService.currentProfile === undefined || AuthService.currentProfile.uid !== expectedUid) {
+      throw new Error('重新验证的账号与待注销账号不同，已取消注销。');
     }
     let serviceCardCleanupPending: boolean = false;
     try {

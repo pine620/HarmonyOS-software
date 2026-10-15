@@ -1,3 +1,6 @@
+import { PagePaletteName, pageColor } from '../common/PagePaletteUi';
+import { NoteInputStyle, WarmNoteBackdrop } from '../common/WarmNoteUi';
+import { AppDestinationStyle } from '../common/AppPageUi';
 import { PersonalCollectionRepository } from '../repository/PersonalCollectionRepository';
 import { PersonalCollectionPage } from '../model/PersonalCollectionModels';
 import { AccountRequestGuard } from '../service/AccountRequestGuard';
@@ -9,7 +12,7 @@ import {
 import { FriendRepository } from '../repository/FriendRepository';
 import { CardRepository } from '../repository/CardRepository';
 import { SocialAvatar } from '../components/social/SocialDisplay';
-import { foodCardCategoryLabel, coverFor } from '../components/FoodCover';
+import { coverFor } from '../components/FoodCover';
 import { ErrorDetail, errorText } from '../common/ErrorKit';
 
 const MESSAGE_PAGE_SIZE = 50;
@@ -26,6 +29,9 @@ function messageTime(timestamp: number): string {
 
 @Component
 export struct ChatPage {
+  @Prop palette: PagePaletteName = 'SOCIAL';
+  @State contentWidth: number = 320;
+  private messageWidth(): number { return Math.max(120, Math.min(286, this.contentWidth - 76)); }
   @StorageLink('stage47AppActive') @Watch('onAppActiveChanged') appActive: boolean = true;
   private destinationVisible: boolean = true;
   private onAppActiveChanged(): void { if (!this.appActive) this.aboutToDisappear(); else if (this.destinationVisible) this.aboutToAppear(); }
@@ -177,51 +183,38 @@ export struct ChatPage {
   private header(): void {
     Row({ space: 8 }) {
       Button() {
-        SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(24).fontColor([$r('app.color.ink')]);
+        SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(24).fontColor([pageColor(this.palette, 'ink')]);
       }
-      .width(48).height(48).backgroundColor($r('app.color.surface')).borderRadius(16)
+      .width(48).height(48).backgroundColor(pageColor(this.palette, 'surface')).borderRadius(16)
       .accessibilityText('返回好友与消息').onClick((): void => {
         this.closeChat();
       });
       SocialAvatar({ user: this.friend, avatarSize: 38 });
       Column({ space: 3 }) {
         Text(this.friend.nickname).fontSize(16).fontWeight(FontWeight.Bold)
-          .fontColor($r('app.color.ink')).width('100%').maxLines(1)
+          .fontColor(pageColor(this.palette, 'ink')).width('100%').maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis });
-        Text(this.friend.friendCode).fontSize(11).fontColor($r('app.color.muted')).width('100%').maxLines(1)
+        Text(this.friend.friendCode).fontSize(12).fontColor(pageColor(this.palette, 'muted')).width('100%').maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis });
       }.layoutWeight(1).alignItems(HorizontalAlign.Start);
-      Text('自动更新').fontSize(11).fontColor($r('app.color.muted'))
-        .padding({ left: 8, right: 8, top: 6, bottom: 6 })
-        .backgroundColor($r('app.color.accent_soft')).borderRadius(10);
+      Button('资料').height(48).fontSize(13).backgroundColor(Color.Transparent).fontColor(pageColor(this.palette, 'action'))
+        .accessibilityText('查看好友资料').onClick((): void => { this.pathStack.pushPathByName('friend-profile', this.friend); });
     }
     .width('100%').height(64).padding({ left: 2, right: 2, top: 6, bottom: 6 });
   }
 
   @Builder
   private sharedCard(card: FoodCard): void {
-    Row({ space: 10 }) {
-      if (card.photoUrl.length > 0) {
-        Image(card.photoUrl).width(72).height(72).objectFit(ImageFit.Cover).borderRadius(12)
-          .accessibilityText(`${card.productName}的实拍图`);
-      } else {
-        Image(coverFor(card.category)).width(72).height(72).objectFit(ImageFit.Cover)
-          .borderRadius(12).accessibilityLevel('no');
-      }
-      Column({ space: 4 }) {
-        Text(card.productName || '食刻卡片').fontSize(14).fontWeight(FontWeight.Bold)
-          .fontColor($r('app.color.ink')).width('100%').maxLines(2)
-          .textOverflow({ overflow: TextOverflow.Ellipsis });
-        Text(`${foodCardCategoryLabel(card)} · ${this.priceText(card)}`).fontSize(11)
-          .fontColor($r('app.color.muted')).width('100%').maxLines(1);
-        Button('查看卡片').height(36).fontSize(12).backgroundColor($r('app.color.accent_soft'))
-          .fontColor($r('app.color.accent_action')).onClick((): void => {
-            this.onOpenCard(card);
-          });
-      }.layoutWeight(1).alignItems(HorizontalAlign.Start);
-    }
-    .width(230).padding(10).backgroundColor($r('app.color.surface')).borderRadius(16)
-    .border({ width: 1, color: $r('app.color.line') });
+    Column({ space: 0 }) {
+      Image(card.photoUrl.length > 0 ? card.photoUrl : coverFor(card.category)).width('100%').aspectRatio(1.5)
+        .objectFit(ImageFit.Cover).borderRadius({ topLeft: 18, topRight: 18 }).accessibilityText(card.productName + '的实拍图');
+      Column({ space: 8 }) {
+        Text(card.productName || '食刻卡片').fontSize(16).fontWeight(FontWeight.Bold).fontColor(pageColor(this.palette, 'ink')).width('100%').maxLines(2);
+        Text(this.priceText(card)).fontSize(15).fontWeight(FontWeight.Medium).fontColor(pageColor(this.palette, 'action')).width('100%');
+        Button('查看卡片').width('100%').height(48).fontSize(13).backgroundColor(pageColor(this.palette, 'soft'))
+          .fontColor(pageColor(this.palette, 'action')).borderRadius(12).onClick((): void => this.onOpenCard(card));
+      }.width('100%').padding(12).alignItems(HorizontalAlign.Start);
+    }.width(this.messageWidth()).backgroundColor(pageColor(this.palette, 'surface')).borderRadius(18);
   }
 
   @Builder
@@ -231,24 +224,24 @@ export struct ChatPage {
         this.sharedCard(message.sharedCard);
       } else {
         Column({ space: 6 }) {
-          Text('卡片暂不可查看').fontSize(14).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'));
-          Text('它可能已下架或删除。').fontSize(12).fontColor($r('app.color.muted'));
+          Text('卡片暂不可查看').fontSize(14).fontWeight(FontWeight.Bold).fontColor(pageColor(this.palette, 'ink'));
+          Text('它可能已下架或删除。').fontSize(12).fontColor(pageColor(this.palette, 'muted'));
         }
-        .width(220).padding(14).backgroundColor($r('app.color.surface')).borderRadius(18)
-        .border({ width: 1, color: $r('app.color.line') });
+        .width(this.messageWidth()).padding(14).backgroundColor(pageColor(this.palette, 'surface')).borderRadius(18)
+        .border({ width: 1, color: pageColor(this.palette, 'line') });
       }
     } else if (message.kind === 'LINK') {
       Text(message.link).fontSize(15).lineHeight(22)
-        .fontColor(message.mine ? $r('app.color.on_accent_action') : $r('app.color.ink'))
+        .fontColor(pageColor(this.palette, 'ink'))
         .padding({ left: 14, right: 14, top: 11, bottom: 11 })
-        .backgroundColor(message.mine ? $r('app.color.accent_action') : $r('app.color.surface'))
-        .borderRadius(18).constraintSize({ maxWidth: 270 });
+        .backgroundColor(message.mine ? pageColor(this.palette, 'soft') : pageColor(this.palette, 'surface'))
+        .borderRadius(18).constraintSize({ maxWidth: this.messageWidth() });
     } else {
       Text(message.text).fontSize(15).lineHeight(22)
-        .fontColor(message.mine ? $r('app.color.on_accent_action') : $r('app.color.ink'))
+        .fontColor(pageColor(this.palette, 'ink'))
         .padding({ left: 14, right: 14, top: 11, bottom: 11 })
-        .backgroundColor(message.mine ? $r('app.color.accent_action') : $r('app.color.surface'))
-        .borderRadius(18).constraintSize({ maxWidth: 270 });
+        .backgroundColor(message.mine ? pageColor(this.palette, 'soft') : pageColor(this.palette, 'surface'))
+        .borderRadius(18).constraintSize({ maxWidth: this.messageWidth() });
     }
   }
 
@@ -268,7 +261,7 @@ export struct ChatPage {
         }
       }.width('100%').alignItems(VerticalAlign.Bottom);
       Text(`${messageTime(message.createdAt)}${message.mine ? (message.readAt > 0 ? ' · 已读' : ' · 已送达') : ''}`)
-        .fontSize(10).fontColor($r('app.color.muted')).width('100%')
+        .fontSize(12).fontColor(pageColor(this.palette, 'muted')).width('100%')
         .textAlign(message.mine ? TextAlign.End : TextAlign.Start)
         .padding({ left: message.mine ? 0 : 42, right: message.mine ? 2 : 0 });
     }.width('100%');
@@ -286,19 +279,19 @@ export struct ChatPage {
       }
       Column({ space: 4 }) {
         Text(card.productName || '食刻卡片').fontSize(13).fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.ink')).width(120).maxLines(2)
+          .fontColor(pageColor(this.palette, 'ink')).width(120).maxLines(2)
           .textOverflow({ overflow: TextOverflow.Ellipsis });
-        Text(this.priceText(card)).fontSize(12).fontColor($r('app.color.accent_action'));
+        Text(this.priceText(card)).fontSize(12).fontColor(pageColor(this.palette, 'action'));
       }.alignItems(HorizontalAlign.Start);
-      Button(this.sending ? '发送中' : '发送').height(40).enabled(!this.sending).fontSize(12)
-        .backgroundColor($r('app.color.accent_action')).fontColor($r('app.color.on_accent_action'))
+      Button(this.sending ? '发送中' : '发送').height(48).enabled(!this.sending).fontSize(12)
+        .backgroundColor(pageColor(this.palette, 'gold')).fontColor(pageColor(this.palette, 'on_gold'))
         .onClick((): void => {
           this.sendCard(card);
           this.cardPickerVisible = false;
         });
     }
-    .padding(8).backgroundColor($r('app.color.surface')).borderRadius(14)
-    .border({ width: 1, color: $r('app.color.line') });
+    .padding(8).backgroundColor(pageColor(this.palette, 'surface')).borderRadius(14)
+    .border({ width: 1, color: pageColor(this.palette, 'line') });
   }
 
   @Builder
@@ -306,21 +299,22 @@ export struct ChatPage {
     Column({ space: 8 }) {
       Row({ space: 8 }) {
         TextInput({ text: this.textDraft, placeholder: '输入文字或直接粘贴链接' })
-          .layoutWeight(1).height(48).fontSize(15).backgroundColor($r('app.color.canvas'))
-          .borderRadius(14).onChange((value: string): void => {
+          .layoutWeight(1).height(48).fontSize(15).backgroundColor(pageColor(this.palette, 'canvas'))
+          .borderRadius(14).attributeModifier(new NoteInputStyle(this.palette)).onChange((value: string): void => {
             this.textDraft = value;
           });
-        Button('卡片').height(48).fontSize(12).backgroundColor($r('app.color.accent_soft'))
-          .fontColor($r('app.color.accent_action')).enabled(!this.sending)
+        Button('卡片').height(48).fontSize(12).backgroundColor(pageColor(this.palette, 'soft'))
+          .fontColor(pageColor(this.palette, 'action')).enabled(!this.sending)
           .accessibilityText('选择食刻卡片发送').onClick((): void => {
             this.cardPickerVisible = !this.cardPickerVisible;
             if (this.cardPickerVisible && this.cardCandidates.length === 0) this.loadCardCandidates();
           });
         Button() {
           Image($r('app.media.ic_send')).width(24).height(24).objectFit(ImageFit.Contain)
+            .fillColor(pageColor(this.palette, 'on_gold'))
             .accessibilityLevel('no');
         }
-        .width(48).height(48).enabled(!this.sending).backgroundColor($r('app.color.accent_action'))
+        .width(48).height(48).enabled(!this.sending).backgroundColor(pageColor(this.palette, 'gold'))
         .borderRadius(16).accessibilityText(this.sending ? '消息发送中' : '发送文字消息')
         .onClick((): void => {
           this.sendText();
@@ -328,14 +322,14 @@ export struct ChatPage {
       }.width('100%').alignItems(VerticalAlign.Center);
       if (this.cardPickerVisible && this.cardsLoading) {
         Row({ space: 8 }) {
-          LoadingProgress().width(22).height(22).color($r('app.color.accent_action'));
-          Text('正在读取已收藏和已发布卡片').fontSize(13).fontColor($r('app.color.muted'));
+          LoadingProgress().width(22).height(22).color(pageColor(this.palette, 'action'));
+          Text('正在读取已收藏和已发布卡片').fontSize(13).fontColor(pageColor(this.palette, 'muted'));
         }.width('100%').height(56).justifyContent(FlexAlign.Center);
       } else if (this.cardPickerVisible && this.cardCandidates.length === 0 && this.favoriteCursor.length === 0) {
         Column({ space: 8 }) {
-          Text('暂无可发送卡片，先收藏或发布一张公开卡片。').fontSize(12).fontColor($r('app.color.muted'));
-          Button('重新加载').height(40).fontSize(12).backgroundColor($r('app.color.accent_soft'))
-            .fontColor($r('app.color.accent_action')).onClick((): void => {
+          Text('暂无可发送卡片，先收藏或发布一张公开卡片。').fontSize(12).fontColor(pageColor(this.palette, 'muted'));
+          Button('重新加载').height(48).fontSize(12).backgroundColor(pageColor(this.palette, 'soft'))
+            .fontColor(pageColor(this.palette, 'action')).onClick((): void => {
               this.loadCardCandidates();
             });
         }.width('100%').padding(8).alignItems(HorizontalAlign.Start);
@@ -350,31 +344,33 @@ export struct ChatPage {
       }
       if (this.cardPickerVisible && this.favoriteCursor.length > 0) { Button('加载更多收藏').height(48).enabled(!this.cardsLoading).onClick((): void => { void this.loadCardCandidates(true); }); }
     }
-    .width('100%').padding(10).backgroundColor($r('app.color.surface'))
-    .border({ width: 1, color: $r('app.color.line') }).borderRadius(18);
+    .width('100%').padding(10).backgroundColor(pageColor(this.palette, 'surface'))
+    .border({ width: 1, color: pageColor(this.palette, 'line') }).borderRadius(18);
   }
 
   build() {
     NavDestination() {
+      Stack() {
+        WarmNoteBackdrop({ palette: this.palette });
       Column({ space: 10 }) {
         this.header();
         if (this.status.length > 0) {
           Text(this.status).fontSize(12).lineHeight(18).fontColor($r('app.color.warning')).width('100%')
-            .padding(9).backgroundColor($r('app.color.accent_soft')).borderRadius(12);
+            .padding(9).backgroundColor(pageColor(this.palette, 'soft')).borderRadius(12);
         }
         if (this.loading && this.messages.length === 0) {
           Column({ space: 10 }) {
-            LoadingProgress().width(34).height(34).color($r('app.color.accent_action'));
-            Text('正在加载私信').fontSize(13).fontColor($r('app.color.muted'));
+            LoadingProgress().width(34).height(34).color(pageColor(this.palette, 'action'));
+            Text('正在加载私信').fontSize(13).fontColor(pageColor(this.palette, 'muted'));
           }.width('100%').layoutWeight(1).justifyContent(FlexAlign.Center);
         } else if (this.messages.length === 0) {
           Column({ space: 10 }) {
             Image($r('app.media.ic_message')).width(54).height(54).objectFit(ImageFit.Contain)
               .accessibilityLevel('no');
             Text('从一条真诚推荐开始').fontSize(18).fontWeight(FontWeight.Bold)
-              .fontColor($r('app.color.ink'));
+              .fontColor(pageColor(this.palette, 'ink'));
             Text('好友消息会直接显示在这段私聊中。你可以发送文字或分享公开食刻卡片，链接会作为普通文字发送。')
-              .fontSize(13).lineHeight(20).fontColor($r('app.color.muted')).textAlign(TextAlign.Center)
+              .fontSize(13).lineHeight(20).fontColor(pageColor(this.palette, 'muted')).textAlign(TextAlign.Center)
               .width('82%');
           }.width('100%').layoutWeight(1).justifyContent(FlexAlign.Center);
         } else {
@@ -382,8 +378,8 @@ export struct ChatPage {
             if (this.nextBeforeToken.length > 0) {
               ListItem() {
                 Button(this.loadingOlder ? '加载中…' : '查看更早消息').width('100%').height(48)
-                  .enabled(!this.loadingOlder).backgroundColor($r('app.color.accent_soft'))
-                  .fontColor($r('app.color.accent_action')).onClick((): void => {
+                  .enabled(!this.loadingOlder).backgroundColor(pageColor(this.palette, 'soft'))
+                  .fontColor(pageColor(this.palette, 'action')).onClick((): void => {
                     this.loadMessages(false);
                   });
               }
@@ -399,9 +395,11 @@ export struct ChatPage {
         this.composer();
       }
       .width('100%').height('100%').padding({ left: 14, right: 14, top: 0, bottom: 10 })
-      .backgroundColor($r('app.color.canvas'));
+      .onAreaChange((_oldArea: Area, newArea: Area): void => { const width: number = Number(newArea.width); if (Number.isFinite(width) && width > 0) this.contentWidth = width; })
+      .backgroundColor(Color.Transparent);
+      }.width('100%').height('100%');
     }
-    .hideTitleBar(true).onShown((): void => { this.destinationVisible = true; this.aboutToAppear(); }).onHidden((): void => { this.destinationVisible = false; this.aboutToDisappear(); })
+    .hideTitleBar(true).attributeModifier(new AppDestinationStyle('', pageColor(this.palette, 'canvas'), pageColor(this.palette, 'header'), this.palette)).onShown((): void => { this.destinationVisible = true; this.aboutToAppear(); }).onHidden((): void => { this.destinationVisible = false; this.aboutToDisappear(); })
     .onBackPressed((): boolean => {
       this.closeChat();
       return true;

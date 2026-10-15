@@ -28,6 +28,22 @@
     "automaticTimerCreated": false,
     "lifecycleDeletionRequired": false
   },
+  "reactionHistoryMigration": {
+    "handlerPayload": {
+      "workerToken": "COPY_SECRET_FROM_DEPLOYED_TIMER_CONFIGURATION",
+      "action": "reaction-history",
+      "mode": "status"
+    },
+    "modes": ["status", "run", "retry"],
+    "defaultMode": "status",
+    "writeRequiredFlag": "SHIKE_MAINTENANCE_ENABLED",
+    "jobType": "MIGRATE_REACTION",
+    "jobIdentity": "MIGRATE_REACTION:stage1-v1:1",
+    "existingJobRequired": true,
+    "rowsPerInvocation": 20,
+    "automaticTimerCreated": false,
+    "lifecycleDeletionRequired": false
+  },
   "mediaCoverBackfill": {
     "separateTimerRequired": true,
     "recommendedIntervalMinutes": 1,

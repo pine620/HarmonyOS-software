@@ -7,8 +7,7 @@ export const functionDefinitions = {
   'shike-location': { entry: 'shikeLocation', className: 'ShikeLocation' },
   'shike-media': { entry: 'shikeMedia', className: 'ShikeMedia', extra: ['cover-worker.js'] },
   'shike-image': { entry: 'shikeImage' },
-  'shike-maintenance': { entry: 'shikeMaintenance', extraMedia: true },
-  'shike-share': { entry: 'shikeShare' }
+  'shike-maintenance': { entry: 'shikeMaintenance', extraMedia: true }
 };
 
 // Resolve function-owned deployment paths against the single maintained source.
@@ -18,7 +17,7 @@ export function localDependency(functions, source, request) {
   let base = resolve(dirname(source), request);
   if (folder !== 'shared' && request.startsWith('./shared/')) {
     base = resolve(functions, 'shared', request.slice('./shared/'.length));
-  } else if (['shike-maintenance', 'shike-share'].includes(folder) && request.startsWith('./service/')) {
+  } else if (folder === 'shike-maintenance' && request.startsWith('./service/')) {
     base = resolve(functions, 'shike-service', request.slice('./service/'.length));
   } else if (folder === 'shike-maintenance' && request.startsWith('./media/')) {
     base = resolve(functions, 'shike-media', request.slice('./media/'.length));
@@ -38,6 +37,6 @@ export function moduleDestination(functions, name, source) {
 }
 
 export function generatedDirectories(name) {
-  return ['shared', ...(['shike-maintenance', 'shike-share'].includes(name) ? ['service'] : []),
+  return ['shared', ...(name === 'shike-maintenance' ? ['service'] : []),
     ...(name === 'shike-maintenance' ? ['media'] : [])];
 }

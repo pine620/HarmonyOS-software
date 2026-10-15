@@ -51,7 +51,12 @@ FoodCardRevision.fieldTypes = Object.freeze({
 FoodCardRevision.primaryKeys = Object.freeze(["revisionId"]);
 FoodCardRevision.indexes = Object.freeze(["cardId,status,submittedAt,revisionId", "authorUid,submittedAt,revisionId", "status,submittedAt,revisionId", "cardId,submittedAt,revisionId"]);
 
-const policyModels = Object.freeze({ FoodCard, UserProfile, IdentityBinding, FoodCardRevision });
+class Report extends PolicyDbModel {}
+Report.fieldTypes = Object.freeze({"id": "String", "reporterUid": "String", "cardId": "String", "reason": "String", "status": "String", "createdAt": "Long", "targetType": "String", "targetId": "String", "updatedAt": "Long", "resolutionAction": "String", "resolutionReason": "String", "resolvedByUid": "String", "resolvedAt": "Long", "reasonType": "String", "description": "String", "cardTitle": "String", "reportedRevision": "String", "submissionRequestId": "String", "submissionPayloadHash": "String", "resolutionRequestId": "String", "resolutionPayloadHash": "String", "resolvedCardRevision": "String"});
+Report.primaryKeys = Object.freeze(['id']);
+Report.indexes = Object.freeze(['cardId', 'reporterUid,createdAt', 'status,createdAt,id', 'reporterUid,createdAt,id']);
+
+const policyModels = Object.freeze({ FoodCard, UserProfile, IdentityBinding, FoodCardRevision, Report });
 
 function accessError(message, code = 'CONTENT_ACCESS_DENIED') {
   const error = new Error(message);

@@ -1,5 +1,10 @@
+import { PagePaletteName, PagePaletteRoute, pageColor } from '../common/PagePaletteUi';
+import { EmailLoginPage } from '../components/EmailLoginPage';
 import { MyContentStatusPage } from './MyContentStatusPage';
 import { DeletedCardsPage } from './DeletedCardsPage';
+import { CardReportListPage } from './CardReportListPage';
+import { CardReportDetailPage } from './CardReportDetailPage';
+import { CardReportRoute } from '../model/CardReportModels';
 import { ReportContentPage } from './ReportContentPage';
 import { ReportRoute } from '../model/ContentStatusModels';
 import { CardIdRequest } from '../model/CloudContracts';
@@ -15,7 +20,8 @@ import { PrivacyStore } from '../service/PrivacyStore';
 import { DiscoveryFeedState } from '../service/DiscoveryFeedState';
 import { ImageRepository } from '../service/ImageRepository';
 import { CardRepository } from '../repository/CardRepository';
-import { clearPendingSharedCard } from '../service/CardAppLink';
+import { clearPendingSharedCard, storePendingSharedCardId } from '../service/CardDeepLink';
+import { CloudBusinessError } from '../service/CloudReadErrors';
 import { FriendRepository } from '../repository/FriendRepository';
 import { FriendProfileResponse, GroupChatDetailResponse, GroupConversationSummary, SocialUser } from '../model/FriendModels';
 import { ContinuationState } from '../service/ContinuationState';
@@ -37,13 +43,13 @@ import { ChatPage } from './ChatPage';
 import { GroupChatPage } from './GroupChatPage';
 import { ShareCardPage } from './ShareCardPage';
 import { BreakpointSystem, LayoutBreakpoint } from '../common/BreakpointSystem';
+import { AppDestinationStyle, AppPageSurface, HOME_BAR_OVERLAP } from '../common/AppPageUi';
 
-interface AuthorPageRoute { userUid: string; }
+interface AuthorPageRoute { userUid: string; palette: PagePaletteName; }
+interface CardDetailRoute { card: FoodCard; palette: PagePaletteName; }
 
-interface LoginErrorInfo {
-  code?: number | string;
+interface EntryErrorInfo {
   message?: string;
-  name?: string;
 }
 
 @Entry
@@ -53,50 +59,47 @@ struct Index {
   @Provide('windowBreakpoint') windowBreakpoint: LayoutBreakpoint = 'sm';
   @State randomFoodVisible: boolean = false;
   @State foodChoiceVisible: boolean = false;
+  @State createCardVisible: boolean = false;
   @State draftTarget: string = '';
   @State selectedDraftId: string = '';
-  @State ready: boolean = false;
-  @State privacyAccepted: boolean = false;
+  @State @Watch('onEntryAppearanceChanged') ready: boolean = false;
+  @State @Watch('onEntryAppearanceChanged') privacyAccepted: boolean = false;
   @State privacyChecked: boolean = false;
   @State showFullPrivacy: boolean = false;
-  @State loggedIn: boolean = false;
-  @State loginRequested: boolean = false;
+  @State @Watch('onEntryAppearanceChanged') loggedIn: boolean = false;
+  @State @Watch('onEntryAppearanceChanged') loginRequested: boolean = false;
   @State loginBusy: boolean = false;
   @State loginMessage: string = '';
-  @State emailAddress: string = '';
-  @State verifyCode: string = '';
-  @State codeBusy: boolean = false;
-  @State codeCountdown: number = 0;
-  @State registerDialogVisible: boolean = false;
-  @State registerBusy: boolean = false;
-  @State registerCodeBusy: boolean = false;
-  @State registerCodeCountdown: number = 0;
-  @State registerEmailAddress: string = '';
-  @State registerVerifyCode: string = '';
-  @State registerMessage: string = '';
+  @State loginBackRequest: number = 0;
   @State selectedCard: FoodCard | undefined = undefined;
   @State selectedFriend: SocialUser | undefined = undefined;
-  @State selectedProfileFriend: SocialUser | undefined = undefined;
   @State selectedGroup: GroupConversationSummary | undefined = undefined;
   @State profile: UserProfile | undefined = undefined;
   @State profileRevision: number = 0;
   @State recommendationRevision: number = 0;
   @StorageLink('contentMutationRevision') @Watch('onContentMutation') contentMutationRevision: number = 0;
   @StorageLink('friendRelationshipRevision') @Watch('onFriendRelationshipChanged') friendRelationshipRevision: number = 0;
-  @State selectedTab: number = 0;
+  @State @Watch('onEntryAppearanceChanged') selectedTab: number = 0;
+  @StorageLink('pageSurfaceRevision') pageSurfaceRevision: number = 0;
+  @StorageLink('appSystemBarInk') systemBarInk: string = '#3D2A22';
+  @StorageLink('appSystemTopPx') systemTopPx: number = 0;
+  @StorageLink('profileCoverUrl') @Watch('onEntryAppearanceChanged') profileCoverUrl: string = '';
+  @StorageLink('appSystemBottomPx') systemBottomPx: number = 0;
+  @StorageLink('appSystemLeftPx') systemLeftPx: number = 0;
+  @StorageLink('appSystemRightPx') systemRightPx: number = 0;
+  @StorageLink('appKeyboardVisible') keyboardVisible: boolean = false;
   @State navigationHomeVisible: boolean = true;
   @State sharedLinkMessage: string = '';
-  @StorageLink('pendingSharedCardId') @Watch('onPendingSharedCardChanged') pendingSharedCardId: string = '';
+  @StorageLink('pendingSharedCardId') pendingSharedCardId: string = '';
+  @StorageLink('pendingSharedCardRevision') @Watch('onPendingSharedCardChanged') pendingSharedCardRevision: number = 0;
   @StorageLink('pendingSystemEntryRoute') @Watch('onPendingSystemEntryChanged') pendingSystemEntryRoute: string = '';
   @StorageLink('pendingSystemEntryCardId') pendingSystemEntryCardId: string = '';
   @StorageLink('pendingSystemEntryFriendUid') pendingSystemEntryFriendUid: string = '';
   @StorageLink('pendingSystemEntryGroupId') pendingSystemEntryGroupId: string = '';
   @StorageLink('pendingSystemEntryTab') pendingSystemEntryTab: number = 0;
-  private openingSharedCard: boolean = false;
+  @State openingSharedCard: boolean = false;
   private sharedCardGeneration: number = 0;
   private openingSystemEntry: boolean = false;
-  private emailCodeTimer: number | undefined = undefined;
-  private registerCodeTimer: number | undefined = undefined;
   private cardRepository: CardRepository = new CardRepository();
   private friendRepository: FriendRepository = new FriendRepository();
   private tabsController: TabsController = new TabsController();
@@ -106,24 +109,9 @@ struct Index {
     this.restoreStartupState();
   }
 
-  aboutToDisappear(): void {
-    if (this.emailCodeTimer !== undefined) {
-      clearTimeout(this.emailCodeTimer);
-      this.emailCodeTimer = undefined;
-    }
-    if (this.registerCodeTimer !== undefined) {
-      clearTimeout(this.registerCodeTimer);
-      this.registerCodeTimer = undefined;
-    }
-  }
-
   onBackPress(): boolean {
     if (!this.loginRequested) return false;
-    if (this.registerDialogVisible) {
-      this.closeRegisterDialog();
-    } else {
-      this.continueBrowsing();
-    }
+    this.loginBackRequest += 1;
     return true;
   }
 
@@ -134,8 +122,7 @@ struct Index {
   }
 
   private continueBrowsing(): void {
-    if (this.loginBusy || this.codeBusy || this.registerBusy || this.registerCodeBusy) return;
-    this.registerDialogVisible = false;
+    if (this.loginBusy) return;
     this.loginRequested = false;
     this.loginMessage = '';
   }
@@ -201,26 +188,7 @@ struct Index {
     await context.terminateSelf();
   }
 
-  private async login(): Promise<void> {
-    if (this.loginBusy) return;
-    this.loginBusy = true;
-    this.loginMessage = '正在请求华为账号授权…';
-    try {
-      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      const profile: UserProfile = await AuthService.login(context, true);
-      await this.finishLogin(context, profile);
-    } catch (error) {
-      const detail: string = this.errorDetail(error as Object);
-      this.loginMessage = `登录未完成：${detail}`;
-      // Do not write third-party authentication error details to logs; an SDK
-      // error may contain identifiers or credential-related context.
-      console.error('Huawei compatibility authentication failed.');
-    } finally {
-      this.loginBusy = false;
-    }
-  }
-
-  private async finishLogin(context: common.UIAbilityContext, profile: UserProfile): Promise<void> {
+  private finishLogin(context: common.UIAbilityContext, profile: UserProfile): void {
     this.profile = profile;
     this.loggedIn = true;
     this.loginRequested = false;
@@ -234,135 +202,6 @@ struct Index {
     this.openPendingSystemEntry();
   }
 
-  private errorDetail(error: Object): string {
-    // BusinessError is an object; interpolating it directly only displays
-    // "[object Object]" and hides the Account Kit/AGC error details.
-    const loginError = error as LoginErrorInfo;
-    let detail: string = '';
-    if (loginError?.code !== undefined) {
-      detail = `错误码：${loginError.code}`;
-    }
-    if (loginError?.message) {
-      detail += `${detail ? '，' : ''}${loginError.message}`;
-    }
-    if (!detail) {
-      try {
-        detail = JSON.stringify(error);
-      } catch (_) {
-        detail = String(error);
-      }
-    }
-    return detail || '认证服务暂时不可用。';
-  }
-
-  private startEmailCodeCountdown(): void {
-    if (this.emailCodeTimer !== undefined) {
-      clearTimeout(this.emailCodeTimer);
-    }
-    this.emailCodeTimer = setTimeout((): void => {
-      if (this.codeCountdown <= 1) {
-        this.codeCountdown = 0;
-        this.emailCodeTimer = undefined;
-      } else {
-        this.codeCountdown -= 1;
-        this.startEmailCodeCountdown();
-      }
-    }, 1000);
-  }
-
-  private async requestEmailCode(): Promise<void> {
-    if (this.loginBusy || this.codeBusy || this.codeCountdown > 0) return;
-    this.codeBusy = true;
-    this.loginMessage = '';
-    try {
-      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      await AuthService.requestEmailCode(context, this.emailAddress);
-      this.codeCountdown = 60;
-      this.startEmailCodeCountdown();
-      this.loginMessage = '邮箱验证码已发送，请在有效期内完成认证。';
-    } catch (error) {
-      this.loginMessage = `验证码发送失败：${this.errorDetail(error as Object)}`;
-    } finally {
-      this.codeBusy = false;
-    }
-  }
-
-  private async emailLogin(): Promise<void> {
-    if (this.loginBusy) return;
-    this.loginBusy = true;
-    this.loginMessage = '正在验证邮箱并打开食刻…';
-    try {
-      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      const profile: UserProfile = await AuthService.emailLogin(
-        context, this.emailAddress, this.verifyCode, false);
-      await this.finishLogin(context, profile);
-    } catch (error) {
-      this.loginMessage = `邮箱登录未完成：${this.errorDetail(error as Object)}`;
-    } finally {
-      this.loginBusy = false;
-    }
-  }
-
-  private openRegisterDialog(): void {
-    if (this.loginBusy || this.codeBusy) return;
-    this.registerEmailAddress = '';
-    this.registerVerifyCode = '';
-    this.registerMessage = '';
-    this.registerDialogVisible = true;
-  }
-
-  private closeRegisterDialog(): void {
-    if (this.registerBusy || this.registerCodeBusy) return;
-    this.registerDialogVisible = false;
-  }
-
-  private startRegisterCodeCountdown(): void {
-    if (this.registerCodeTimer !== undefined) clearTimeout(this.registerCodeTimer);
-    this.registerCodeTimer = setTimeout((): void => {
-      if (this.registerCodeCountdown <= 1) {
-        this.registerCodeCountdown = 0;
-        this.registerCodeTimer = undefined;
-      } else {
-        this.registerCodeCountdown -= 1;
-        this.startRegisterCodeCountdown();
-      }
-    }, 1000);
-  }
-
-  private async requestRegisterCode(): Promise<void> {
-    if (this.registerBusy || this.registerCodeBusy || this.registerCodeCountdown > 0) return;
-    this.registerCodeBusy = true;
-    this.registerMessage = '';
-    try {
-      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      await AuthService.requestEmailCode(context, this.registerEmailAddress);
-      this.registerCodeCountdown = 60;
-      this.startRegisterCodeCountdown();
-      this.registerMessage = '验证码已发送，请在有效期内完成注册。';
-    } catch (error) {
-      this.registerMessage = `验证码发送失败：${this.errorDetail(error as Object)}`;
-    } finally {
-      this.registerCodeBusy = false;
-    }
-  }
-
-  private async registerEmail(): Promise<void> {
-    if (this.registerBusy) return;
-    this.registerBusy = true;
-    this.registerMessage = '正在创建账号并打开食刻…';
-    try {
-      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      const profile: UserProfile = await AuthService.emailLogin(
-        context, this.registerEmailAddress, this.registerVerifyCode, true);
-      this.registerDialogVisible = false;
-      await this.finishLogin(context, profile);
-    } catch (error) {
-      this.registerMessage = `注册未完成：${this.errorDetail(error as Object)}`;
-    } finally {
-      this.registerBusy = false;
-    }
-  }
-
   private sessionEnded(message: string): void {
     this.sharedCardGeneration += 1;
     clearPendingSharedCard();
@@ -374,8 +213,7 @@ struct Index {
     this.loggedIn = false;
     this.loginRequested = false;
     this.profile = undefined;
-    this.emailAddress = '';
-    this.verifyCode = '';
+    this.profileCoverUrl = '';
     this.loginMessage = message;
     this.selectedTab = 0;
     this.recommendationRevision += 1;
@@ -386,12 +224,15 @@ struct Index {
   private openCard(card: FoodCard): void {
     this.selectedCard = card;
     ContinuationState.showCard(card.id);
-    this.pathStack.pushPathByName('card-detail', card);
+    const route: CardDetailRoute = { card, palette: this.navigationHomeVisible ? this.homePalette() : AppPageSurface.palette };
+    this.pathStack.pushPathByName('card-detail', route);
   }
 
 
   private onPendingSharedCardChanged(): void {
-    this.openPendingSharedCard();
+    this.sharedCardGeneration += 1;
+    this.sharedLinkMessage = '';
+    void this.openPendingSharedCard();
   }
 
   private onPendingSystemEntryChanged(): void {
@@ -413,6 +254,12 @@ struct Index {
         const tab: number = this.pendingSystemEntryTab >= 0 && this.pendingSystemEntryTab <= 4
           ? this.pendingSystemEntryTab : 0;
         ContinuationState.clearPending();
+        if (tab === 3) {
+          // 制作 is no longer a tab; old continuation or card entries open it as a page.
+          this.selectTab(0);
+          this.openCreateCard();
+          return;
+        }
         this.selectTab(tab);
         return;
       }
@@ -420,8 +267,7 @@ struct Index {
         const cardId: string = this.pendingSystemEntryCardId.trim();
         ContinuationState.clearPending();
         if (cardId.length > 0) {
-          AppStorage.setOrCreate('pendingSharedCardId', cardId);
-          this.openPendingSharedCard();
+          storePendingSharedCardId(cardId);
         }
         return;
       }
@@ -456,7 +302,7 @@ struct Index {
     } catch (error) {
       if (entrySession !== AuthSessionStore.generation()) return;
       ContinuationState.clearPending();
-      const detail = error as LoginErrorInfo;
+      const detail = error as EntryErrorInfo;
       this.sharedLinkMessage = detail.message && detail.message.length > 0
         ? `系统入口打开失败：${detail.message}` : '系统入口暂时无法打开，请稍后重试。';
     } finally {
@@ -465,7 +311,7 @@ struct Index {
   }
 
   /**
-   * App Linking may wake the app before its consent gate and login restoration
+   * A knock deep link may wake the app before its consent gate and login restoration
    * complete. Hold the opaque card ID in AppStorage, then load the same
    * public detail surface used by every in-app card tap.
    */
@@ -491,10 +337,13 @@ struct Index {
     } catch (error) {
       if (generation === this.sharedCardGeneration && this.privacyAccepted
         && this.pendingSharedCardId === cardId) {
-        clearPendingSharedCard();
-        const detail = error as LoginErrorInfo;
+        const unavailable: boolean = error instanceof CloudBusinessError &&
+          ['CONTENT_UNAVAILABLE', 'CONTENT_ACCESS_DENIED', 'NOT_FOUND', 'ACCOUNT_INACTIVE'].includes(error.code);
+        if (unavailable) clearPendingSharedCard();
+        const detail = error as EntryErrorInfo;
         this.sharedLinkMessage = detail.message && detail.message.length > 0
-          ? `无法打开分享的商品卡：${detail.message}` : '无法打开分享的商品卡，它可能已删除或不再公开。';
+          ? `无法打开分享的商品卡：${detail.message}`
+          : unavailable ? '分享的商品卡已不可访问。' : '分享卡片暂时无法读取，请重试。';
       }
     } finally {
       this.openingSharedCard = false;
@@ -514,7 +363,6 @@ struct Index {
   }
 
   private openFriendProfile(friend: SocialUser): void {
-    this.selectedProfileFriend = friend;
     this.pathStack.pushPathByName('friend-profile', friend);
   }
 
@@ -570,17 +418,26 @@ struct Index {
 
   private onFriendRelationshipChanged(): void { DiscoveryFeedState.clear(); }
 
+  // Logical tab ids stay 0 推荐 / 1 榜单 / 2 好友 / 4 我的; 3 (制作) is now a pushed page.
   private tabPosition(index: number): number {
-    return this.loggedIn ? index : index === 4 ? 2 : index === 1 ? 1 : 0;
+    return this.loggedIn ? (index === 4 ? 3 : index) : index === 4 ? 2 : index === 1 ? 1 : 0;
   }
 
   private onTabPositionChanged(position: number): void {
-    this.selectTab(this.loggedIn ? position : position === 2 ? 4 : position === 1 ? 1 : 0);
+    this.selectTab(this.loggedIn ? (position === 3 ? 4 : position) : position === 2 ? 4 : position === 1 ? 1 : 0);
+  }
+
+  private openCreateCard(): void {
+    if (!this.loggedIn) {
+      this.requestLogin('登录后可发布推荐。');
+      return;
+    }
+    this.pathStack.pushPathByName('create-card', null);
   }
 
   private selectTab(index: number): void {
     const safeIndex: number = this.loggedIn
-      ? (index >= 0 && index <= 4 ? index : 0) : (index === 4 ? 4 : index === 1 ? 1 : 0);
+      ? (index >= 0 && index <= 4 && index !== 3 ? index : 0) : (index === 4 ? 4 : index === 1 ? 1 : 0);
     this.selectedTab = safeIndex;
     AppStorage.setOrCreate('discoveryVisible', this.navigationHomeVisible && safeIndex === 0);
     ContinuationState.showTab(safeIndex);
@@ -594,11 +451,12 @@ struct Index {
   pathMap(routeName: string, routeParam: object) {
     if (routeName === 'card-detail' && routeParam !== null && routeParam !== undefined) {
       CardDetailPage({
-        card: routeParam as FoodCard,
+        card: (routeParam as CardDetailRoute).card,
+        palette: (routeParam as CardDetailRoute).palette,
         loggedIn: this.loggedIn,
         onRequireLogin: (message: string): void => this.requestLogin(message),
         onOpenAuthor: (uid: string): void => {
-          const request: AuthorPageRoute = { userUid: uid }; this.pathStack.pushPathByName('user-page', request);
+          const request: AuthorPageRoute = { userUid: uid, palette: AppPageSurface.palette }; this.pathStack.pushPathByName('user-page', request);
         },
         onShareToFriend: (card: FoodCard): void => {
           this.shareCardToFriend(card);
@@ -612,12 +470,13 @@ struct Index {
         }
       })
     } else if (routeName === 'user-page' && routeParam !== null && routeParam !== undefined) {
-      FriendProfilePage({ friendUid: (routeParam as AuthorPageRoute).userUid,
+      FriendProfilePage({ friendUid: (routeParam as AuthorPageRoute).userUid, palette: (routeParam as AuthorPageRoute).palette,
         onOpenChat: (friend: SocialUser): void => this.openChat(friend),
         onOpenCard: (card: FoodCard): void => this.openCard(card) })
     } else if (routeName === 'friend-profile' && routeParam !== null && routeParam !== undefined) {
       FriendProfilePage({
         friendUid: (routeParam as SocialUser).uid,
+        friendCode: (routeParam as SocialUser).friendCode,
         onOpenChat: (friend: SocialUser): void => {
           this.openChat(friend);
         },
@@ -666,7 +525,11 @@ struct Index {
     } else if (routeName === 'profile-favorites') {
       FavoriteCardsPage({ onOpenCard: (card: FoodCard): void => this.openCard(card) })
     } else if (routeName === 'my-reports') {
-      MyContentStatusPage({ scope: 'REPORTS' })
+      CardReportListPage()
+    } else if (routeName === 'card-review-reports') {
+      CardReportListPage({ admin: true })
+    } else if ((routeName === 'report-detail' || routeName === 'card-review-detail') && routeParam !== null && routeParam !== undefined) {
+      CardReportDetailPage({ reportId: (routeParam as CardReportRoute).reportId, admin: routeName === 'card-review-detail' })
     } else if (routeName === 'review-requests') {
       MyContentStatusPage({ scope: 'CORRECTIONS' })
     } else if (routeName === 'deleted-cards') {
@@ -674,24 +537,32 @@ struct Index {
     } else if (routeName === 'report-content' && routeParam !== null && routeParam !== undefined) {
       ReportContentPage({ targetType: (routeParam as ReportRoute).targetType, targetId: (routeParam as ReportRoute).targetId })
     } else if (routeName === 'review-correction' && routeParam !== null && routeParam !== undefined) {
-      NavDestination() { CreateCardPage({ editCardId: (routeParam as CardIdRequest).cardId, accountUid: this.profile === undefined ? '' : this.profile.uid }) }.title('修改内容')
+      NavDestination() { CreateCardPage({ palette: 'PERSONAL', editCardId: (routeParam as CardIdRequest).cardId, accountUid: this.profile === undefined ? '' : this.profile.uid }) }.attributeModifier(new AppDestinationStyle('修改内容', $r('app.color.personal_canvas'), $r('app.color.personal_header'), 'PERSONAL'))
     } else if (routeName === 'random-food') {
       NavDestination() {
-        RandomFoodPage({ navigationVisible: this.randomFoodVisible,
+        RandomFoodPage({ palette: this.choicePalette(routeParam), navigationVisible: this.randomFoodVisible,
           onBack: (): void => { this.pathStack.pop(); }, onOpenCard: (card: FoodCard): void => this.openCard(card),
-          onOpenHistory: (): void => { this.pathStack.pushPathByName('food-choice-history', null); },
+          onOpenHistory: (): void => { const request: PagePaletteRoute = { palette: this.choicePalette(routeParam) }; this.pathStack.pushPathByName('food-choice-history', request); },
           onLogin: (): void => this.requestLogin('登录后使用我的、好友来源和云端选择记录。') })
-      }.hideTitleBar(true).onShown((): void => { this.randomFoodVisible = true; }).onHidden((): void => { this.randomFoodVisible = false; })
+      }.hideTitleBar(true).attributeModifier(new AppDestinationStyle('', this.choiceCanvas(routeParam), this.choiceCanvas(routeParam), this.choicePalette(routeParam)))
+        .onShown((): void => { this.randomFoodVisible = true; }).onHidden((): void => { this.randomFoodVisible = false; })
     } else if (routeName === 'food-choice-history') {
       NavDestination() {
-        FoodChoiceHistoryPage({ navigationVisible: this.foodChoiceVisible, onBack: (): void => { this.pathStack.pop(); },
+        FoodChoiceHistoryPage({ palette: this.choicePalette(routeParam), navigationVisible: this.foodChoiceVisible, onBack: (): void => { this.pathStack.pop(); },
           onOpenCard: (card: FoodCard): void => this.openCard(card), onLogin: (): void => this.requestLogin('登录后查看云端选择记录。') })
-      }.hideTitleBar(true).onShown((): void => { this.foodChoiceVisible = true; }).onHidden((): void => { this.foodChoiceVisible = false; })
+      }.hideTitleBar(true).attributeModifier(new AppDestinationStyle('', this.choiceCanvas(routeParam), this.choiceCanvas(routeParam), this.choicePalette(routeParam)))
+        .onShown((): void => { this.foodChoiceVisible = true; }).onHidden((): void => { this.foodChoiceVisible = false; })
 
+    } else if (routeName === 'create-card') {
+      NavDestination() {
+        CreateCardPage({ pageActive: this.createCardVisible, accountUid: this.profile === undefined ? '' : this.profile.uid,
+          onPublished: (): void => this.cardPublished() })
+      }.attributeModifier(new AppDestinationStyle('', $r('app.color.create_canvas'), $r('app.color.create_header'), 'CREATE'))
+        .onShown((): void => { this.createCardVisible = true; }).onHidden((): void => { this.createCardVisible = false; })
     } else if (routeName === 'drafts') {
-      NavDestination() { DraftsPage({ onRestore: (draft: LocalDraft): void => { this.draftTarget = draft.targetCardId; this.selectedDraftId = draft.draftId; this.pathStack.pushPathByName('restore-draft', null); } }) }.title('草稿箱')
+      NavDestination() { DraftsPage({ onRestore: (draft: LocalDraft): void => { this.draftTarget = draft.targetCardId; this.selectedDraftId = draft.draftId; this.pathStack.pushPathByName('restore-draft', null); } }) }.attributeModifier(new AppDestinationStyle('草稿箱', $r('app.color.personal_canvas'), $r('app.color.personal_header'), 'PERSONAL'))
     } else if (routeName === 'restore-draft') {
-      NavDestination() { CreateCardPage({ editCardId: this.draftTarget, restoreDraftId: this.selectedDraftId, accountUid: this.profile === undefined ? '' : this.profile.uid }) }.title('恢复草稿')
+      NavDestination() { CreateCardPage({ palette: 'PERSONAL', editCardId: this.draftTarget, restoreDraftId: this.selectedDraftId, accountUid: this.profile === undefined ? '' : this.profile.uid }) }.attributeModifier(new AppDestinationStyle('恢复草稿', $r('app.color.personal_canvas'), $r('app.color.personal_header'), 'PERSONAL'))
     } else if (routeName === 'profile-history') {
       CardHistoryPage({ onOpenCard: (card: FoodCard): void => this.openCard(card) })
     } else if (routeName === 'profile-privacy') {
@@ -699,7 +570,8 @@ struct Index {
     } else if (routeName === 'profile-edit') {
       ProfileEditPage({ onProfileChanged: (profile: UserProfile): void => this.profileUpdated(profile) })
     } else if (routeName === 'profile-settings') {
-      ProfileSettingsPage({ onSessionEnded: (message: string): void => this.sessionEnded(message) })
+      ProfileSettingsPage({ onSessionEnded: (message: string): void => this.sessionEnded(message),
+        onProfileChanged: (profile: UserProfile): void => this.profileUpdated(profile) })
     }
   }
 
@@ -738,7 +610,7 @@ struct Index {
           Text('我们只会在功能需要时使用必要数据。')
             .fontSize(13).fontColor($r('app.color.muted')).width('100%')
 
-          this.privacyNoticeRow('账号认证', '无需登录即可浏览公开推荐；发布和互动时支持 AGC Auth 邮箱验证码注册/登录，并保留华为账号兼容入口。邮箱仅用于认证，不写入食刻资料。')
+          this.privacyNoticeRow('账号认证', '无需登录即可浏览公开推荐；注册需验证邮箱或华为账号，之后可使用唯一昵称和密码登录。服务端仅保存加盐密码哈希。')
           Divider().strokeWidth(1).color($r('app.color.line'))
           this.privacyNoticeRow('位置', '浏览推荐无需定位；仅发布时按需使用精确位置，离开设备前舍入到约 100 米。')
           Divider().strokeWidth(1).color($r('app.color.line'))
@@ -755,7 +627,7 @@ struct Index {
             .fontColor($r('app.color.ink')).border({ width: 1, color: $r('app.color.line') })
             .onClick(() => this.showFullPrivacy = !this.showFullPrivacy)
           if (this.showFullPrivacy) {
-            Text('食刻使用 AGC Auth 处理邮箱验证码注册/登录；邮箱只用于认证，不写入 UserProfile、名片、好友或私信，也不会收集或保存邮箱密码。华为账号只作为兼容入口，登录后会换成 AGC 会话。昵称和头像只会在你主动保存资料时处理，头像先在本机重编码并移除 EXIF/GPS。首页推荐不限距离，浏览时不读取定位。你主动发布时，实拍图、公开商品字段、约 100 米精度的位置以及后续主动提交的互动记录会进入 AGC 云端。好友功能会保存食刻号、好友申请、好友关系、一对一和群聊会话的未读数，以及你主动发送的文字和卡片标识；粘贴的链接会作为普通文字消息保存。系统 Push 默认关闭，你主动开启后，设备 Push Token 会在食刻云端加密保存，系统通知正文不包含私信内容。桌面服务卡片只在本机缓存一条公开推荐摘要；跨设备接续只传页签、商品卡 ID 或好友 ID，不传聊天正文和账号凭据。移除好友时会话从双方页面移除，并同步清理全部一对一私信。正式上架前必须根据平台要求补充内容审核方案，并在 AGC 配置同内容的 HTTPS 隐私政策地址。')
+            Text('食刻使用 AGC Auth 验证邮箱或华为账号，并通过自有账号认证提供唯一昵称与密码登录。食刻服务端保存昵称与账号的关联、加盐密码哈希和登录限流计数，不保存明文密码。修改昵称会同步改变登录名，找回密码需再次验证绑定身份。昵称在注册或主动保存资料时处理，头像先在本机重编码并移除 EXIF/GPS。首页推荐不限距离，浏览时不读取定位。你主动发布时，实拍图、公开商品字段、约 100 米精度的位置以及后续主动提交的互动记录会进入 AGC 云端。好友功能会保存食刻号、好友申请、好友关系、一对一和群聊会话的未读数，以及你主动发送的文字和卡片标识；粘贴的链接会作为普通文字消息保存。系统 Push 默认关闭，你主动开启后，设备 Push Token 会在食刻云端加密保存，系统通知正文不包含私信内容。桌面服务卡片只在本机缓存一条公开推荐摘要；跨设备接续只传页签、商品卡 ID 或好友 ID，不传聊天正文和账号凭据。移除好友时会话从双方页面移除，并同步清理全部一对一私信。正式上架前必须根据平台要求补充内容审核方案，并在 AGC 配置同内容的 HTTPS 隐私政策地址。')
               .fontSize(13).lineHeight(21).fontColor($r('app.color.muted')).width('100%')
               .padding(14).backgroundColor($r('app.color.canvas')).borderRadius(14)
           }
@@ -793,152 +665,20 @@ struct Index {
     }
     .width('100%').height('100%').scrollBar(BarState.Off)
     .backgroundColor($r('app.color.canvas'))
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
   }
 
   @Builder
-  private loginPage() {
-    Scroll() {
-      Column() {
-        Blank().height(18)
-        Image($r('app.media.app_icon')).width(82).height(82).borderRadius(24)
-          .accessibilityLevel('no')
-        Text('欢迎来到食刻').fontSize(28).fontWeight(FontWeight.Bold)
-          .fontColor($r('app.color.ink')).margin({ top: 20 })
-        Text('真实画面，认真推荐').fontSize(15)
-          .fontColor($r('app.color.muted')).margin({ top: 8 })
-
-        Text('邮箱登录').fontSize(18).fontWeight(FontWeight.Medium).fontColor($r('app.color.ink'))
-          .margin({ top: 30 }).width('88%')
-        Text('邮箱地址').fontSize(13).fontColor($r('app.color.muted')).width('88%')
-          .margin({ top: 18 })
-        TextInput({ text: this.emailAddress, placeholder: 'name@example.com' })
-          .width('88%').height(48).margin({ top: 6 })
-          .accessibilityText('邮箱地址')
-          .onChange((value: string): void => {
-            this.emailAddress = value;
-          })
-        Text('邮箱验证码').fontSize(13).fontColor($r('app.color.muted')).width('88%')
-          .margin({ top: 14 })
-        Row({ space: 10 }) {
-          TextInput({ text: this.verifyCode, placeholder: '输入邮箱验证码' })
-            .layoutWeight(1).height(48)
-            .accessibilityText('邮箱验证码')
-            .onChange((value: string): void => {
-              this.verifyCode = value;
-            })
-          Button(this.codeCountdown > 0 ? `${this.codeCountdown} 秒后重发` :
-            (this.codeBusy ? '发送中…' : '获取验证码'))
-            .enabled(!this.loginBusy && !this.codeBusy && this.codeCountdown === 0)
-            .height(48).fontSize(13)
-            .backgroundColor($r('app.color.surface')).fontColor($r('app.color.accent_action'))
-            .border({ width: 1, color: $r('app.color.line') })
-            .accessibilityText('获取邮箱验证码')
-            .onClick(() => this.requestEmailCode())
-        }.width('88%').margin({ top: 10 })
-        Text('验证码由 AGC Auth 发送；食刻不会保存邮箱密码。')
-          .fontSize(12).lineHeight(18).fontColor($r('app.color.muted')).width('88%').margin({ top: 8 })
-
-        if (this.loginMessage.length > 0) {
-          Row({ space: 8 }) {
-            if (this.loginBusy) {
-              LoadingProgress().width(18).height(18).color($r('app.color.accent_action'))
-            }
-            Text(this.loginMessage).fontSize(13).lineHeight(20).layoutWeight(1)
-              .fontColor(this.loginMessage.includes('未完成')
-                ? $r('app.color.warning') : $r('app.color.muted'))
-          }
-          .width('88%').padding(12).backgroundColor($r('app.color.accent_soft')).borderRadius(14)
-          .margin({ top: 12 }).alignItems(VerticalAlign.Top)
-        }
-
-        Button(this.loginBusy ? '正在登录…' : '登录')
-          .enabled(!this.loginBusy).width('88%').height(52)
-          .backgroundColor($r('app.color.accent_action')).fontColor($r('app.color.on_accent_action'))
-          .margin({ top: 14 }).accessibilityText('使用邮箱验证码登录').onClick(() => this.emailLogin())
-
-        Divider().width('78%').margin({ top: 24, bottom: 18 }).color($r('app.color.line'))
-        Button(this.loginBusy ? '正在连接华为账号…' : '使用华为账号登录')
-          .enabled(!this.loginBusy).width('88%').height(50)
-          .backgroundColor($r('app.color.surface')).fontColor($r('app.color.accent_action'))
-          .border({ width: 1, color: $r('app.color.line') })
-          .accessibilityText('使用华为账号登录').onClick(() => this.login())
-        Text('邮箱与华为账号关联后，可登录同一个食刻账号。')
-          .fontSize(12).lineHeight(18).fontColor($r('app.color.muted'))
-          .textAlign(TextAlign.Center).width('82%').margin({ top: 10 })
-
-        Row({ space: 4 }) {
-          Text('还没有食刻账号？').fontSize(13).fontColor($r('app.color.muted'))
-          Button('注册新账号').height(48).fontSize(13)
-            .enabled(!this.loginBusy && !this.codeBusy)
-            .backgroundColor($r('app.color.canvas')).fontColor($r('app.color.accent_action'))
-            .accessibilityText('注册新的食刻账号').onClick(() => this.openRegisterDialog())
-        }.margin({ top: 16 }).justifyContent(FlexAlign.Center)
-
-        Button('继续游客浏览').width('88%').height(48).margin({ top: 8 })
-          .enabled(!this.loginBusy && !this.codeBusy && !this.registerBusy && !this.registerCodeBusy)
-          .backgroundColor($r('app.color.surface')).fontColor($r('app.color.accent_action'))
-          .accessibilityText('关闭登录，继续浏览当前页面')
-          .onClick((): void => this.continueBrowsing())
-
-        Blank().height(18)
-        Text('继续即表示你已同意启动页中的《隐私说明》')
-          .fontSize(12).lineHeight(18).fontColor($r('app.color.muted'))
-          .textAlign(TextAlign.Center).width('82%').margin({ bottom: 28 })
+  private loginPage(): void {
+    EmailLoginPage({
+      backRequest: this.loginBackRequest,
+      onBusyChanged: (busy: boolean): void => { this.loginBusy = busy; },
+      onClose: (): void => this.continueBrowsing(),
+      onAuthenticated: (profile: UserProfile): void => {
+        const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
+        this.finishLogin(context, profile);
       }
-      .width('100%').padding({ top: 38, bottom: 28 }).alignItems(HorizontalAlign.Center)
-    }
-    .width('100%').height('100%').scrollBar(BarState.Off)
-    .backgroundColor($r('app.color.canvas'))
-  }
-
-  @Builder
-  private registerDialog() {
-    Column({ space: 12 }) {
-      Text('注册食刻账号').fontSize(21).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink')).width('100%')
-      Text('使用邮箱验证码创建账号，不需要设置密码。').fontSize(13).lineHeight(20)
-        .fontColor($r('app.color.muted')).width('100%')
-      Text('邮箱地址').fontSize(13).fontColor($r('app.color.muted')).width('100%').margin({ top: 8 })
-      TextInput({ text: this.registerEmailAddress, placeholder: 'name@example.com' })
-        .width('100%').height(48).accessibilityText('注册邮箱地址')
-        .onChange((value: string): void => {
-          this.registerEmailAddress = value;
-        })
-      Text('邮箱验证码').fontSize(13).fontColor($r('app.color.muted')).width('100%').margin({ top: 4 })
-      Row({ space: 10 }) {
-        TextInput({ text: this.registerVerifyCode, placeholder: '输入邮箱验证码' })
-          .layoutWeight(1).height(48).accessibilityText('注册邮箱验证码')
-          .onChange((value: string): void => {
-            this.registerVerifyCode = value;
-          })
-        Button(this.registerCodeCountdown > 0 ? `${this.registerCodeCountdown} 秒后重发` :
-          (this.registerCodeBusy ? '发送中…' : '获取验证码'))
-          .enabled(!this.registerBusy && !this.registerCodeBusy && this.registerCodeCountdown === 0)
-          .height(48).fontSize(13).backgroundColor($r('app.color.surface'))
-          .fontColor($r('app.color.accent_action')).border({ width: 1, color: $r('app.color.line') })
-          .accessibilityText('获取注册邮箱验证码').onClick(() => this.requestRegisterCode())
-      }.width('100%')
-      if (this.registerMessage.length > 0) {
-        Row({ space: 8 }) {
-          if (this.registerBusy) {
-            LoadingProgress().width(18).height(18).color($r('app.color.accent_action'))
-          }
-          Text(this.registerMessage).fontSize(13).lineHeight(20).layoutWeight(1)
-            .fontColor(this.registerMessage.includes('失败') || this.registerMessage.includes('未完成')
-              ? $r('app.color.warning') : $r('app.color.muted'))
-        }.width('100%').padding(12).backgroundColor($r('app.color.accent_soft')).borderRadius(14)
-          .alignItems(VerticalAlign.Top)
-      }
-      Button(this.registerBusy ? '正在注册…' : '注册并进入食刻')
-        .enabled(!this.registerBusy).width('100%').height(52).margin({ top: 4 })
-        .backgroundColor($r('app.color.accent_action')).fontColor($r('app.color.on_accent_action'))
-        .accessibilityText('使用邮箱验证码注册').onClick(() => this.registerEmail())
-      Button('取消').enabled(!this.registerBusy && !this.registerCodeBusy).width('100%').height(48)
-        .backgroundColor($r('app.color.surface')).fontColor($r('app.color.muted'))
-        .border({ width: 1, color: $r('app.color.line') }).accessibilityText('关闭账号注册窗口')
-        .onClick(() => this.closeRegisterDialog())
-    }
-    .width('86%').padding(22).backgroundColor($r('app.color.surface')).borderRadius(24)
-    .border({ width: 1, color: $r('app.color.line') }).alignItems(HorizontalAlign.Start)
+    })
   }
 
   @Builder
@@ -946,15 +686,15 @@ struct Index {
     Button({ type: ButtonType.Normal }) {
       Column({ space: 6 }) {
         Image(icon).width(22).height(22).objectFit(ImageFit.Contain)
-          .fillColor(this.selectedTab === index ? $r('app.color.accent_action') : $r('app.color.muted'))
+          .fillColor(this.selectedTab === index ? this.tabAction() : $r('app.color.muted'))
           .accessibilityLevel('no');
         Text(label).fontSize(13)
           .fontWeight(this.selectedTab === index ? FontWeight.Bold : FontWeight.Medium)
-          .fontColor(this.selectedTab === index ? $r('app.color.accent_action') : $r('app.color.muted'));
+          .fontColor(this.selectedTab === index ? this.tabAction() : $r('app.color.muted'));
       }.width('100%');
     }
     .width('100%').height(64).padding(6).borderRadius(16)
-    .backgroundColor(this.selectedTab === index ? $r('app.color.accent_soft') : $r('app.color.surface'))
+    .backgroundColor(this.selectedTab === index ? this.tabHighlight() : $r('app.color.surface'))
     .accessibilityText(label).accessibilitySelected(this.selectedTab === index)
     .onClick((): void => {
       if (this.selectedTab !== index) this.tabsController.changeIndex(this.tabPosition(index));
@@ -971,7 +711,6 @@ struct Index {
         this.navigationRailItem(1, '榜单', $r('app.media.nav_ranking'));
         if (this.loggedIn) {
           this.navigationRailItem(2, '好友', $r('app.media.nav_friends'));
-          this.navigationRailItem(3, '制作', $r('app.media.nav_create'));
         }
         this.navigationRailItem(4, '我的', $r('app.media.nav_profile'));
       }.width('100%').padding({ left: 10, right: 10, top: 22, bottom: 22 });
@@ -984,33 +723,54 @@ struct Index {
   @Builder
   private guestAccountPage(title: string, description: string) {
     Column({ space: 16 }) {
-      Text(title).fontSize(24).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'))
-      Text(description).fontSize(14).lineHeight(22).fontColor($r('app.color.muted'))
+      Text(title).fontSize(24).fontWeight(FontWeight.Bold).fontColor($r('app.color.personal_ink'))
+      Text(description).fontSize(14).lineHeight(22).fontColor($r('app.color.personal_muted'))
         .textAlign(TextAlign.Center).width('86%')
       Button('登录 / 注册').height(48).width('80%')
-        .backgroundColor($r('app.color.accent_action')).fontColor($r('app.color.on_accent_action'))
+        .backgroundColor($r('app.color.personal_action')).fontColor($r('app.color.personal_surface'))
         .onClick((): void => this.requestLogin(description))
+      Button('设置').height(48).width('80%')
+        .backgroundColor($r('app.color.personal_surface')).fontColor($r('app.color.personal_action'))
+        .accessibilityText('打开设置').onClick((): void => this.pathStack.pushPathByName('profile-settings', null))
       Button('继续看推荐').height(48).width('80%')
-        .backgroundColor($r('app.color.surface')).fontColor($r('app.color.accent_action'))
+        .backgroundColor($r('app.color.personal_surface')).fontColor($r('app.color.personal_action'))
         .onClick((): void => {
           this.tabsController.changeIndex(0);
           this.selectTab(0);
         })
     }.width('100%').height('100%').justifyContent(FlexAlign.Center)
-      .backgroundColor($r('app.color.canvas'))
+      .backgroundColor($r('app.color.personal_canvas'))
   }
 
   @Builder
-  private bottomTab(label: string, index: number) {
-    Column({ space: 5 }) {
-      Text(label).fontSize(14)
-        .fontWeight(this.selectedTab === index ? FontWeight.Medium : FontWeight.Regular)
-        .fontColor(this.selectedTab === index ? $r('app.color.action_text') : $r('app.color.muted'))
-      Column().width(20).height(2).borderRadius(1)
-        .backgroundColor(this.selectedTab === index ? $r('app.color.action_text') : Color.Transparent)
+  private bottomTab(label: string, index: number, icon: Resource) {
+    Column({ space: 2 }) {
+      Image(icon).width(22).height(22).objectFit(ImageFit.Contain)
+        .fillColor(this.selectedTab === index ? this.tabAction() : $r('app.color.muted'))
+        .accessibilityLevel('no')
+      Text(label).fontSize(11)
+        .fontWeight(this.selectedTab === index ? FontWeight.Bold : FontWeight.Regular)
+        .fontColor(this.selectedTab === index ? this.tabAction() : $r('app.color.muted'))
+      Column().width(5).height(5).borderRadius(3)
+        .backgroundColor(this.selectedTab === index ? this.tabHighlightDot() : Color.Transparent)
     }
     .width('100%').height(58).justifyContent(FlexAlign.Center)
     .accessibilityText(label).accessibilitySelected(this.selectedTab === index)
+  }
+
+  @Builder
+  private publishFab() {
+    // System symbol instead of the stroke SVG: SVG strokes ignore fillColor, which left the plus invisible.
+    Button({ type: ButtonType.Circle, stateEffect: true }) {
+      SymbolGlyph($r('sys.symbol.plus')).fontSize(28).fontWeight(FontWeight.Bold)
+        .fontColor([$r('app.color.discovery_canvas')]).accessibilityLevel('no')
+    }
+    .width(58).height(58).opacity(1).backgroundColor($r('app.color.discovery_accent'))
+    .border({ width: 3, color: $r('app.color.discovery_canvas') })
+    .shadow({ radius: 16, color: '#40000000', offsetY: 6 })
+    .margin({ right: 18, bottom: 18 })
+    .accessibilityText('发布推荐')
+    .onClick((): void => this.openCreateCard())
   }
 
   @Builder
@@ -1026,9 +786,16 @@ struct Index {
         Row({ space: 10 }) {
           Text(this.sharedLinkMessage).fontSize(12).lineHeight(18).fontColor($r('app.color.warning'))
             .layoutWeight(1).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis });
+          if (this.pendingSharedCardId.length > 0) {
+            Button('重试').height(44).fontSize(12).enabled(!this.openingSharedCard)
+              .backgroundColor($r('app.color.surface')).fontColor($r('app.color.warning'))
+              .onClick((): void => { void this.openPendingSharedCard(); });
+          }
           Button('关闭').height(44).fontSize(12).backgroundColor($r('app.color.surface'))
             .fontColor($r('app.color.warning')).border({ width: 1, color: $r('app.color.line') })
             .accessibilityText('关闭提示').onClick((): void => {
+              this.sharedCardGeneration += 1;
+              clearPendingSharedCard();
               this.sharedLinkMessage = '';
             });
         }
@@ -1043,17 +810,20 @@ struct Index {
         // hidden on lg. Drafts, list state and tab lifecycle stay with each page.
         Tabs({ barPosition: BarPosition.End, index: this.tabPosition(this.selectedTab), controller: this.tabsController }) {
           TabContent() {
-            Column() {
-            NearbyPage({
-              onOpenCard: (card: FoodCard): void => this.openCard(card),
-              loggedIn: this.loggedIn,
-              revision: this.recommendationRevision,
-              onOpenMeal: (): void => {
-                this.pathStack.pushPathByName('random-food', null);
-              }
-            }).layoutWeight(1)
+            Stack({ alignContent: Alignment.BottomEnd }) {
+              Column() {
+              NearbyPage({
+                onOpenCard: (card: FoodCard): void => this.openCard(card),
+                loggedIn: this.loggedIn,
+                revision: this.recommendationRevision,
+                onOpenMeal: (): void => {
+                  this.pathStack.pushPathByName('random-food', null);
+                }
+              }).layoutWeight(1)
+              }.width('100%').height('100%')
+              this.publishFab()
             }.width('100%').height('100%')
-          }.tabBar(this.bottomTab('推荐', 0))
+          }.tabBar(this.bottomTab('推荐', 0, $r('app.media.nav_recommend')))
           TabContent() {
               FoodRankingPage({
                 pageActive: this.navigationHomeVisible && this.selectedTab === 1,
@@ -1061,7 +831,7 @@ struct Index {
                 revision: this.recommendationRevision + this.friendRelationshipRevision,
                 onRequireLogin: (): void => this.requestLogin('登录后查看好友推荐榜。')
               })
-          }.tabBar(this.bottomTab('榜单', 1))
+          }.tabBar(this.bottomTab('榜单', 1, $r('app.media.nav_ranking')))
           if (this.loggedIn) {
             TabContent() {
               FriendsPage({
@@ -1071,10 +841,7 @@ struct Index {
                 onOpenGroup: (group: GroupConversationSummary): void => this.openGroupChat(group),
                 onOpenAddFriend: (): void => this.openAddFriend()
               })
-            }.tabBar(this.bottomTab('好友', 2))
-            TabContent() {
-              CreateCardPage({ accountUid: this.profile === undefined ? '' : this.profile.uid, onPublished: (): void => this.cardPublished() })
-            }.tabBar(this.bottomTab('制作', 3))
+            }.tabBar(this.bottomTab('好友', 2, $r('app.media.nav_friends')))
           }
           TabContent() {
             if (this.loggedIn) {
@@ -1082,22 +849,141 @@ struct Index {
             } else {
               this.guestAccountPage('我的', '登录后管理资料、收藏和浏览记录。')
             }
-          }.tabBar(this.bottomTab('我的', 4))
-            .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
+          }.tabBar(this.bottomTab('我的', 4, $r('app.media.nav_profile')))
         }
         .onChange((position: number): void => this.onTabPositionChanged(position))
         .barMode(BarMode.Fixed)
         .layoutWeight(1).height('100%').barHeight(this.windowBreakpoint === 'lg' ? 0 : 58)
         .scrollable(this.windowBreakpoint !== 'lg')
-        .backgroundColor(this.selectedTab === 1 ? $r('app.color.food_ranking_canvas') : $r('app.color.canvas'))
-        .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM]);
+        .backgroundColor(this.tabCanvas()).barBackgroundColor(this.tabCanvas()).clip(true)
+        .expandSafeArea([], []);
       }.width('100%').layoutWeight(1);
     }
     .width('100%').height('100%')
-    .backgroundColor(this.selectedTab === 1 ? $r('app.color.food_ranking_canvas') : $r('app.color.canvas'));
+    .backgroundColor(this.tabCanvas())
+    .expandSafeArea([], []);
   }
 
-  build() {
+  private choicePalette(routeParam: object): PagePaletteName {
+    if (routeParam === null || routeParam === undefined) return 'NOTE';
+    return (routeParam as PagePaletteRoute).palette === 'PERSONAL' ? 'PERSONAL' : 'NOTE';
+  }
+
+  private choiceCanvas(routeParam: object): Resource {
+    return this.choicePalette(routeParam) === 'PERSONAL' ? $r('app.color.personal_canvas') : $r('app.color.random_canvas');
+  }
+
+  private homePalette(): PagePaletteName {
+    if (this.selectedTab === 1) return 'RANKING';
+    if (this.selectedTab === 2 && this.loggedIn) return 'SOCIAL';
+    if (this.selectedTab === 4) return 'PERSONAL';
+    return 'NOTE';
+  }
+
+  private tabCanvas(): Resource {
+    if (this.selectedTab === 0) return $r('app.color.discovery_canvas');
+    if (this.selectedTab === 1) return $r('app.color.food_ranking_canvas');
+    return pageColor(this.homePalette(), 'canvas');
+  }
+
+  private tabAction(): Resource {
+    if (this.selectedTab === 0) return $r('app.color.discovery_accent');
+    if (this.selectedTab === 1) return $r('app.color.food_ranking_accent');
+    return pageColor(this.homePalette(), 'action');
+  }
+
+  private tabHighlightDot(): Resource {
+    if (this.selectedTab === 0) return $r('app.color.discovery_gold');
+    if (this.selectedTab === 1) return $r('app.color.food_ranking_action');
+    return pageColor(this.homePalette(), 'gold');
+  }
+
+  private tabHighlight(): Resource {
+    if (this.selectedTab === 0) return $r('app.color.discovery_soft');
+    if (this.selectedTab === 1) return $r('app.color.food_ranking_tab_track');
+    return pageColor(this.homePalette(), 'soft');
+  }
+
+  private homeHeader(): Resource {
+    if (this.selectedTab === 0) return $r('app.color.discovery_header');
+    if (this.selectedTab === 1) return $r('app.color.food_ranking_header');
+    if (this.selectedTab === 4 && !this.loggedIn) return $r('app.color.personal_canvas');
+    return pageColor(this.homePalette(), 'header');
+  }
+
+  private onEntryAppearanceChanged(): void {
+    AppPageSurface.setEntrySurfaceVisible(!this.ready || !this.privacyAccepted || this.loginRequested);
+    if (!this.navigationHomeVisible) return;
+    if (!this.ready || !this.privacyAccepted || this.loginRequested) {
+      AppPageSurface.show($r('app.color.canvas'), $r('app.color.canvas'));
+      return;
+    }
+    AppPageSurface.show(this.tabCanvas(), this.homeHeader(), this.homePalette(), this.profileCoverOnTop());
+  }
+
+  // The profile tab extends its cover image under the status bar; every other screen keeps a solid strip.
+  private profileCoverOnTop(): boolean {
+    return this.ready && this.privacyAccepted && !this.loginRequested && this.loggedIn &&
+      this.navigationHomeVisible && this.selectedTab === 4 && this.profileCoverUrl.length > 0;
+  }
+
+  @Builder
+  private topEdge(): void {
+    Stack({ alignContent: Alignment.TopStart }) {
+      if (this.profileCoverOnTop()) {
+        // Same size as ProfilePage's cover (inset + 360); only its top slice is visible here.
+        Image(this.profileCoverUrl).width('100%')
+          .height(this.getUIContext().px2vp(this.systemTopPx) + 360).objectFit(ImageFit.Cover)
+          .accessibilityLevel('no');
+        Column() {}.width('100%').height('100%').backgroundColor('#33000000');
+      }
+    }.width('100%').height(this.getUIContext().px2vp(this.systemTopPx))
+      .backgroundColor(this.edgeCanvas()).clip(true).position({ x: 0, y: 0 })
+      .hitTestBehavior(HitTestMode.None).accessibilityLevel('no');
+  }
+
+  private edgeCanvas(): Resource {
+    const revision: number = this.pageSurfaceRevision;
+    if (!this.ready || !this.privacyAccepted || this.loginRequested) return $r('app.color.canvas');
+    if (!this.navigationHomeVisible && revision >= 0) return AppPageSurface.header;
+    return this.homeHeader();
+  }
+
+  private frameCanvas(): Resource {
+    const revision: number = this.pageSurfaceRevision;
+    if (!this.ready || !this.privacyAccepted || this.loginRequested) return $r('app.color.canvas');
+    return !this.navigationHomeVisible && revision >= 0 ? AppPageSurface.canvas : this.tabCanvas();
+  }
+
+  private bottomEdge(): Edges {
+    const edges: Edges = { left: 0, bottom: 0 };
+    return edges;
+  }
+
+  private nativeSystemBarStyle(): SystemBarStyle {
+    const style: SystemBarStyle = { statusBarContentColor: this.systemBarInk };
+    return style;
+  }
+
+  // Bottom inset still reserved by Index: the gesture area minus the part the home tab bar may sink into.
+  private reservedBottom(): number {
+    const bottom: number = this.getUIContext().px2vp(this.systemBottomPx);
+    AppPageSurface.bottomOverlap = Math.min(HOME_BAR_OVERLAP, bottom);
+    return this.keyboardVisible ? 0 : bottom - AppPageSurface.bottomOverlap;
+  }
+
+  private contentInsets(): Padding {
+    const insets: Padding = {
+      top: this.getUIContext().px2vp(this.systemTopPx),
+      bottom: this.reservedBottom(),
+      left: this.getUIContext().px2vp(this.systemLeftPx),
+      right: this.getUIContext().px2vp(this.systemRightPx)
+    };
+    return insets;
+  }
+
+  @Builder
+  private entryContent(): void {
     if (!this.ready) {
       Column({ space: 12 }) {
         LoadingProgress().width(42).height(42).color($r('app.color.accent_action'))
@@ -1109,7 +995,10 @@ struct Index {
       Stack({ alignContent: Alignment.Center }) {
         Navigation(this.pathStack) { this.mainTabs() }
           .hideTitleBar(true).navDestination(this.pathMap).mode(NavigationMode.Stack)
-          .onNavBarStateChange((visible: boolean): void => { this.navigationHomeVisible = visible; AppStorage.setOrCreate('discoveryVisible', visible && this.selectedTab === 0); })
+          .backgroundColor(Color.Transparent).background(this.edgeCanvas()).clip(true)
+          .ignoreLayoutSafeArea([], []).expandSafeArea([], [])
+          .systemBarStyle(this.nativeSystemBarStyle())
+          .onNavBarStateChange((visible: boolean): void => { this.navigationHomeVisible = visible; if (visible) this.onEntryAppearanceChanged(); AppStorage.setOrCreate('discoveryVisible', visible && this.selectedTab === 0); })
           .width('100%').height('100%')
           .onAreaChange((_oldArea: Area, newArea: Area): void => {
             const width: number = Number(newArea.width);
@@ -1120,13 +1009,26 @@ struct Index {
           })
         if (this.loginRequested && !this.loggedIn) {
           this.loginPage()
-          if (this.registerDialogVisible) {
-            Column() {}
-              .width('100%').height('100%').backgroundColor($r('app.color.ink')).opacity(0.38)
-            this.registerDialog()
-          }
         }
       }.width('100%').height('100%')
     }
+  }
+
+  build() {
+    Stack({ alignContent: Alignment.TopStart }) {
+      // Reserve OS chrome once for every screen; only the backdrop occupies the full window.
+      Column() {
+        this.entryContent();
+      }.width('100%').height('100%').padding(this.contentInsets())
+        .expandSafeArea([], []).clip(true);
+      // Paint the reserved chrome regions without covering the inset content.
+      this.topEdge();
+      // align() only aligns a container's own children; inside a TopStart Stack the strip stayed at the top,
+      // covering the status-bar slice and leaving the gesture area unpainted. Pin it to the bottom edge instead.
+      Column() {}.width('100%').height(this.reservedBottom())
+        .backgroundColor(this.frameCanvas()).position(this.bottomEdge())
+        .hitTestBehavior(HitTestMode.None).accessibilityLevel('no');
+    }.width('100%').height('100%').backgroundColor(this.edgeCanvas()).background(this.edgeCanvas())
+      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
   }
 }

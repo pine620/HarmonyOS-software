@@ -9,7 +9,10 @@ export struct DiscoveryCard {
   @Prop selected: boolean = false;
   @Prop featured: boolean = false;
   @Prop coverScale: number = 1;
+  @Prop marketStyle: boolean = false;
+  @Prop motionEnabled: boolean = true;
   onCoverFailed: () => void = (): void => {};
+  onCoverDecoded: (id: string, url: string) => void = (_id: string, _url: string): void => {};
   onRetry: () => void = (): void => {};
   onOpen: () => void = (): void => {};
   private merchantLabel(): string {
@@ -30,14 +33,20 @@ export struct DiscoveryCard {
   build() {
     Column({ space: 0 }) {
       ReviewCard({ data: this.reviewData(), featured: this.featured, coverScale: this.coverScale,
+        marketStyle: this.marketStyle, motionEnabled: this.motionEnabled,
         onCoverFailed: this.onCoverFailed,
-        onCoverDecoded: (cardId: string, _url: string): void => { console.info('[PhotoDisplay] cardId=' + cardId + ' sinceReadMs=' + (Date.now() - (this.card.photos?.[0]?.readAcceptedAt || Date.now()))); },
+        onCoverDecoded: (cardId: string, url: string): void => {
+          console.info('[PhotoDisplay] cardId=' + cardId + ' sinceReadMs=' + (Date.now() - (this.card.photos?.[0]?.readAcceptedAt || Date.now())));
+          this.onCoverDecoded(cardId, url);
+        },
         onOpen: (_cardId: string): void => this.onOpen() })
       if (this.card.primaryPhotoLoadFailed === true && this.coverUrl.length === 0) {
-        Button('重试实拍图').height(48).borderRadius(24).backgroundColor($r('app.color.accent_soft')).fontColor($r('app.color.action_text'))
+        Button('重试实拍图').height(48).borderRadius(this.marketStyle ? 16 : 24)
+          .backgroundColor(this.marketStyle ? $r('app.color.discovery_soft') : $r('app.color.accent_soft'))
+          .fontColor(this.marketStyle ? $r('app.color.discovery_accent') : $r('app.color.action_text'))
           .margin({ left: 8, right: 8, top: 8 }).onClick((): void => this.onRetry())
       }
-    }.width('100%').backgroundColor($r('app.color.surface')).borderRadius(20)
-      .border({ width: this.selected ? 2 : 0, color: $r('app.color.accent_action') })
+    }.width('100%').backgroundColor(this.marketStyle ? $r('app.color.discovery_surface') : $r('app.color.surface')).borderRadius(this.marketStyle ? 16 : 20)
+      .border({ width: this.selected ? 2 : 0, color: this.marketStyle ? $r('app.color.discovery_accent') : $r('app.color.accent_action') })
   }
 }

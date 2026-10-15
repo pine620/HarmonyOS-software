@@ -1,5 +1,4 @@
 'use strict';
-const {dateMillis,currentVisibility}=require('./shared/content-policy');
 const {fail,hash,id,int,token,encode,flag,timestampPage}=require('./stages47-common');
 function createStage7Services(ctx){
  const {collection,one}=ctx;
@@ -33,15 +32,14 @@ function createStage7Services(ctx){
    cards:fresh,
    nextCursor:next?encode(sig,at,next):''};
  }
- async function publicShare(p,env){const cardId=id(p.cardId);const row=await one(collection(env,'FoodCard').query().equalTo('id',cardId));if(!row || currentVisibility(row)!=='PUBLIC' || !await ctx.contentPolicy(env).canReadCard('',row))throw fail('内容已不可访问。','CONTENT_UNAVAILABLE');
-  // Explicit browser allowlist. Never serialize the DB row or an owner DTO.
-  const card=await ctx.readCardIfAllowed(row,env,0,false,'',false,1);if(!card)throw fail('内容已不可访问。','CONTENT_UNAVAILABLE');
-  const merchant=row.merchantId?await one(collection(env,'Merchant').query().equalTo('merchantId',row.merchantId)):null;
-  const result={cardId:row.id,productName:String(card.productName||'').slice(0,100),tasteScore:Number(card.tasteScore),merchantName:String(merchant&&merchant.name||row.shop||'').slice(0,100),priceFen:row.queryPriceFen==null?null:Number(row.queryPriceFen),reviewText:String(card.reviewText||'').slice(0,2000),consumptionMode:String(row.consumptionMode||'UNSPECIFIED'),contentVersion:String(row.lifecycleGeneration||0)+':'+String(row.updatedAt),coverAvailable:!!row.mediaId};
-  const current=await one(collection(env,'FoodCard').query().equalTo('id',cardId));if(!current || currentVisibility(current)!=='PUBLIC' || !await ctx.contentPolicy(env).canReadCard('',current) || Number(current.updatedAt)!==Number(row.updatedAt) || dateMillis(current.modifiedAt)!==dateMillis(row.modifiedAt))throw fail('内容已不可访问。','CONTENT_UNAVAILABLE');return result;
+ async function reaction(uid,p,env){
+  // A write needs only its own verified history. Search/map/ranking readiness
+  // belongs to their respective entry points, not to the reaction critical path.
+  if(!flag(env,'SHIKE_REACTION_VERIFIED'))throw fail('赞踩尚未完成上线验证。','FEATURE_NOT_READY');
+  const history=await ctx.stage1().reactionHistoryMaintenance({mode:'status'},env);
+  if(!history.ready)throw fail('赞踩历史整理尚未完成。','FEATURE_NOT_READY');
+  return ctx.stage1().mutateReaction(uid,p,env,false,true);
  }
- async function publicShareMedia(p,env){const cardId=id(p.cardId);await publicShare({cardId},env);const row=await one(collection(env,'FoodCard').query().equalTo('id',cardId));if(!row || !row.mediaId)throw fail('图片已不可访问。','CONTENT_UNAVAILABLE');const media=await one(collection(env,'CardMedia').query().equalTo('id',row.mediaId));if(!media || media.cardId!==row.id || media.status!=='APPROVED')throw fail('图片已不可访问。','CONTENT_UNAVAILABLE');const response=await ctx.readPublicShareMedia(row,media,env);await publicShare({cardId},env);const current=await one(collection(env,'FoodCard').query().equalTo('id',cardId));if(!current||current.mediaId!==row.mediaId)throw fail('图片已变化，请刷新。','CONTENT_UNAVAILABLE');return response;}
- async function reaction(uid,p,env){const caps=await capabilities(uid,env);if(!caps.reactionsEnabled)throw fail('赞踩迁移与一致性尚未验证。','FEATURE_NOT_READY');return ctx.stage1().mutateReaction(uid,p,env);}
- return {capabilities,userPage,publicShare,publicShareMedia,reaction};
+ return {capabilities,userPage,reaction};
 }
 module.exports={createStage7Services};

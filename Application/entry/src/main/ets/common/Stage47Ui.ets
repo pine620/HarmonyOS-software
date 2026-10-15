@@ -1,3 +1,7 @@
+import { PagePaletteName, pageColor } from './PagePaletteUi';
+
+type ActionPalette = PagePaletteName | 'DEFAULT';
+
 function actionBase(button: ButtonAttribute): void {
   const label: LabelStyle = { maxLines: 2, overflow: TextOverflow.Ellipsis };
   button.type(ButtonType.Normal).fontSize(14).fontWeight(FontWeight.Medium)
@@ -6,66 +10,79 @@ function actionBase(button: ButtonAttribute): void {
 }
 
 export class SecondaryActionStyle implements AttributeModifier<ButtonAttribute> {
+  private palette: ActionPalette;
+  constructor(palette: ActionPalette = 'DEFAULT') { this.palette = palette; }
   applyNormalAttribute(button: ButtonAttribute): void {
     actionBase(button);
-    button.backgroundColor($r('app.color.surface')).fontColor($r('app.color.ink'))
-      .border({ width: 1, color: $r('app.color.line') });
+    button.backgroundColor((this.palette === 'DEFAULT' ? $r('app.color.surface') : pageColor(this.palette, 'surface'))).fontColor((this.palette === 'DEFAULT' ? $r('app.color.ink') : pageColor(this.palette, 'ink')))
+      .border({ width: 1, color: (this.palette === 'DEFAULT' ? $r('app.color.line') : pageColor(this.palette, 'line')) });
   }
   applyDisabledAttribute(button: ButtonAttribute): void { button.opacity(0.45); }
 }
 
 export class QuietActionStyle implements AttributeModifier<ButtonAttribute> {
+  private palette: ActionPalette;
+  constructor(palette: ActionPalette = 'DEFAULT') { this.palette = palette; }
   applyNormalAttribute(button: ButtonAttribute): void {
     actionBase(button);
-    button.backgroundColor(Color.Transparent).fontColor($r('app.color.action_text'))
+    button.backgroundColor(Color.Transparent).fontColor((this.palette === 'DEFAULT' ? $r('app.color.action_text') : pageColor(this.palette, 'action')))
       .border({ width: 0 });
   }
   applyDisabledAttribute(button: ButtonAttribute): void { button.opacity(0.45); }
 }
 
 export class PrimaryActionStyle implements AttributeModifier<ButtonAttribute> {
+  private palette: ActionPalette;
+  constructor(palette: ActionPalette = 'DEFAULT') { this.palette = palette; }
   applyNormalAttribute(button: ButtonAttribute): void {
     actionBase(button);
-    button.backgroundColor($r('app.color.accent_action')).fontColor($r('app.color.on_accent_action'))
+    button.backgroundColor((this.palette === 'DEFAULT' ? $r('app.color.accent_action') : pageColor(this.palette, 'gold'))).fontColor((this.palette === 'DEFAULT' ? $r('app.color.on_accent_action') : pageColor(this.palette, 'on_gold')))
       .border({ width: 0 });
   }
   applyDisabledAttribute(button: ButtonAttribute): void { button.opacity(0.45); }
 }
 
 export class DangerActionStyle implements AttributeModifier<ButtonAttribute> {
+  private palette: ActionPalette;
+  constructor(palette: ActionPalette = 'DEFAULT') { this.palette = palette; }
   applyNormalAttribute(button: ButtonAttribute): void {
     actionBase(button);
-    button.backgroundColor($r('app.color.surface')).fontColor($r('app.color.danger'))
-      .border({ width: 1, color: $r('app.color.line') });
+    button.backgroundColor((this.palette === 'DEFAULT' ? $r('app.color.surface') : pageColor(this.palette, 'surface'))).fontColor((this.palette === 'DEFAULT' ? $r('app.color.danger') : pageColor(this.palette, 'error')))
+      .border({ width: 1, color: (this.palette === 'DEFAULT' ? $r('app.color.line') : pageColor(this.palette, 'line')) });
   }
   applyDisabledAttribute(button: ButtonAttribute): void { button.opacity(0.45); }
 }
 
 export class ChoiceActionStyle implements AttributeModifier<ButtonAttribute> {
   private selected: boolean;
-  constructor(selected: boolean) { this.selected = selected; }
+  private palette: ActionPalette;
+  constructor(selected: boolean, palette: ActionPalette = 'DEFAULT') { this.selected = selected; this.palette = palette; }
   applyNormalAttribute(button: ButtonAttribute): void {
     actionBase(button);
-    button.backgroundColor(this.selected ? $r('app.color.accent_soft') : $r('app.color.surface'))
-      .fontColor(this.selected ? $r('app.color.action_text') : $r('app.color.ink'))
-      .border({ width: 1, color: this.selected ? $r('app.color.action_text') : $r('app.color.line') })
+    button.backgroundColor(this.selected ? (this.palette === 'DEFAULT' ? $r('app.color.accent_soft') : pageColor(this.palette, 'soft')) : (this.palette === 'DEFAULT' ? $r('app.color.surface') : pageColor(this.palette, 'surface')))
+      .fontColor(this.selected ? (this.palette === 'DEFAULT' ? $r('app.color.action_text') : pageColor(this.palette, 'action')) : (this.palette === 'DEFAULT' ? $r('app.color.ink') : pageColor(this.palette, 'ink')))
+      .border({ width: 1, color: this.selected ? (this.palette === 'DEFAULT' ? $r('app.color.action_text') : pageColor(this.palette, 'action')) : (this.palette === 'DEFAULT' ? $r('app.color.line') : pageColor(this.palette, 'line')) })
       .accessibilitySelected(this.selected);
   }
   applyDisabledAttribute(button: ButtonAttribute): void { button.opacity(0.45); }
 }
 
 export class FormInputStyle implements AttributeModifier<TextInputAttribute> {
+  private palette: ActionPalette;
+  constructor(palette: ActionPalette = 'DEFAULT') { this.palette = palette; }
   applyNormalAttribute(input: TextInputAttribute): void {
-    input.fontSize(15).fontColor($r('app.color.ink')).placeholderColor($r('app.color.muted'))
-      .caretColor($r('app.color.action_text')).backgroundColor($r('app.color.canvas'))
+    input.fontSize(15).fontColor((this.palette === 'DEFAULT' ? $r('app.color.ink') : pageColor(this.palette, 'ink'))).placeholderColor((this.palette === 'DEFAULT' ? $r('app.color.muted') : pageColor(this.palette, 'muted')))
+      .caretColor((this.palette === 'DEFAULT' ? $r('app.color.action_text') : pageColor(this.palette, 'action'))).backgroundColor((this.palette === 'DEFAULT' ? $r('app.color.canvas') : pageColor(this.palette, 'canvas')))
       .borderRadius(16).padding({ left: 12, right: 12 });
   }
 }
 
 export class FormNoteStyle implements AttributeModifier<TextAreaAttribute> {
+  private palette: ActionPalette;
+  constructor(palette: ActionPalette = 'DEFAULT') { this.palette = palette; }
   applyNormalAttribute(input: TextAreaAttribute): void {
-    input.fontSize(15).fontColor($r('app.color.ink')).placeholderColor($r('app.color.muted'))
-      .caretColor($r('app.color.action_text')).backgroundColor($r('app.color.canvas'))
+    input.fontSize(15).fontColor((this.palette === 'DEFAULT' ? $r('app.color.ink') : pageColor(this.palette, 'ink'))).placeholderColor((this.palette === 'DEFAULT' ? $r('app.color.muted') : pageColor(this.palette, 'muted')))
+      .caretColor((this.palette === 'DEFAULT' ? $r('app.color.action_text') : pageColor(this.palette, 'action'))).backgroundColor((this.palette === 'DEFAULT' ? $r('app.color.canvas') : pageColor(this.palette, 'canvas')))
       .borderRadius(16).padding(12);
   }
 }
@@ -84,7 +101,7 @@ export function featureUnavailable(error: Object): boolean {
 export function invalidatesProtectedPage(error: Object): boolean {
   if (error === null || error === undefined) return false;
   const detail: UiErrorDetail = error as UiErrorDetail;
-  return ['FORBIDDEN', 'ACCESS_DENIED', 'AUTH_REQUIRED', 'ACCOUNT_INACTIVE', 'ACCOUNT_DELETED',
+  return ['ADMIN_REQUIRED', 'ALREADY_RESOLVED', 'FORBIDDEN', 'ACCESS_DENIED', 'AUTH_REQUIRED', 'ACCOUNT_INACTIVE', 'ACCOUNT_DELETED',
     'CONTENT_ACCESS_DENIED', 'CONTENT_UNAVAILABLE', 'NOT_FOUND', 'FEATURE_NOT_READY', 'CURSOR_STALE', 'CONFLICT', 'STALE_VERSION'].includes(String(detail.code || ''));
 }
 

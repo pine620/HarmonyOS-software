@@ -81,9 +81,16 @@ function createStage3Services(ctx) {
       const mapFlag = enabled(env, 'SHIKE_STAGE3_MAP_VERIFIED');
       const facts = { searchVerified: searchFlag, mapVerified: mapFlag };
       if (!searchFlag && !mapFlag) return recordCapabilities({ searchEnabled: false, mapEnabled: false, searchReason: 'VALIDATION_REQUIRED', mapReason: 'VALIDATION_REQUIRED' }, facts);
-      const ready = readiness || await ctx.stage1().migrationReadiness(env);
+      // Public category/search queries need card coverage, not reaction coverage.
+      // Reuse the read-only fixed card task when no map readiness is requested.
+      const ready = readiness || (mapFlag ? await ctx.stage1().migrationReadiness(env) : {
+        cardCoverageComplete: (await ctx.stage1().cardHistoryMaintenance({ mode: 'status' }, env)).ready,
+        indexedQueryReady: false
+      });
+      const indexVerified = enabled(env, 'SHIKE_INDEXED_QUERY_VERIFIED');
+      const searchQueryReady = ready.cardCoverageComplete === true && indexVerified;
       Object.assign(facts, { cardCoverageComplete: ready.cardCoverageComplete, reactionCoverageComplete: ready.reactionCoverageComplete,
-        indexedQueryReady: ready.indexedQueryReady, indexVerified: String(env.SHIKE_INDEXED_QUERY_VERIFIED || process.env.SHIKE_INDEXED_QUERY_VERIFIED || '') === 'true',
+        indexedQueryReady: ready.indexedQueryReady, searchQueryReady, indexVerified,
         mapCoordinateConfigured: setting(env, 'SHIKE_STAGE3_MAP_COORDINATE_SYSTEM') === 'GCJ02' });
       let mapReady = mapFlag && ready.indexedQueryReady && setting(env, 'SHIKE_STAGE3_MAP_COORDINATE_SYSTEM') === 'GCJ02';
       if (mapReady) {
@@ -92,8 +99,8 @@ function createStage3Services(ctx) {
         Object.assign(facts, { mixedCoordinateDetected: !!mixed });
         if (mixed) mapReady = false;
       }
-      return recordCapabilities({ searchEnabled: searchFlag && ready.indexedQueryReady, mapEnabled: !!mapReady,
-        searchReason: !searchFlag ? 'VALIDATION_REQUIRED' : !ready.indexedQueryReady ? 'HISTORY_OR_INDEX_REQUIRED' : '',
+      return recordCapabilities({ searchEnabled: searchFlag && searchQueryReady, mapEnabled: !!mapReady,
+        searchReason: !searchFlag ? 'VALIDATION_REQUIRED' : ready.cardCoverageComplete !== true ? 'CARD_HISTORY_REQUIRED' : !indexVerified ? 'INDEX_VERIFICATION_REQUIRED' : '',
         mapReason: !mapFlag ? 'VALIDATION_REQUIRED' : !ready.indexedQueryReady ? 'HISTORY_OR_INDEX_REQUIRED' : !mapReady ? 'COORDINATE_REQUIRED' : '' }, facts);
     });
   }

@@ -4,7 +4,7 @@ import {
   CardActionResponse, CardDetailRequest, CardIdRequest, CardPhoto, EmptyRequest, FoodCard,
   MyCardsResponse, NearbyCardsRequest, NearbyCardsResponse, OperationResponse,
   PrepareCardPhotoRequest, PrepareCardPhotoResponse, PublishCardRequest,
-  PublishCardResponse, PublicCardsRequest, ReportCardRequest, ToggleCardActionRequest
+  PublishCardResponse, PublicCardsRequest, ToggleCardActionRequest
 } from '../model/CloudContracts';
 import { CloudBusinessError, ReadCancelledError } from '../service/CloudReadErrors';
 import { AuthService } from '../service/AuthService';
@@ -159,12 +159,6 @@ export class CardRepository {
   async publish(context: common.Context, request: PublishCardRequest): Promise<PublishCardResponse> {
     await AuthService.ensureSession(context);
     return CloudGateway.callAuthenticated<PublishCardResponse>('publish-card', request);
-  }
-
-  async report(context: common.Context, cardId: string, reason: string): Promise<void> {
-    await AuthService.ensureSession(context);
-    const request: ReportCardRequest = { cardId, reason };
-    await CloudGateway.callAuthenticated<OperationResponse>('report-card', request);
   }
 
   async toggleCardAction(context: common.Context, request: ToggleCardActionRequest): Promise<CardActionResponse> {

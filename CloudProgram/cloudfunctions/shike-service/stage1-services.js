@@ -98,12 +98,12 @@ function createStage1Services(ctx) {
     return view;
   }
 
-  async function reactionSummary(cardId, uid, env) {
+  async function reactionSummary(cardId, uid, env, options = {}) {
     const [reactions, likes, favoritesRows, privateFlags] = await Promise.all([
       all(() => collection(env, 'CardReaction').query().equalTo('cardId', cardId)),
-      all(() => collection(env, 'CardAction').query().equalTo('cardId', cardId).equalTo('kind', 'LIKE').orderByAsc('id')),
+      options.historyComplete ? [] : all(() => collection(env, 'CardAction').query().equalTo('cardId', cardId).equalTo('kind', 'LIKE').orderByAsc('id')),
       all(() => collection(env, 'CardAction').query().equalTo('cardId', cardId).equalTo('kind', 'FAVORITE').orderByAsc('id')),
-      ctx.collections().flags(cardId, uid, env)
+      options.includePrivateFlags === false ? {} : ctx.collections().flags(cardId, uid, env)
     ]);
     const actions = likes.concat(favoritesRows);
     const states = new Map();
@@ -118,7 +118,17 @@ function createStage1Services(ctx) {
       dislikeCount: [...states.values()].filter((value) => value === 'DISLIKE').length,
       favoriteCount: favorites.size, myReaction, viewerLiked: myReaction === 'LIKE', viewerFavorited: favorites.has(uid), ...privateFlags };
   }
-  async function mutateReaction(uid, payload, env, legacyToggle = false) {
+  async function favoriteSummary(cardId, uid, env) {
+    // Collection writes do not need to reread all reactions or legacy likes.
+    // Keep distinct-user counts and fresh per-account migration flags.
+    const [rows, privateFlags] = await Promise.all([
+      all(() => collection(env, 'CardAction').query().equalTo('cardId', cardId).equalTo('kind', 'FAVORITE').orderByAsc('id')),
+      ctx.collections().flags(cardId, uid, env)
+    ]);
+    const favorites = new Set(rows.map(row => String(row.actorUid)));
+    return { favoriteCount: favorites.size, viewerFavorited: favorites.has(uid), ...privateFlags };
+  }
+  async function mutateReaction(uid, payload, env, legacyToggle = false, historyComplete = false) {
     const cardId = String(payload.cardId || '');
     const desired = String(payload.reaction || '');
     if (!legacyToggle && !['', 'NONE', 'LIKE', 'DISLIKE'].includes(desired)) throw new Error('赞踩状态无效。');
@@ -140,7 +150,9 @@ function createStage1Services(ctx) {
         active = desired === 'LIKE'; return true;
       }
       const rows = await tx.executeQuery(collection(env, 'CardReaction').query().equalTo('cardId', cardId).equalTo('uid', uid).limit(1));
-      const old = await tx.executeQuery(collection(env, 'CardAction').query().equalTo('cardId', cardId)
+      // Only the verified V2 entry may skip legacy LIKE reads. Older callers
+      // keep the migration-compatible path, including source deletion.
+      const old = historyComplete ? [] : await tx.executeQuery(collection(env, 'CardAction').query().equalTo('cardId', cardId)
         .equalTo('actorUid', uid).equalTo('kind', 'LIKE').limit(50));
       if (old.length === 50) throw accessError('旧互动记录过多，请先迁移后再操作。', 'MIGRATION_REQUIRED');
       const current = rows[0] ? String(rows[0].reaction) : old.length > 0 ? 'LIKE' : '';
@@ -161,7 +173,7 @@ function createStage1Services(ctx) {
       return true;
     } });
     if (!committed) throw new Error('互动未保存，请重试。');
-    const summary = await reactionSummary(cardId, uid, env);
+    const summary = await reactionSummary(cardId, uid, env, { historyComplete, includePrivateFlags: !historyComplete });
     const current = await one(collection(env, 'FoodCard').query().equalTo('id', cardId));
     await ctx.contentPolicy(env).assertCardReadable(uid, current);
     return { active, ...summary };
@@ -468,6 +480,7 @@ function createStage1Services(ctx) {
 
   const MIGRATION_TYPES = Object.freeze(['BACKFILL_CARD', 'MIGRATE_REACTION']);
   const CARD_HISTORY_JOB_ID = hash('BACKFILL_CARD:stage1-v1:1');
+  const REACTION_HISTORY_JOB_ID = hash('MIGRATE_REACTION:stage1-v1:1');
   function cardHistoryCheckpoint(job) {
     let checkpoint;
     try { checkpoint = JSON.parse(String(job.checkpointJson || '{}')); }
@@ -551,6 +564,64 @@ function createStage1Services(ctx) {
     return { ...(includeJobs ? { jobs } : {}), cardCoverageComplete: cardReady, reactionCoverageComplete: reactionReady,
       indexedQueryReady: cardReady && reactionReady && String(env.SHIKE_INDEXED_QUERY_VERIFIED || process.env.SHIKE_INDEXED_QUERY_VERIFIED || '') === 'true',
       userQueryVerificationRequired: true };
+  }
+  function reactionHistoryState(job) {
+    if (!job) return { initialized: false, ready: false, batchSize: BATCH, job: null };
+    if (job.jobType !== 'MIGRATE_REACTION' || Number(job.generation) !== 1 || job.entityId !== 'stage1-v1') {
+      throw accessError('旧互动迁移任务标识冲突。', 'INVALID_STATE');
+    }
+    let checkpoint;
+    try { checkpoint = JSON.parse(String(job.checkpointJson || '{}')); }
+    catch (_error) { throw accessError('旧互动迁移检查点无效。', 'INVALID_STATE'); }
+    if (!checkpoint || typeof checkpoint !== 'object' || Array.isArray(checkpoint)) {
+      throw accessError('旧互动迁移检查点无效。', 'INVALID_STATE');
+    }
+    if (!['MIGRATE', 'VERIFY'].includes(checkpoint.phase)) throw accessError('旧互动迁移阶段无效。', 'INVALID_STATE');
+    const ready = job.status === 'DONE' && checkpoint.coverageComplete === true &&
+      Number(checkpoint.failures) === 0 && Number(checkpoint.verificationMissing) === 0;
+    return { initialized: true, ready, batchSize: BATCH, job: { ...jobView(job), checkpoint } };
+  }
+  // Worker-only continuation of the existing fixed reaction migration. It
+  // cannot create/select arbitrary jobs or enter deletion maintenance.
+  async function reactionHistoryMaintenance(payload = {}, env = {}) {
+    const mode = payload.mode === undefined ? 'status' : payload.mode;
+    if (!['status', 'run', 'retry'].includes(mode)) throw accessError('旧互动迁移维护模式无效。', 'VALIDATION_ERROR');
+    const jobs = collection(env, 'MaintenanceJob');
+    const current = await one(jobs.query().equalTo('jobId', REACTION_HISTORY_JOB_ID));
+    const initial = reactionHistoryState(current);
+    if (mode === 'status') return initial;
+    if (!current) throw accessError('旧互动迁移任务不存在，请先核对任务记录。', 'NOT_FOUND');
+    const enabled = env.SHIKE_MAINTENANCE_ENABLED === undefined ? process.env.SHIKE_MAINTENANCE_ENABLED : env.SHIKE_MAINTENANCE_ENABLED;
+    if (String(enabled || '') !== 'true') throw accessError('请先启用维护写入开关。', 'FEATURE_NOT_READY');
+    const baselineAt = Number(initial.job.checkpoint.baselineAt);
+    if (!Number.isSafeInteger(baselineAt) || baselineAt <= 0 || baselineAt > Date.now()) {
+      throw accessError('旧互动迁移基线无效。', 'INVALID_STATE');
+    }
+    if (mode === 'retry') {
+      const committed = await jobs.runTransaction({ apply: async tx => {
+        const job = await txOne(tx, env, 'MaintenanceJob', 'jobId', REACTION_HISTORY_JOB_ID);
+        const state = reactionHistoryState(job);
+        if (!job) throw accessError('旧互动迁移任务不存在。', 'NOT_FOUND');
+        if (!['FAILED', 'RETRY_WAIT', 'DONE'].includes(job.status)) {
+          throw accessError('任务尚在处理或已取消，请查看进度后再操作。', 'CONFLICT');
+        }
+        const checkpoint = state.job.checkpoint;
+        if (Number(checkpoint.baselineAt) !== baselineAt) throw accessError('迁移基线已变化。', 'CONFLICT');
+        if (checkpoint.phase === 'VERIFY' || job.status === 'DONE') {
+          checkpoint.phase = 'VERIFY'; checkpoint.verificationCursor = ''; checkpoint.verificationScanned = 0;
+        }
+        checkpoint.failures = 0; checkpoint.failedEntityId = ''; checkpoint.verificationMissing = 0;
+        checkpoint.verificationMissingEntityId = ''; checkpoint.coverageComplete = false;
+        upsertRows(tx, [model('MaintenanceJob', { ...job, status: 'PENDING', attemptCount: 0,
+          checkpointJson: JSON.stringify(checkpoint), lastErrorCode: '', leaseOwner: '', leaseUntilAt: null,
+          runAfterAt: new Date(), updatedAt: new Date() })]);
+        return true;
+      } });
+      if (!committed) throw accessError('旧互动迁移重试未保存。', 'CONFLICT');
+    } else if (!initial.ready && !['FAILED', 'CANCELLED', 'DONE'].includes(current.status)) {
+      await processMigration({ jobId: REACTION_HISTORY_JOB_ID }, env);
+    }
+    return reactionHistoryState(await one(jobs.query().equalTo('jobId', REACTION_HISTORY_JOB_ID)));
   }
   async function claimMigration(jobId, env) {
     const leaseOwner = crypto.randomUUID();
@@ -699,9 +770,9 @@ function createStage1Services(ctx) {
     }
   }
 
-  return { editableState, reactionSummary, mutateReaction, toggleFavorite, softDelete, beginAccountDeletion, derived,
+  return { editableState, reactionSummary, favoriteSummary, mutateReaction, toggleFavorite, softDelete, beginAccountDeletion, derived,
     submitRevision, getRevision, getEditContext, withdrawRevision,
-    migrationReadiness, cardHistoryMaintenance, processMigration, jobRow, jobView, txOne, activeProfile, model, hash, cardTime,
+    migrationReadiness, cardHistoryMaintenance, reactionHistoryMaintenance, processMigration, jobRow, jobView, txOne, activeProfile, model, hash, cardTime,
     publishReceiptSpec, checkPublishReceipt, readPublishReceipt, upsertRows };
 }
 

@@ -1,3 +1,4 @@
+import { AppDestinationStyle } from '../common/AppPageUi';
 import { util } from '@kit.ArkTS';
 import { PrimaryActionStyle, QuietActionStyle, SecondaryActionStyle, stage47ErrorText, invalidatesProtectedPage } from '../common/Stage47Ui';
 import { contentDate } from '../common/ContentStatusUi';
@@ -43,24 +44,24 @@ export struct DeletedCardsPage {
   @Builder
   private row(row: DeletedCardRow) {
     Column({ space: 8 }) {
-      Text(row.title).fontSize(16).fontWeight(FontWeight.Medium).fontColor($r('app.color.ink')).width('100%')
-      Text('删除于 ' + contentDate(row.deletedAt)).fontSize(13).fontColor($r('app.color.muted')).width('100%')
-      Text('可恢复截止：' + contentDate(row.purgeAt)).fontSize(13).fontColor($r('app.color.muted')).width('100%')
+      Text(row.title).fontSize(16).fontWeight(FontWeight.Medium).fontColor($r('app.color.personal_ink')).width('100%')
+      Text('删除于 ' + contentDate(row.deletedAt)).fontSize(13).fontColor($r('app.color.personal_muted')).width('100%')
+      Text('可恢复截止：' + contentDate(row.purgeAt)).fontSize(13).fontColor($r('app.color.personal_muted')).width('100%')
       Button(row.canRestore ? this.retryCard === row.cardId ? '重试原恢复请求' : '恢复卡片' : '无法恢复').width('100%')
-        .enabled(!this.busy && row.canRestore && (this.retryCard.length === 0 || this.retryCard === row.cardId)).attributeModifier(new PrimaryActionStyle())
+        .enabled(!this.busy && row.canRestore && (this.retryCard.length === 0 || this.retryCard === row.cardId)).attributeModifier(new PrimaryActionStyle('PERSONAL'))
         .onClick((): void => { void this.restore(row); })
-    }.padding(14).width('100%').backgroundColor($r('app.color.surface')).borderRadius(16).alignItems(HorizontalAlign.Start)
+    }.padding(14).width('100%').backgroundColor($r('app.color.personal_surface')).borderRadius(16).alignItems(HorizontalAlign.Start)
   }
   build() {
     NavDestination() { Column({ space: 12 }) {
-      Text('删除后保留 30 天；到期、已下架或已开始清理的卡片不可恢复。实际资格以服务端为准。').fontSize(14).fontColor($r('app.color.muted')).width('100%')
-      Text(this.message).fontSize(14).fontColor($r('app.color.ink')).width('100%')
-      Button('刷新记录').width('100%').enabled(!this.busy).attributeModifier(new QuietActionStyle()).onClick((): void => this.shown())
+      Text('删除后保留 30 天；到期、已下架或已开始清理的卡片不可恢复。实际资格以服务端为准。').fontSize(14).fontColor($r('app.color.personal_muted')).width('100%')
+      Text(this.message).fontSize(14).fontColor($r('app.color.personal_ink')).width('100%')
+      Button('刷新记录').width('100%').enabled(!this.busy).attributeModifier(new QuietActionStyle('PERSONAL')).onClick((): void => this.shown())
       List({ space: 12 }) {
         LazyForEach(this.source, (row: DeletedCardRow): void => { ListItem() { this.row(row) } }, (row: DeletedCardRow): string => row.cardId)
-        if (this.cursor.length > 0) { ListItem() { Button(this.busy ? '读取中…' : '继续查找删除记录').width('100%').enabled(!this.busy && this.retryCard.length === 0).attributeModifier(new SecondaryActionStyle()).onClick((): void => { void this.load(true); }) } }
+        if (this.cursor.length > 0) { ListItem() { Button(this.busy ? '读取中…' : '继续查找删除记录').width('100%').enabled(!this.busy && this.retryCard.length === 0).attributeModifier(new SecondaryActionStyle('PERSONAL')).onClick((): void => { void this.load(true); }) } }
       }.width('100%').layoutWeight(1).scrollBar(BarState.Auto)
     }.padding(16).width('100%').height('100%').constraintSize({ maxWidth: 840 }).alignItems(HorizontalAlign.Start) }
-      .title('删除记录').backgroundColor($r('app.color.canvas')).onShown((): void => this.shown()).onHidden((): void => this.hidden())
+      .attributeModifier(new AppDestinationStyle('删除记录', $r('app.color.personal_canvas'), $r('app.color.personal_header'), 'PERSONAL')).backgroundColor($r('app.color.personal_canvas')).onShown((): void => this.shown()).onHidden((): void => this.hidden())
   }
 }

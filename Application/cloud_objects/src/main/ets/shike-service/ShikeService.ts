@@ -16,6 +16,47 @@ type CloudResponse = {
 
 export class ShikeService implements CloudObjectLikely {
     public name = 'shike-service';
+    public async getPasswordAccount(input: CloudEnvelope): Promise<CloudResponse> {
+        return Promise.reject(new Error('Method not implemented.'));
+    }
+    public async configurePasswordAccount(input: CloudEnvelope): Promise<CloudResponse> {
+        return Promise.reject(new Error('Method not implemented.'));
+    }
+    public async changePasswordAccount(input: CloudEnvelope): Promise<CloudResponse> {
+        return Promise.reject(new Error('Method not implemented.'));
+    }
+    public async loginWithNickname(input: CloudEnvelope): Promise<CloudResponse> {
+        return Promise.reject(new Error('Method not implemented.'));
+    }
+    public async logoutNickname(input: CloudEnvelope): Promise<CloudResponse> {
+        return Promise.reject(new Error('Method not implemented.'));
+    }
+
+    public async getCardReportAccess(input: CloudEnvelope): Promise<CloudResponse> {
+        return Promise.reject(new Error('Method not implemented.'));
+    }
+    public async getCardReportContext(input: CloudEnvelope): Promise<CloudResponse> {
+        return Promise.reject(new Error('Method not implemented.'));
+    }
+    public async submitCardReport(input: CloudEnvelope): Promise<CloudResponse> {
+        return Promise.reject(new Error('Method not implemented.'));
+    }
+    public async listMyCardReports(input: CloudEnvelope): Promise<CloudResponse> {
+        return Promise.reject(new Error('Method not implemented.'));
+    }
+    public async getMyCardReport(input: CloudEnvelope): Promise<CloudResponse> {
+        return Promise.reject(new Error('Method not implemented.'));
+    }
+    public async listCardReviewReports(input: CloudEnvelope): Promise<CloudResponse> {
+        return Promise.reject(new Error('Method not implemented.'));
+    }
+    public async getCardReviewReport(input: CloudEnvelope): Promise<CloudResponse> {
+        return Promise.reject(new Error('Method not implemented.'));
+    }
+    public async resolveCardReport(input: CloudEnvelope): Promise<CloudResponse> {
+        return Promise.reject(new Error('Method not implemented.'));
+    }
+
     public async getStage47Capabilities(input: CloudEnvelope): Promise<CloudResponse> {
         return Promise.reject(new Error('Method not implemented.'));
     }

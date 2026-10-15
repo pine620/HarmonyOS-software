@@ -126,5 +126,5 @@ try {
     checkPlan(plan);
     console.log(JSON.stringify({ functionName: plan.name, generatedFiles: plan.generated.size, buildId: plan.release.buildId, policyHash: plan.release.policyHash }));
   }
-  console.log('DevEco source dependency closure ready for 7 functions. No compilation, handler execution or deployment performed.');
+  console.log(`DevEco source dependency closure ready for ${plans.length} functions. No compilation, handler execution or deployment performed.`);
 } catch (error) { console.error(error.message); process.exitCode = 1; }

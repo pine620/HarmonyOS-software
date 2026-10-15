@@ -87,10 +87,15 @@ export class ReadScheduler {
   static allows(operation: string): boolean { return operation === 'image-read-batch' || /^(get-|list-|search-)/.test(operation); }
   static dataRevision(): number { return ReadScheduler.dataVersion; }
   static lifecycleRevision(): number { return ReadScheduler.lifecycle; }
-  static contentChanged(): void {
+  static contentChanged(preserveOperations: Array<string> = []): void {
     ReadScheduler.dataVersion++;
+    // Interaction DTOs carry their own version guards. Keep these reads alive
+    // when a vote commits while the initial detail is still loading.
+    ReadScheduler.jobs.forEach((job: ReadJob): void => {
+      if (preserveOperations.includes(job.operation)) job.dataVersion = ReadScheduler.dataVersion;
+    });
     ReadScheduler.pending = ReadScheduler.pending.filter((job: ReadJob): boolean => {
-      if (ReadScheduler.imageOperation(job.operation)) return true;
+      if (ReadScheduler.imageOperation(job.operation) || preserveOperations.includes(job.operation)) return true;
       job.reject(new ReadCancelledError()); return false;
     });
   }

@@ -1,3 +1,4 @@
+import { PagePaletteName, pageColor } from '../common/PagePaletteUi';
 import { common } from '@kit.AbilityKit';
 import { FoodCard } from '../model/CloudContracts';
 import { SocialUser } from '../model/FriendModels';
@@ -5,7 +6,9 @@ import { UserPageRequest, UserPageResponse } from '../model/SocialDiscoveryModel
 import { SocialDiscoveryRepository } from '../repository/SocialDiscoveryRepository';
 import { CardRepository } from '../repository/CardRepository';
 import { PersonalPreviewLoader, PersonalPreviewRow, PersonalPreviewSource } from '../service/PersonalPreviewLoader';
-import { PersonalPreviewTile } from '../components/PersonalPreviewTile';
+import { NotePreviewTile } from '../components/NotePreviewTile';
+import { NoteActionStyle, WarmNoteBackdrop } from '../common/WarmNoteUi';
+import { BreakpointSystem } from '../common/BreakpointSystem';
 import { AuthService } from '../service/AuthService';
 import { AuthSessionStore } from '../service/AuthSessionStore';
 import { ImageRepository } from '../service/ImageRepository';
@@ -15,7 +18,10 @@ import { ErrorDetail, errorText } from '../common/ErrorKit';
 
 @Component
 export struct UserProfileContent {
+  @Prop palette: PagePaletteName = 'SOCIAL';
   @Prop userUid: string = '';
+  @Prop friendCode: string = '';
+  @State profileWidth: number = 390;
   @Prop @Watch('onEnvironmentChanged') foreground: boolean = false;
   @StorageLink('stage47AppActive') @Watch('onEnvironmentChanged') appActive: boolean = true;
   @StorageLink('accountContentRevision') @Watch('onEnvironmentChanged') accountContentRevision: number = 0;
@@ -102,7 +108,7 @@ export struct UserProfileContent {
     if (result === undefined || result.relationshipState !== 'FRIEND') return;
     const friend: SocialUser = { uid: result.profile.uid, nickname: result.profile.nickname, avatarUrl: this.avatarUrl,
       avatarPath: result.profile.avatarPath, avatarBucket: result.profile.avatarBucket, publishCount: result.profile.publishCount,
-      friendCode: '', friendshipState: 'FRIEND', requestId: '' };
+      friendCode: this.profileCode(), friendshipState: 'FRIEND', requestId: '' };
     this.onOpenChat(friend);
   }
   private async open(cardId: string): Promise<void> {
@@ -115,36 +121,67 @@ export struct UserProfileContent {
     } catch (error) { if (this.valid(generation)) { this.busy = false; void this.load(); } }
     finally { if (this.valid(generation)) this.busy = false; }
   }
-  build() {
+  private profileCode(): string {
+    if (this.response?.relationshipState === 'SELF') return AuthService.profile()?.friendCode || '';
+    return this.response?.relationshipState === 'FRIEND' ? this.friendCode : '';
+  }
+  @Builder
+  private profileHeader(): void {
     Column({ space: 12 }) {
-      if (this.coverUrl.length > 0) { Image(this.coverUrl).width('100%').height(120).objectFit(ImageFit.Cover).borderRadius(16).accessibilityLevel('no'); }
+      if (this.coverUrl.length > 0) {
+        Image(this.coverUrl).width('100%').height(180).objectFit(ImageFit.Cover).borderRadius(22).accessibilityText('好友主页封面');
+      } else {
+        Column() {}.width('100%').height(160).backgroundColor(pageColor(this.palette, 'soft')).borderRadius(22).accessibilityLevel('no');
+      }
       Row({ space: 12 }) {
-        Image(this.avatarUrl.length > 0 ? this.avatarUrl : $r('app.media.app_icon')).width(48).height(48)
-          .objectFit(ImageFit.Cover).borderRadius(24).accessibilityLevel('no');
-        Column({ space: 4 }) {
-          Text(this.response === undefined ? '用户主页' : this.response.profile.nickname).fontSize(20)
-            .fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'));
-          Text(this.response?.relationshipState === 'SELF' ? '我的主页' : '公开推荐')
-            .fontSize(12).fontColor($r('app.color.muted'));
+        Image(this.avatarUrl.length > 0 ? this.avatarUrl : $r('app.media.app_icon')).width(88).height(88)
+          .objectFit(ImageFit.Cover).borderRadius(44).border({ width: 4, color: pageColor(this.palette, 'surface') }).accessibilityLevel('no');
+        Column({ space: 6 }) {
+          Text(this.response === undefined ? '用户主页' : this.response.profile.nickname).fontSize(23).fontWeight(FontWeight.Bold)
+            .fontColor(pageColor(this.palette, 'ink')).width('100%').maxLines(2);
+          if (this.profileCode().length > 0) { Text('食刻号 ' + this.profileCode()).fontSize(12).fontColor(pageColor(this.palette, 'muted'))
+            .copyOption(CopyOptions.LocalDevice).width('100%').maxLines(2); }
+          Text(this.response?.relationshipState === 'SELF' ? '我的主页' : this.response?.relationshipState === 'FRIEND' ? '已是好友' : '公开主页')
+            .fontSize(12).fontColor(pageColor(this.palette, 'action'));
         }.layoutWeight(1).alignItems(HorizontalAlign.Start);
-        if (this.response?.relationshipState === 'FRIEND') {
-          Button('发消息').constraintSize({ minHeight: 48 }).fontSize(13).backgroundColor($r('app.color.accent_soft'))
-            .fontColor($r('app.color.action_text')).onClick((): void => this.chat());
+      }.width('100%').padding({ left: 12, right: 12 }).margin({ top: -34 });
+      Row({ space: 12 }) {
+        Text(this.response === undefined ? '正在读取主页…' : `已发布 ${this.response.profile.publishCount} 张`).fontSize(14)
+          .fontColor(pageColor(this.palette, 'muted')).layoutWeight(1);
+        if (this.response?.relationshipState === 'FRIEND') { Button('发消息').enabled(!this.busy)
+          .attributeModifier(new NoteActionStyle(true, this.palette)).onClick((): void => this.chat()); }
+      }.width('100%').padding({ left: 12, right: 12, bottom: 12 });
+    }.width('100%').backgroundColor(pageColor(this.palette, 'surface')).borderRadius(22);
+  }
+  build() {
+    Stack() {
+      WarmNoteBackdrop({ palette: this.palette });
+      Column({ space: 14 }) {
+        this.profileHeader();
+        Row() {
+          Text('美食推荐').fontSize(19).fontWeight(FontWeight.Bold).fontColor(pageColor(this.palette, 'ink')).layoutWeight(1);
+          Button(this.busy ? '读取中…' : '刷新').enabled(!this.busy).height(48).fontSize(13)
+            .backgroundColor(Color.Transparent).fontColor(pageColor(this.palette, 'action')).onClick((): void => { void this.load(); });
+        }.width('100%');
+        if (this.message.length > 0) { Text(this.message).fontSize(13).fontColor(pageColor(this.palette, 'muted')).width('100%'); }
+        if (!this.busy && this.response !== undefined && this.count === 0) {
+          Text('这里还没有公开推荐。').fontSize(14).fontColor(pageColor(this.palette, 'muted')).width('100%');
         }
-      }.width('100%').padding(12).backgroundColor($r('app.color.surface')).borderRadius(16);
-      Row() {
-        Text(`已加载 ${this.count} 张卡片`).fontSize(12).fontColor($r('app.color.muted')); Blank();
-        Button(this.busy ? '读取中' : '刷新').constraintSize({ minHeight: 48 }).fontSize(13).enabled(!this.busy)
-          .backgroundColor(Color.Transparent).fontColor($r('app.color.action_text')).onClick((): void => { void this.load(); });
-      }.width('100%');
-      if (this.message.length > 0) { Text(this.message).fontSize(13).fontColor($r('app.color.muted')).width('100%'); }
-      List({ space: 10 }) {
-        LazyForEach(this.source, (row: PersonalPreviewRow): void => {
-          ListItem() { PersonalPreviewTile({ row, busy: this.busy, onOpen: (cardId: string): void => { void this.open(cardId); } }); }
-        }, (row: PersonalPreviewRow): string => row.cardId);
-        if (this.cursor.length > 0) { ListItem() { Button('加载更多').width('100%').constraintSize({ minHeight: 48 }).enabled(!this.busy)
-          .backgroundColor($r('app.color.surface')).fontColor($r('app.color.action_text')).onClick((): void => { void this.load(true); }); } }
-      }.width('100%').layoutWeight(1).cachedCount(2).onScrollIndex((first: number, last: number): void => this.window(first, last));
-    }.width('100%').height('100%').padding({ left: 16, right: 16, top: 8, bottom: 12 }).backgroundColor($r('app.color.canvas'));
+        Grid() {
+          LazyForEach(this.source, (row: PersonalPreviewRow): void => {
+            GridItem() { NotePreviewTile({ palette: this.palette, row, busy: this.busy, onOpen: (cardId: string): void => { void this.open(cardId); } }); }
+          }, (row: PersonalPreviewRow): string => row.cardId);
+          if (this.cursor.length > 0) {
+            GridItem() { Button(this.busy ? '正在加载…' : '加载更多推荐').width('100%').enabled(!this.busy)
+              .attributeModifier(new NoteActionStyle(false, this.palette)).onClick((): void => { void this.load(true); }); }
+              .columnStart(0).columnEnd(BreakpointSystem.columns(BreakpointSystem.fromWidth(this.profileWidth)) - 1);
+          }
+        }.width('100%').layoutWeight(1).columnsTemplate(BreakpointSystem.columnsTemplate(BreakpointSystem.fromWidth(this.profileWidth)))
+          .columnsGap(12).rowsGap(12).cachedCount(2).onScrollIndex((first: number, last: number): void => this.window(first, last));
+      }.width('100%').height('100%').padding({ left: 16, right: 16, top: 8, bottom: 12 })
+        .onAreaChange((_oldArea: Area, newArea: Area): void => {
+          const width: number = Number(newArea.width); if (Number.isFinite(width) && width > 0) this.profileWidth = width;
+        });
+    }.width('100%').height('100%').backgroundColor(pageColor(this.palette, 'canvas'));
   }
 }

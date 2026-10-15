@@ -21,6 +21,14 @@ export interface RandomFoodRound {
   position: number; shownCount: number; batchIds: Array<string>; drawId: string; chosenCardId: string; pendingCardId: string;
   selectedAt: number; historyId: string; recordDeleted: boolean; rangeLabel: string; preparedAt: number; ended: boolean;
 }
+export const RANDOM_FOOD_NEXT_MEAL_DELAY_MS: number = 6 * 60 * 60 * 1000;
+
+export function randomFoodNextMealAt(round: RandomFoodRound): number {
+  return round.chosenCardId.length === 0 ? 0 : round.selectedAt + RANDOM_FOOD_NEXT_MEAL_DELAY_MS;
+}
+export function randomFoodCanStartNextMeal(round: RandomFoodRound, now: number): boolean {
+  return round.chosenCardId.length > 0 && round.pendingCardId.length === 0 && now >= randomFoodNextMealAt(round);
+}
 export function randomFoodSourceLabel(source: RandomFoodSource): string {
   return source === 'MY' ? '我的' : source === 'FRIENDS' ? '好友' : '公开';
 }

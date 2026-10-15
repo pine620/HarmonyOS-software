@@ -1,7 +1,9 @@
-import { DraftForm, DraftMedia, DraftRestore, LocalDraft, DraftRetainedPhoto as RetainedPhoto } from '../model/DraftModels';
+import { PagePaletteName, pageColor } from '../common/PagePaletteUi';
+import { DraftForm, DraftRestore, LocalDraft, DraftRetainedPhoto as RetainedPhoto } from '../model/DraftModels';
 import { DraftStore } from '../service/DraftStore';
 import { common } from '@kit.AbilityKit';
-import { ChoiceActionStyle, DangerActionStyle, FormInputStyle, FormNoteStyle, PrimaryActionStyle, QuietActionStyle, SecondaryActionStyle } from '../common/Stage47Ui';
+import { CreateActionStyle, CreateCardBackdrop, CreateChoiceStyle, CreateInputStyle, CreateNoteStyle, CreateSheetKind } from '../common/CreateCardUi';
+import { RandomFoodMotionObserver } from '../common/RandomFoodUi';
 import util from '@ohos.util';
 import { CardEditContextResponse, CardPhoto, CardRevisionChanges, CardRevisionResponse, CardRevisionView, FoodCard, FoodCategory,
   FoodCategoryV2, FoodConsumptionMode, PrepareCardPhotoRequest, PublishCardRequest,
@@ -22,7 +24,6 @@ import { PhotoUploadService } from '../service/PhotoUploadService';
 import { ModeFieldCache, ModeFields } from '../service/ModeFieldCache';
 import { AuthService } from '../service/AuthService';
 import { isSafeHttpsSourceLink } from '../service/SafeSourceLink';
-import { coverFor } from '../components/FoodCover';
 import { tasteScoreLabel, tasteScoreReason } from '../model/TasteScore';
 import { ErrorDetail, errorText } from '../common/ErrorKit';
 
@@ -49,9 +50,29 @@ function consumedMillis(value: string): number | null {
 
 @Component
 export struct CreateCardPage {
+  @Prop palette: PagePaletteName = 'CREATE';
   onPublished: () => void = (): void => {};
   onEditingFinished: () => void = (): void => {};
   @Prop editCardId: string = '';
+  @Prop @Watch('onPageVisibilityChanged') pageActive: boolean = true;
+  @StorageLink('stage47AppActive') appActive: boolean = true;
+  @State reducedMotion: boolean = true;
+  @State sheetVisible: boolean = false;
+  @State sheetKind: CreateSheetKind = 'SCORE';
+  @State savingDraft: boolean = false;
+  @State loadingDraftChoices: boolean = false;
+  @State attemptedSubmit: boolean = false;
+  @State extraPrice: string = '';
+  @State extraOrderTotal: string = '';
+  @State extraDeliveryFee: string = '';
+  @State extraDate: string = '';
+  @State extraLink: string = '';
+  @State extraPlatformKey: string = '';
+  @State extraPlatformLabel: string = '';
+  @State extraError: string = '';
+  private motionObserver: RandomFoodMotionObserver = new RandomFoodMotionObserver((reduced: boolean): void => {
+    this.reducedMotion = reduced;
+  });
   @Prop @Watch('onAccountChanged') accountUid: string = '';
   @State @Watch('onDraftChanged') productName: string = '';
   @State @Watch('onDraftChanged') price: string = '';
@@ -65,12 +86,12 @@ export struct CreateCardPage {
   @State @Watch('onDraftChanged') category: FoodCategory = 'staple';
   @State @Watch('onDraftChanged') categoryV2: FoodCategoryV2 = 'RICE_SET';
   @State @Watch('onDraftChanged') mode: FoodConsumptionMode = 'DELIVERY';
-  @State merchant: Merchant | undefined = undefined;
-  @State merchantChoice: MerchantChoice | undefined = undefined;
+  @State @Watch('onDraftChanged') merchant: Merchant | undefined = undefined;
+  @State @Watch('onDraftChanged') merchantChoice: MerchantChoice | undefined = undefined;
   @State @Watch('onDraftChanged') merchantName: string = '';
   @State @Watch('onDraftChanged') merchantAddress: string = '';
   @State merchantBusy: boolean = false;
-  @State merchantRequestUnconfirmed: boolean = false;
+  @State @Watch('onDraftChanged') merchantRequestUnconfirmed: boolean = false;
   @State @Watch('onDraftChanged') correctingMerchant: boolean = false;
   @State platforms: Array<DeliveryPlatform> = DeliveryPlatformConfigService.defaults();
   @State @Watch('onDraftChanged') platformKey: string = '';
@@ -102,7 +123,6 @@ export struct CreateCardPage {
   private baseCard: FoodCard | undefined = undefined;
   private historicalShop: string = '';
   private activeUid: string = '';
-  private modeCacheAt: number = Date.now();
   private providerEnabled: boolean = false;
   private successMerchant: Merchant | undefined = undefined;
   private successMode: FoodConsumptionMode = 'DELIVERY';
@@ -110,7 +130,6 @@ export struct CreateCardPage {
   @Prop restoreDraftId: string = '';
   @State draftChoices: Array<LocalDraft> = [];
   @State draftNotice: string = '';
-  @State showDraftChoices: boolean = false;
   private draftId: string = util.generateRandomUUID();
   private draftReady: boolean = false;
   private draftTimer: number | undefined = undefined;
@@ -152,7 +171,6 @@ export struct CreateCardPage {
     const choices: Array<LocalDraft> = await DraftStore.list(this.context(), uid);
     if (!this.stillCurrent(generation)) return;
     this.draftChoices = choices;
-    this.showDraftChoices = this.draftChoices.some((draft: LocalDraft): boolean => draft.targetCardId === this.editCardId);
     const reminders: number = await DraftStore.reminders(this.context(), uid);
     if (!this.stillCurrent(generation)) return;
     if (reminders > 0) this.draftNotice = reminders.toString() + ' 个草稿将在 3 天内过期，请及时处理。';
@@ -175,7 +193,7 @@ export struct CreateCardPage {
       this.preparedPhotos = []; this.photoPreviewUris = []; let missing: number = restored.missingMediaCount;
       for (const media of restored.media) { try { this.preparedPhotos.push(DraftStore.photo(media)); this.photoPreviewUris.push('file://' + media.path); } catch (_error) { missing++; } }
       this.ownsPhoto = form.ownsPhoto === true;
-      this.draftId = draft.draftId; this.draftDirty = true; this.showDraftChoices = false; this.editContextReady = !this.isEditing() || this.baseCard !== undefined;
+      this.draftId = draft.draftId; this.draftDirty = true; this.editContextReady = !this.isEditing() || this.baseCard !== undefined;
       if (this.isEditing()) {
         this.editContextReady = false;
         const latest: CardEditContextResponse = await this.editRepository.context(this.context(), this.editCardId);
@@ -183,27 +201,30 @@ export struct CreateCardPage {
         if (form.baseCard !== undefined && latest.card.modifiedAt === form.baseCard.modifiedAt && latest.card.lifecycleGeneration === form.baseCard.lifecycleGeneration) this.editContextReady = true;
         for (let index: number = 0; index < this.retainedPhotos.length; index++) { const photo: RetainedPhoto = this.retainedPhotos[index]; const current = (latest.card.photos || []).find((value: CardPhoto): boolean => value.id === photo.id); if (current !== undefined) { try { photo.url = await ImageRepository.getDownloadUrl(this.context(), current.bucket, current.path); } catch (_error) {} } }
         if (!this.stillCurrent(generation)) return;
+        this.retainedPhotos = this.retainedPhotos.slice();
       }
       this.draftNotice = missing > 0 ? '已恢复文字；' + missing.toString() + ' 张本地图片缺失，请重选。' : '已恢复草稿和原请求标识；编辑基准变化时请刷新确认。';
     } catch (error) { this.draftNotice = error instanceof Error ? error.message : '草稿恢复失败。'; }
     finally { if (this.stillCurrent(generation)) { this.initializing = false; this.draftReady = true; } }
   }
   private async deleteDraft(draft: LocalDraft): Promise<void> { try { await DraftStore.remove(this.context(), this.activeUid, draft.draftId); await this.loadDraftChoices(); } catch (error) { this.draftNotice = error instanceof Error ? error.message : '删除失败。'; } }
-  aboutToAppear(): void { DraftStore.flushHandler = this.draftFlush; void this.initialize(); }
-  aboutToDisappear(): void { void this.flushDraft(); if (DraftStore.flushHandler === this.draftFlush) DraftStore.flushHandler = undefined; this.formGeneration++; this.saveModeFields(); this.publishing = false; this.merchantBusy = false; }
-  private onAccountChanged(): void { this.draftReady = false; if (this.draftTimer !== undefined) clearTimeout(this.draftTimer); this.draftTimer = undefined; this.draftChoices = []; this.showDraftChoices = false; this.draftId = util.generateRandomUUID(); this.draftDirty = false; this.formGeneration++; MerchantLocationPicker.clearSelectionCenter(); this.successMerchant = undefined; this.resetForm(); void this.initialize(); }
+  aboutToAppear(): void { this.reducedMotion = this.motionObserver.start(); DraftStore.flushHandler = this.draftFlush; void this.initialize(); }
+  aboutToDisappear(): void { this.motionObserver.stop(); this.sheetVisible = false; void this.flushDraft(); if (DraftStore.flushHandler === this.draftFlush) DraftStore.flushHandler = undefined; this.formGeneration++; this.saveModeFields(); this.publishing = false; this.merchantBusy = false; }
+  private onPageVisibilityChanged(): void { if (!this.pageActive) this.sheetVisible = false; }
+  private onAccountChanged(): void { this.draftReady = false; if (this.draftTimer !== undefined) clearTimeout(this.draftTimer); this.draftTimer = undefined; this.draftChoices = []; this.draftId = util.generateRandomUUID(); this.draftDirty = false; this.formGeneration++; MerchantLocationPicker.clearSelectionCenter(); this.successMerchant = undefined; this.resetForm(); void this.initialize(); }
   private context(): common.UIAbilityContext { return this.getUIContext().getHostContext() as common.UIAbilityContext; }
   private stillCurrent(generation: number): boolean {
     const profile = AuthService.profile();
     return generation === this.formGeneration && profile !== undefined && profile.uid === this.activeUid;
   }
   private isEditing(): boolean { return this.editCardId.length > 0; }
-  private formEnabled(): boolean { return (!this.isEditing() || this.editContextReady) && !this.initializing && !this.publishing && !this.merchantBusy && !this.requestUnconfirmed && !this.merchantRequestUnconfirmed; }
+  private formEnabled(): boolean { return (!this.isEditing() || this.editContextReady) && !this.initializing && !this.publishing && !this.savingDraft && !this.hasPublishedNotice && !this.merchantBusy && !this.requestUnconfirmed && !this.merchantRequestUnconfirmed; }
   private scoreLabel(score: number = this.tasteScore): string { return tasteScoreLabel(score); }
   private scoreReason(score: number = this.tasteScore): string { return tasteScoreReason(score); }
   private isScoreSelected(score: number): boolean { return this.tasteScore === score; }
   private resetPublicationState(): void { this.hasPublishedNotice = false; }
   private resetForm(): void {
+    this.sheetVisible = false; this.attemptedSubmit = false; this.extraError = ''; this.savingDraft = false; this.loadingDraftChoices = false;
     this.formGeneration++; this.publicationRequestId = ''; this.pendingPublication = undefined; this.pendingRevision = undefined;
     this.publishing = false; this.merchantBusy = false; this.merchantRequestUnconfirmed = false;
     this.requestUnconfirmed = false; this.preparedPhotos = []; this.uploadedMediaIds = []; this.retainedPhotos = [];
@@ -213,7 +234,7 @@ export struct CreateCardPage {
     this.merchantRequestId = ''; this.merchantName = ''; this.merchantAddress = ''; this.correctingMerchant = false;
     this.platformKey = ''; this.platformLabel = ''; this.photoPreviewUris = []; this.photoLabel = ''; this.ownsPhoto = false;
     this.currentRevision = undefined; this.baseCard = undefined; this.editContextReady = false; this.savedEditNeedsReload = false; this.historicalShop = ''; this.hasPublishedNotice = false;
-    this.status = '填写美食信息，留下你的真实口碑。'; this.modeCacheAt = Date.now();
+    this.status = '填写美食信息，留下你的真实口碑。';
   }
   private async initialize(): Promise<void> {
     this.initializing = true;
@@ -303,7 +324,7 @@ export struct CreateCardPage {
     if (this.activeUid.length === 0 || this.initializing || (this.isEditing() && !this.editContextReady)) return;
     const fields: ModeFields = { savedAt: Date.now(), dineInAvg: this.dineInAvg, orderTotal: this.orderTotal,
       deliveryFee: this.deliveryFee, platformKey: this.platformKey, platformLabel: this.platformLabel, consumedDate: this.consumedDate };
-    try { ModeFieldCache.save(this.context(), this.activeUid, this.editCardId, fields, this.mode); this.modeCacheAt = fields.savedAt; } catch (_error) { }
+    try { ModeFieldCache.save(this.context(), this.activeUid, this.editCardId, fields, this.mode); } catch (_error) { }
   }
   private selectMode(mode: FoodConsumptionMode): void {
     if (!this.formEnabled() || this.mode === mode) return;
@@ -378,12 +399,14 @@ export struct CreateCardPage {
       }
     } finally { if (this.stillCurrent(generation)) this.merchantBusy = false; }
   }
-  private async chooseOwnedPhoto(): Promise<void> {
+  private async chooseOwnedPhoto(replace: boolean = false): Promise<void> {
     if (!this.formEnabled()) return;
+    const remaining: number = MAX_CARD_PHOTOS - this.retainedPhotos.length - (replace ? 0 : this.preparedPhotos.length);
+    if (remaining <= 0) return;
     const generation: number = this.formGeneration;
     this.publishing = true;
     try {
-      const uris: Array<string> = await ImagePreparationService.selectMany(MAX_CARD_PHOTOS - this.retainedPhotos.length);
+      const uris: Array<string> = await ImagePreparationService.selectMany(remaining);
       if (!this.stillCurrent(generation) || uris.length === 0) return;
       this.publishing = true; this.status = '正在本地处理实拍图…';
       const photos: Array<PreparedPhoto> = [];
@@ -391,8 +414,12 @@ export struct CreateCardPage {
         const photo: PreparedPhoto = await ImagePreparationService.prepareOwnedPhoto(uri);
         if (!this.stillCurrent(generation)) return; photos.push(photo);
       }
-      this.preparedPhotos = photos; this.uploadedMediaIds = []; this.photoPreviewUris = photos.map((photo: PreparedPhoto): string => photo.cover === undefined ? '' : 'data:image/jpeg;base64,' + new util.Base64Helper().encodeToStringSync(new Uint8Array(photo.cover.data))); this.ownsPhoto = false;
-      this.photoLabel = '已处理 ' + photos.length + ' 张 JPEG；勾选权利声明后上传。';
+      const previews: Array<string> = photos.map((photo: PreparedPhoto): string => photo.cover === undefined ? '' : 'data:image/jpeg;base64,' + new util.Base64Helper().encodeToStringSync(new Uint8Array(photo.cover.data)));
+      this.preparedPhotos = replace ? photos : this.preparedPhotos.concat(photos);
+      if (replace) this.uploadedMediaIds = [];
+      this.photoPreviewUris = replace ? previews : this.photoPreviewUris.concat(previews); this.ownsPhoto = false;
+      this.photoLabel = '新照片 ' + this.preparedPhotos.length + ' 张，已完成本地处理。';
+      this.status = '实拍已准备好，请确认照片拍摄或使用权。';
     } catch (error) { if (this.stillCurrent(generation)) this.status = errorText(error as ErrorDetail); }
     finally { if (this.stillCurrent(generation)) this.publishing = false; }
   }
@@ -572,62 +599,130 @@ export struct CreateCardPage {
     this.resetForm(); this.merchant = merchant; this.mode = mode;
     this.draftReady = true; this.status = '已继承店铺和消费方式；请填写新菜品、价格、照片和评分。';
   }
-  @Builder
-  private fieldLabel(title: string, required: boolean = false): void {
-    Row({ space: 6 }) {
-      Text(title).fontSize(13).fontWeight(FontWeight.Medium).fontColor($r('app.color.ink'));
-      if (required) {
-        Text('必填').fontSize(10).fontColor($r('app.color.accent_action'))
-          .padding({ left: 5, right: 5, top: 2, bottom: 2 })
-          .backgroundColor($r('app.color.accent_soft')).borderRadius(6);
+  private choiceAnimation(duration: number = 160): AnimateParam {
+    const options: AnimateParam = { duration: this.reducedMotion || !this.pageActive || !this.appActive ? 0 : duration, curve: Curve.EaseOut };
+    return options;
+  }
+  private merchantControlsEnabled(): boolean {
+    return (!this.isEditing() || this.editContextReady) && !this.initializing && !this.publishing && !this.savingDraft && !this.hasPublishedNotice && !this.merchantBusy && !this.requestUnconfirmed;
+  }
+  private photoCount(): number { return this.retainedPhotos.length + this.photoPreviewUris.length; }
+  private newPhotoKey(index: number): string {
+    const photo: PreparedPhoto | undefined = this.preparedPhotos[index];
+    return (photo === undefined ? 'missing' : photo.sha256) + ':' + index.toString();
+  }
+  private merchantSummary(): string {
+    if (this.merchantRequestUnconfirmed) return '地点结果未确认 · 点击重试';
+    if (this.merchantChoice !== undefined) return '待确认 · ' + this.merchantName;
+    if (this.merchant !== undefined) return this.merchant.name;
+    return this.historicalShop.length > 0 ? this.historicalShop : '可选 · 选择店铺';
+  }
+  private extrasSummary(): string {
+    const count: number = this.mode === 'DELIVERY'
+      ? [this.platformKey, this.orderTotal, this.deliveryFee, this.consumedDate, this.sourceLink].filter((value: string): boolean => value.trim().length > 0).length
+      : [this.mode === 'DINE_IN' ? this.price : '', this.sourceLink].filter((value: string): boolean => value.trim().length > 0).length;
+    return count > 0 ? '已填写 ' + count.toString() + ' 项' : this.mode === 'DELIVERY' ? '平台、费用、日期、链接' :
+      this.mode === 'DINE_IN' ? '单品价格、来源链接' : '来源链接';
+  }
+  private nameError(): string {
+    return this.attemptedSubmit && (this.productName.trim().length < 2 || this.productName.trim().length > 100) ? '美食名称需为 2–100 字。' : '';
+  }
+  private mainPriceError(): string {
+    if (!this.attemptedSubmit) return '';
+    try { parseYuanInputToFen(this.mode === 'DINE_IN' ? this.dineInAvg : this.price); return ''; }
+    catch (error) { return errorText(error as ErrorDetail); }
+  }
+  private extrasError(): string {
+    if (!this.attemptedSubmit) return '';
+    if (this.sourceLink.trim().length > 0 && !isSafeHttpsSourceLink(this.sourceLink)) return '来源链接无效，请在补充信息中修改。';
+    try {
+      if (this.mode === 'DINE_IN') parseYuanInputToFen(this.price);
+      if (this.mode === 'DELIVERY') { parseYuanInputToFen(this.orderTotal); parseYuanInputToFen(this.deliveryFee); consumedMillis(this.consumedDate); }
+      return '';
+    } catch (error) { return '请检查补充信息：' + errorText(error as ErrorDetail); }
+  }
+  private photoError(): string {
+    if (!this.attemptedSubmit) return '';
+    if (this.photoCount() < 1) return '请至少添加一张实拍图。';
+    return !this.ownsPhoto ? '请确认照片拍摄或使用权。' : '';
+  }
+  private openSheet(kind: CreateSheetKind): void {
+    if (this.initializing || this.publishing || this.savingDraft || this.merchantBusy) return;
+    if ((kind === 'EXTRAS' || kind === 'SCORE') && !this.formEnabled()) return;
+    if (kind === 'EXTRAS') {
+      this.extraPrice = this.price; this.extraOrderTotal = this.orderTotal; this.extraDeliveryFee = this.deliveryFee;
+      this.extraDate = this.consumedDate; this.extraLink = this.sourceLink;
+      this.extraPlatformKey = this.platformKey; this.extraPlatformLabel = this.platformLabel; this.extraError = '';
+    }
+    this.sheetKind = kind; this.sheetVisible = true;
+    if (kind === 'DRAFTS') void this.refreshDraftChoices();
+  }
+  private sheetTitle(): string {
+    if (this.sheetKind === 'SCORE') return '选择口味评分';
+    if (this.sheetKind === 'EXTRAS') return '补充信息 · 可选';
+    if (this.sheetKind === 'MERCHANT') return '关联店铺';
+    if (this.sheetKind === 'PHOTOS') return '我的实拍 · ' + this.photoCount().toString() + '/6';
+    return '本机草稿';
+  }
+  private sheetOptions(): SheetOptions {
+    const options: SheetOptions = { height: this.sheetKind === 'SCORE' ? '62%' : '85%',
+      backgroundColor: pageColor(this.palette, 'surface'), maskColor: pageColor(this.palette, 'scrim'),
+      showClose: false, dragBar: false, preferType: SheetType.BOTTOM, mode: SheetMode.OVERLAY,
+      keyboardAvoidMode: SheetKeyboardAvoidMode.TRANSLATE_AND_SCROLL,
+      radius: { topLeft: 24, topRight: 24 },
+      onWillDismiss: (action: DismissSheetAction): void => {
+        if (this.publishing || this.savingDraft || this.merchantBusy) return;
+        this.sheetVisible = false; action.dismiss();
+      } };
+    return options;
+  }
+  private applyExtras(): void {
+    if (!this.formEnabled()) return;
+    try {
+      if (this.mode === 'DINE_IN') parseYuanInputToFen(this.extraPrice);
+      if (this.mode === 'DELIVERY') {
+        parseYuanInputToFen(this.extraOrderTotal); parseYuanInputToFen(this.extraDeliveryFee); consumedMillis(this.extraDate);
       }
-    }.width('100%');
-  }
-
-  @Builder
-  private scoreButton(score: number): void {
-    Button() {
-      Column({ space: 2 }) {
-        Text(score.toString()).fontSize(15).fontWeight(FontWeight.Bold)
-          .fontColor(this.isScoreSelected(score) ? $r('app.color.accent_action') : $r('app.color.ink'));
-        Text(this.scoreLabel(score)).fontSize(12)
-          .fontColor(this.isScoreSelected(score) ? $r('app.color.accent_action') : $r('app.color.muted'));
-      }.alignItems(HorizontalAlign.Center);
+      if (this.extraLink.trim().length > 0 && !isSafeHttpsSourceLink(this.extraLink)) throw new Error('来源链接需为有效 HTTPS 地址，不含内嵌账号信息。');
+    } catch (error) { this.extraError = errorText(error as ErrorDetail); return; }
+    if (this.mode === 'DINE_IN') this.price = this.extraPrice;
+    if (this.mode === 'DELIVERY') {
+      this.orderTotal = this.extraOrderTotal; this.deliveryFee = this.extraDeliveryFee; this.consumedDate = this.extraDate;
+      this.platformKey = this.extraPlatformKey; this.platformLabel = this.extraPlatformLabel;
+      this.moreDeliveryInfo = this.extraOrderTotal.length > 0 || this.extraDeliveryFee.length > 0 || this.extraDate.length > 0;
     }
-      .type(ButtonType.Normal).height(56).layoutWeight(1)
-      .backgroundColor(this.isScoreSelected(score) ? $r('app.color.accent_soft') : $r('app.color.canvas'))
-      .border({ width: this.isScoreSelected(score) ? 1.5 : 1,
-        color: this.isScoreSelected(score) ? $r('app.color.accent_action') : $r('app.color.line') })
-      .borderRadius(16)
-      .accessibilityText(`${score} 分，${this.scoreLabel(score)}${this.isScoreSelected(score) ? '，已选中' : ''}`)
-      .onClick((): void => {
-        this.tasteScore = score;
-        this.resetPublicationState();
-      });
+    this.sourceLink = this.extraLink; this.resetPublicationState(); this.sheetVisible = false;
   }
-
-  @Builder
-  private scoreStage(): void {
-    Row({ space: 12 }) {
-      Row({ space: 3 }) {
-        Text(this.tasteScore.toString()).fontSize(38).fontWeight(FontWeight.Bold)
-          .fontColor($r('app.color.accent_action')).lineHeight(42);
-        Text('/10').fontSize(13).fontWeight(FontWeight.Medium).fontColor($r('app.color.muted'))
-          .padding({ top: 22 });
-      }.alignItems(VerticalAlign.Top);
-      Column({ space: 4 }) {
-        Text(this.scoreLabel()).fontSize(17).fontWeight(FontWeight.Bold)
-          .fontColor($r('app.color.accent_action')).width('100%');
-        Text(this.scoreReason()).fontSize(12).lineHeight(17)
-          .fontColor($r('app.color.ink')).width('100%').maxLines(2);
-      }.layoutWeight(1).alignItems(HorizontalAlign.Start);
-    }
-    .width('100%').padding({ left: 12, right: 12, top: 10, bottom: 10 })
-    .backgroundColor($r('app.color.accent_soft')).borderRadius(20)
-    .accessibilityText(`${this.tasteScore} 分，${this.scoreLabel()}。${this.scoreReason()}`);
+  private removeNewPhoto(index: number): void {
+    if (!this.formEnabled() || index < 0 || index >= this.preparedPhotos.length) return;
+    this.preparedPhotos = this.preparedPhotos.filter((_photo: PreparedPhoto, position: number): boolean => position !== index);
+    this.uploadedMediaIds = this.uploadedMediaIds.filter((_id: string, position: number): boolean => position !== index);
+    this.photoPreviewUris = this.photoPreviewUris.filter((_uri: string, position: number): boolean => position !== index);
+    this.photoLabel = this.preparedPhotos.length > 0 ? '新照片 ' + this.preparedPhotos.length.toString() + ' 张，已完成本地处理。' : '';
   }
-
-
+  private async saveDraftFromUi(): Promise<void> {
+    if (this.initializing || this.publishing || this.savingDraft || this.loadingDraftChoices || this.merchantBusy || !this.draftReady) return;
+    const generation: number = this.formGeneration; this.savingDraft = true;
+    try { await this.flushDraft(true); if (this.stillCurrent(generation) && this.sheetVisible && this.sheetKind === 'DRAFTS') await this.refreshDraftChoices(); }
+    catch (error) { if (this.stillCurrent(generation)) this.draftNotice = '保存失败：' + errorText(error as ErrorDetail); }
+    finally { if (this.stillCurrent(generation)) this.savingDraft = false; }
+  }
+  private async refreshDraftChoices(): Promise<void> {
+    if (this.loadingDraftChoices) return;
+    const generation: number = this.formGeneration; this.loadingDraftChoices = true;
+    try { await this.loadDraftChoices(); }
+    catch (error) { if (this.stillCurrent(generation)) this.draftNotice = '草稿列表读取失败：' + errorText(error as ErrorDetail); }
+    finally { if (this.stillCurrent(generation)) this.loadingDraftChoices = false; }
+  }
+  private restoreFromUi(draft: LocalDraft): void {
+    if (this.initializing || this.publishing || this.savingDraft || this.loadingDraftChoices || this.merchantBusy || this.requestUnconfirmed || this.merchantRequestUnconfirmed) return;
+    this.sheetVisible = false; this.attemptedSubmit = false; this.hasPublishedNotice = false; void this.restoreDraft(draft);
+  }
+  private submitFromUi(): void {
+    if (this.savingDraft) return;
+    if (this.hasPublishedNotice) { this.continueSameMerchant(); return; }
+    this.attemptedSubmit = true; void this.publish();
+  }
   private categoryOptions(): Array<LabelOption> {
     return CATEGORY_V2_OPTIONS.map((option: CategoryV2Option): LabelOption => { return { value: option.label }; });
   }
@@ -644,213 +739,445 @@ export struct CreateCardPage {
     return this.platformOptions().map((option: DeliveryPlatform): LabelOption => { return { value: option.label }; });
   }
   @Builder
-  private productInfoSection(): void {
-    Column({ space: 12 }) {
-      Text('01  这次吃了什么').fontSize(18).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'));
-      this.fieldLabel('消费方式', true);
-      Row({ space: 10 }) {
-        Button(this.mode === 'DELIVERY' ? '外卖 · 已选' : '外卖').layoutWeight(1).height(48).onClick((): void => this.selectMode('DELIVERY')).attributeModifier(new ChoiceActionStyle(this.mode === 'DELIVERY'));
-        Button(this.mode === 'DINE_IN' ? '到店 · 已选' : '到店').layoutWeight(1).height(48).onClick((): void => this.selectMode('DINE_IN')).attributeModifier(new ChoiceActionStyle(this.mode === 'DINE_IN'));
-      }.width('100%');
-      if (this.mode === 'UNSPECIFIED') { Text('历史内容尚未区分外卖 / 到店，可在编辑中补充。').fontSize(13).fontColor($r('app.color.muted')); }
-      this.fieldLabel('美食名称', true);
-      TextInput({ text: this.productName, placeholder: '例如：黑椒鸡排饭' }).height(48).maxLength(100).fontSize(15)
-        .backgroundColor($r('app.color.canvas')).borderRadius(16).onChange((value: string): void => { this.productName = value; });
-      this.fieldLabel('主分类', true);
-      Select(this.categoryOptions()).selected(this.categoryIndex()).height(48).width('100%')
-        .backgroundColor($r('app.color.canvas')).borderRadius(16).onSelect((index: number): void => {
-          const option: CategoryV2Option | undefined = CATEGORY_V2_OPTIONS[index];
-          if (option !== undefined) { this.categoryV2 = option.key; this.category = legacyCategoryFor(option.key); }
-        });
-      this.fieldLabel('单品价格（可选）');
-      TextInput({ text: this.price, placeholder: '留空表示未知，例如 12.30' }).height(48).fontSize(15).maxLength(12)
-        .backgroundColor($r('app.color.canvas')).borderRadius(16).onChange((value: string): void => { this.price = value; });
-      if (this.mode === 'DINE_IN') {
-        this.fieldLabel('到店人均（可选）');
-        TextInput({ text: this.dineInAvg, placeholder: '筛选与排序使用此人均价格' }).height(48).fontSize(15).maxLength(12)
-          .backgroundColor($r('app.color.canvas')).borderRadius(16).onChange((value: string): void => { this.dineInAvg = value; });
-      }
-      Text(this.mode === 'DINE_IN' ? '未填人均时不使用单品价替代。明确填写 0 表示零元。' : '建议填写单品价；留空表示未知，0 表示明确零元。')
-        .fontSize(13).lineHeight(19).fontColor($r('app.color.muted')).width('100%');
-    }.width('100%').padding(18).backgroundColor($r('app.color.surface')).borderRadius(24)
-      .border({ width: 1, color: $r('app.color.line') }).enabled(this.formEnabled());
+  private fieldLabel(title: string, required: boolean = false): void {
+    Row({ space: 4 }) {
+      Text(title).fontSize(14).fontWeight(FontWeight.Medium).fontColor(pageColor(this.palette, 'ink'));
+      if (required) { Text('*').fontSize(14).fontColor(pageColor(this.palette, 'error')).accessibilityText('必填'); }
+    }.constraintSize({ minHeight: 24 }).alignItems(VerticalAlign.Center);
   }
   @Builder
-  private merchantSection(): void {
-    Column({ space: 10 }) {
-      Text('02  在哪里吃').fontSize(18).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'));
-      if (this.merchant !== undefined) {
-        Text(this.merchant.name).fontSize(16).fontWeight(FontWeight.Medium).fontColor($r('app.color.ink')).width('100%');
-        Text(this.merchant.address).fontSize(13).fontColor($r('app.color.muted')).width('100%');
-        Text(this.merchant.verificationStatus === 'USER_CONFIRMED_PENDING' ? '用户确认地点 · 待审，不进入地图' :
-          this.merchant.verificationStatus === 'REJECTED' ? '店铺已拒绝，请更换或修正' :
-          this.merchant.coordinateSystem === 'UNKNOWN' ? '坐标系待验证，不进入地图' : '店铺已核实')
-          .fontSize(13).fontColor($r('app.color.muted')).width('100%');
-        if (this.merchant.reviewReason.length > 0) { Text('审核意见：' + this.merchant.reviewReason).fontSize(13).fontColor($r('app.color.warning')); }
-        if (this.merchant.sourceType === 'USER_CONFIRMED' && this.merchant.verificationStatus !== 'USER_CONFIRMED_APPROVED') {
-          Button('修正用户地点并重新送审').height(48).width('100%').enabled(!this.merchantRequestUnconfirmed).onClick((): void => this.correctMerchant()).attributeModifier(new SecondaryActionStyle());
-        }
-        Button('取消店铺关联').height(48).width('100%').enabled(!this.merchantRequestUnconfirmed)
-          .onClick((): void => { this.merchant = undefined; this.historicalShop = ''; }).attributeModifier(new QuietActionStyle());
-      } else {
-        Text(this.historicalShop.length > 0 ? '历史店名文本：' + this.historicalShop : '无店铺也可以发布。')
-          .fontSize(13).fontColor($r('app.color.muted')).width('100%');
-        Text('未关联可靠店铺时，此内容不进入地图和距离功能。').fontSize(13).lineHeight(19).fontColor($r('app.color.muted'));
-      }
-      Button(this.merchantBusy ? '正在选取 / 核验…' : '在地图中选择店铺').height(48).width('100%').enabled(!this.merchantRequestUnconfirmed).onClick((): void => { void this.chooseMerchant(); }).attributeModifier(new SecondaryActionStyle());
-      if (this.merchantChoice !== undefined) {
-        this.fieldLabel('确认店名');
-        TextInput({ text: this.merchantName, placeholder: '普通地图点请补充店名' }).height(48).maxLength(100).enabled(!this.merchantRequestUnconfirmed)
-          .backgroundColor($r('app.color.canvas')).borderRadius(16).onChange((value: string): void => { this.merchantName = value; });
-        this.fieldLabel('店铺地址');
-        TextInput({ text: this.merchantAddress, placeholder: '地点地址' }).height(48).maxLength(600).enabled(!this.merchantRequestUnconfirmed)
-          .backgroundColor($r('app.color.canvas')).borderRadius(16).onChange((value: string): void => { this.merchantAddress = value; });
-        if (this.merchantChoice.providerPoiId.length > 0 && this.providerEnabled) {
-          Button('关联官方 POI').height(48).width('100%').enabled(!this.merchantRequestUnconfirmed).onClick((): void => { void this.confirmMerchant(true); }).attributeModifier(new SecondaryActionStyle());
-        }
-        Button(this.merchantRequestUnconfirmed ? '重试原地点请求' : this.correctingMerchant ? '保存修正并重新送审' : '创建用户确认地点（待审）').height(48).width('100%')
-          .onClick((): void => { void this.confirmMerchant(false); }).attributeModifier(new SecondaryActionStyle());
-        Button('取消本次选点').height(48).width('100%').enabled(!this.merchantRequestUnconfirmed)
-          .onClick((): void => { this.merchantChoice = undefined; this.pendingMerchantRequest = undefined; }).attributeModifier(new QuietActionStyle());
-      }
-    }.width('100%').padding(18).backgroundColor($r('app.color.surface')).borderRadius(24)
-      .border({ width: 1, color: $r('app.color.line') }).enabled((!this.isEditing() || this.editContextReady) && !this.initializing && !this.publishing && !this.merchantBusy && !this.requestUnconfirmed);
+  private fieldError(message: string): void {
+    if (message.length > 0) {
+      Text(message).fontSize(13).lineHeight(19).fontColor(pageColor(this.palette, 'error')).width('100%')
+        .padding({ top: 4, bottom: 4 }).accessibilityText('提示：' + message);
+    }
   }
   @Builder
-  private deliverySection(): void {
-    Column({ space: 10 }) {
-      Text('外卖信息（可选）').fontSize(18).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'));
-      this.fieldLabel('外卖平台');
-      Select(this.platformLabels()).selected(this.platformOptions().findIndex((value: DeliveryPlatform): boolean => value.key === this.platformKey))
-        .height(48).width('100%').backgroundColor($r('app.color.canvas')).borderRadius(16).onSelect((index: number): void => {
-          const platform: DeliveryPlatform | undefined = this.platformOptions()[index];
-          if (platform !== undefined && platform.enabled) { this.platformKey = platform.key; this.platformLabel = platform.key.length > 0 ? platform.label : ''; }
-        });
-      Button(this.moreDeliveryInfo ? '收起更多信息' : '更多信息：订单总额 / 配送费 / 购买日期').height(48).width('100%').onClick((): void => { this.moreDeliveryInfo = !this.moreDeliveryInfo; }).attributeModifier(new QuietActionStyle());
-      if (this.moreDeliveryInfo) {
-        this.fieldLabel('订单总额（可选，元）');
-        TextInput({ text: this.orderTotal, placeholder: '例如 20.00' }).height(48).maxLength(12).attributeModifier(new FormInputStyle())
-          .onChange((value: string): void => { this.orderTotal = value; });
-        this.fieldLabel('配送费（可选，元）');
-        TextInput({ text: this.deliveryFee, placeholder: '例如 3.00' }).height(48).maxLength(12).attributeModifier(new FormInputStyle())
-          .onChange((value: string): void => { this.deliveryFee = value; });
-        this.fieldLabel('购买日期（可选）');
-        TextInput({ text: this.consumedDate, placeholder: 'YYYY-MM-DD' }).height(48).maxLength(10).attributeModifier(new FormInputStyle())
-          .onChange((value: string): void => { this.consumedDate = value; });
-        Text('只记录体验信息，请勿填写订单号、收货地址、电话或支付凭证。').fontSize(13).lineHeight(19).fontColor($r('app.color.muted'));
-      }
-    }.width('100%').padding(18).backgroundColor($r('app.color.surface')).borderRadius(24)
-      .border({ width: 1, color: $r('app.color.line') }).enabled(this.formEnabled());
+  private divider(): void { Divider().color(pageColor(this.palette, 'line')).strokeWidth(1).accessibilityLevel('no'); }
+  @Builder
+  private chevron(): void { Image($r('app.media.ic_create_chevron')).width(18).height(18).accessibilityLevel('no'); }
+  @Builder
+  private pageHeader(): void {
+    Row({ space: 8 }) {
+      Column({ space: 3 }) {
+        Text(this.isEditing() ? '编辑推荐' : '制作推荐').fontSize(26).fontWeight(FontWeight.Bold).fontColor(pageColor(this.palette, 'ink'));
+        Text('少一点操作，记得更轻松').fontSize(12).lineHeight(18).fontColor(pageColor(this.palette, 'action'));
+      }.layoutWeight(1).alignItems(HorizontalAlign.Start);
+      Button('草稿箱').attributeModifier(new CreateActionStyle('QUIET', this.palette))
+        .border({ width: 1.2, color: pageColor(this.palette, 'action'), style: BorderStyle.Dashed }).borderRadius(24)
+        .enabled(!this.initializing && !this.publishing && !this.savingDraft && !this.merchantBusy)
+        .onClick((): void => this.openSheet('DRAFTS'));
+    }.width('100%').padding({ left: 16, right: 12, top: 8, bottom: 12 });
+  }
+  @Builder
+  private modeControl(): void {
+    Row({ space: 4 }) {
+      Button('外卖').layoutWeight(1).attributeModifier(new CreateChoiceStyle(this.mode === 'DELIVERY', this.palette))
+        .animation(this.choiceAnimation()).onClick((): void => this.selectMode('DELIVERY'));
+      Button('到店').layoutWeight(1).attributeModifier(new CreateChoiceStyle(this.mode === 'DINE_IN', this.palette))
+        .animation(this.choiceAnimation()).onClick((): void => this.selectMode('DINE_IN'));
+    }.padding(4).width('100%').backgroundColor(pageColor(this.palette, 'soft')).borderRadius(16).enabled(this.formEnabled());
+    if (this.mode === 'UNSPECIFIED') {
+      Text('历史内容未区分外卖 / 到店，可保留或在这里补充。').fontSize(13).lineHeight(19).fontColor(pageColor(this.palette, 'muted')).width('100%');
+    }
+  }
+  @Builder
+  private commonFields(): void {
+    Column() {
+      Row({ space: 8 }) {
+        Column() { this.fieldLabel('美食名称', true); }.width(96).alignItems(HorizontalAlign.Start);
+        TextInput({ text: this.productName, placeholder: '请输入美食名称' }).layoutWeight(1).height(52).maxLength(100)
+          .attributeModifier(new CreateInputStyle(true, this.palette)).accessibilityText('美食名称，必填，2 到 100 字')
+          .onChange((value: string): void => { this.productName = value; });
+      }.width('100%').constraintSize({ minHeight: 52 }).enabled(this.formEnabled());
+      this.fieldError(this.nameError()); this.divider();
+      Row({ space: 8 }) {
+        Text('主分类').fontSize(14).fontWeight(FontWeight.Medium).fontColor(pageColor(this.palette, 'ink')).width(96);
+        Select(this.categoryOptions()).selected(this.categoryIndex()).value(categoryV2Label(this.categoryV2))
+          .layoutWeight(1).height(52).font({ size: 14, weight: FontWeight.Medium })
+          .fontColor(pageColor(this.palette, 'ink')).backgroundColor(Color.Transparent).borderRadius(0)
+          .optionFontColor(pageColor(this.palette, 'ink')).optionBgColor(pageColor(this.palette, 'surface'))
+          .selectedOptionBgColor(pageColor(this.palette, 'soft')).selectedOptionFontColor(pageColor(this.palette, 'action'))
+          .menuAlign(MenuAlignType.END).accessibilityText('主分类，' + categoryV2Label(this.categoryV2))
+          .onSelect((index: number): void => {
+            const option: CategoryV2Option | undefined = CATEGORY_V2_OPTIONS[index];
+            if (option !== undefined) { this.categoryV2 = option.key; this.category = legacyCategoryFor(option.key); }
+          });
+      }.width('100%').constraintSize({ minHeight: 52 }).enabled(this.formEnabled());
+      this.divider();
+      Row({ space: 6 }) {
+        Column({ space: 1 }) {
+          Text(this.mode === 'DINE_IN' ? '到店人均' : '单品价格').fontSize(14).fontWeight(FontWeight.Medium).fontColor(pageColor(this.palette, 'ink'));
+          Text('可选 · 元').fontSize(12).fontColor(pageColor(this.palette, 'muted'));
+        }.width(96).alignItems(HorizontalAlign.Start);
+        Text('¥').fontSize(16).fontColor(pageColor(this.palette, 'action'));
+        TextInput({ text: this.mode === 'DINE_IN' ? this.dineInAvg : this.price, placeholder: '留空表示未知' })
+          .height(52).layoutWeight(1).maxLength(12).type(InputType.NUMBER_DECIMAL)
+          .attributeModifier(new CreateInputStyle(true, this.palette)).accessibilityText(this.mode === 'DINE_IN' ? '到店人均，可选，单位元' : '单品价格，可选，单位元')
+          .onChange((value: string): void => { if (this.mode === 'DINE_IN') this.dineInAvg = value; else this.price = value; });
+      }.width('100%').constraintSize({ minHeight: 52 }).enabled(this.formEnabled());
+      this.fieldError(this.mainPriceError()); this.divider();
+      Button() {
+        Row({ space: 8 }) {
+          Text('关联店铺').fontSize(14).fontWeight(FontWeight.Medium).fontColor(pageColor(this.palette, 'ink')).width(96);
+          Text(this.merchantSummary()).fontSize(14).fontColor(this.merchantChoice !== undefined || this.merchantRequestUnconfirmed ? pageColor(this.palette, 'action') : pageColor(this.palette, 'muted'))
+            .layoutWeight(1).textAlign(TextAlign.End).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis });
+          this.chevron();
+        }.width('100%');
+      }.width('100%').attributeModifier(new CreateActionStyle('QUIET', this.palette)).padding({ top: 6, bottom: 6, left: 0, right: 0 })
+        .constraintSize({ minHeight: 52 }).borderRadius(0).enabled(this.merchantControlsEnabled())
+        .accessibilityText('关联店铺，' + this.merchantSummary()).onClick((): void => this.openSheet('MERCHANT'));
+      this.divider();
+      Button() {
+        Row({ space: 8 }) {
+          Text('口味评分').fontSize(14).fontWeight(FontWeight.Medium).fontColor(pageColor(this.palette, 'ink')).width(96);
+          Text(this.tasteScore.toString() + '/10 · ' + this.scoreLabel()).fontSize(15).fontWeight(FontWeight.Bold)
+            .fontColor(pageColor(this.palette, 'action')).layoutWeight(1).textAlign(TextAlign.End);
+          this.chevron();
+        }.width('100%');
+      }.width('100%').attributeModifier(new CreateActionStyle('QUIET', this.palette)).padding({ top: 6, bottom: 6, left: 0, right: 0 })
+        .constraintSize({ minHeight: 52 }).borderRadius(0).enabled(this.formEnabled())
+        .accessibilityText('口味评分，' + this.tasteScore.toString() + ' 分，' + this.scoreLabel() + '，点击修改')
+        .onClick((): void => this.openSheet('SCORE'));
+    }.width('100%').padding({ left: 12, right: 12 }).backgroundColor(pageColor(this.palette, 'surface'))
+      .borderRadius(18).border({ width: 1, color: pageColor(this.palette, 'line') });
   }
   @Builder
   private reviewSection(): void {
-    Column({ space: 10 }) {
-      Text('03  分享真实感受').fontSize(18).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'));
-      this.fieldLabel('口味评分', true); this.scoreStage();
-      Row({ space: 8 }) { ForEach(FIRST_SCORE_ROW, (score: number): void => { this.scoreButton(score); }, (score: number): string => score.toString()); }.width('100%');
-      Row({ space: 8 }) { ForEach(SECOND_SCORE_ROW, (score: number): void => { this.scoreButton(score); }, (score: number): string => score.toString()); }.width('100%');
-      this.fieldLabel('真实点评（可选）');
-      TextArea({ text: this.reviewText, placeholder: '味道、口感或推荐理由，最多 600 字' }).height(100).fontSize(15).maxLength(600)
-        .backgroundColor($r('app.color.canvas')).borderRadius(16).onChange((value: string): void => { this.reviewText = value; });
-      this.fieldLabel('来源链接（可选）');
-      TextInput({ text: this.sourceLink, placeholder: 'https://…' }).height(48).fontSize(15).maxLength(2048)
-        .backgroundColor($r('app.color.canvas')).borderRadius(16).onChange((value: string): void => { this.sourceLink = value; });
-      Text('外部链接不代表实时优惠、库存或配送承诺。').fontSize(13).fontColor($r('app.color.muted'));
-    }.width('100%').padding(18).backgroundColor($r('app.color.surface')).borderRadius(24)
-      .border({ width: 1, color: $r('app.color.line') }).enabled(this.formEnabled());
+    Column({ space: 6 }) {
+      Row({ space: 6 }) {
+        this.fieldLabel('真实点评'); Text('可选').fontSize(12).fontColor(pageColor(this.palette, 'muted'));
+        Blank(); Text(this.reviewText.length.toString() + '/600').fontSize(12).fontColor(pageColor(this.palette, 'muted'));
+      }.width('100%');
+      TextArea({ text: this.reviewText, placeholder: '说说味道、口感或推荐理由' }).height(76).maxLength(600)
+        .attributeModifier(new CreateNoteStyle(this.palette)).accessibilityText('真实点评，可选，最多 600 字')
+        .onChange((value: string): void => { this.reviewText = value; });
+    }.width('100%').enabled(this.formEnabled());
+  }
+  @Builder
+  private photoThumbnail(uri: string, position: number): void {
+    Button() {
+      Stack({ alignContent: Alignment.BottomStart }) {
+        if (uri.length > 0) {
+          Image(uri).width('100%').height('100%').objectFit(ImageFit.Cover).autoResize(true).syncLoad(false).accessibilityLevel('no');
+        } else {
+          Image($r('app.media.ic_create_photo')).width(28).height(28).align(Alignment.Center).accessibilityLevel('no');
+        }
+        Text(position === 0 ? '封面' : '实拍 ' + (position + 1).toString()).fontSize(12).fontWeight(FontWeight.Medium)
+          .fontColor(pageColor(this.palette, 'ink')).backgroundColor(pageColor(this.palette, 'surface'))
+          .padding({ left: 6, right: 6, top: 2, bottom: 2 }).borderRadius({ topRight: 8 });
+      }.width('100%').height('100%').clip(true).borderRadius(12);
+    }.width(72).height(72).attributeModifier(new CreateActionStyle('SECONDARY', this.palette)).padding(0).borderRadius(12)
+      .accessibilityText((position === 0 ? '封面' : '第 ' + (position + 1).toString() + ' 张实拍') + '，点击管理照片')
+      .onClick((): void => this.openSheet('PHOTOS'));
   }
   @Builder
   private photoSection(): void {
-    Column({ space: 10 }) {
-      Text('04  我的实拍').fontSize(18).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'));
-      Text('最多六张，首张作为列表封面').fontSize(13).fontColor($r('app.color.muted'));
-      this.fieldLabel('添加照片', true);
-      ForEach(this.retainedPhotos, (photo: RetainedPhoto): void => {
-        Row({ space: 10 }) {
-          Image(photo.url.length > 0 ? photo.url : coverFor(this.category)).width(60).height(60).objectFit(ImageFit.Contain).autoResize(true).syncLoad(false).borderRadius(16)
-            .accessibilityText('保留的照片');
-          Text(photo.url.length > 0 ? '保留现有照片' : '预览暂不可用，可保留或重选').fontSize(13).fontColor($r('app.color.muted')).layoutWeight(1);
-          Button('移除').height(48).fontSize(13).onClick((): void => {
-            this.retainedPhotos = this.retainedPhotos.filter((value: RetainedPhoto): boolean => value.id !== photo.id);
-          }).attributeModifier(new DangerActionStyle());
-        }.width('100%');
-      }, (photo: RetainedPhoto): string => photo.id);
-      if (this.photoPreviewUris.length > 0) {
-        Image(this.photoPreviewUris[0]).width(100).height(100).objectFit(ImageFit.Contain).autoResize(true).syncLoad(false).borderRadius(16).accessibilityText('新添加实拍图');
-        Text('新照片 ' + this.photoPreviewUris.length + ' 张。' + this.photoLabel).fontSize(13).fontColor($r('app.color.muted'));
-      }
-      Button(this.preparedPhotos.length > 0 ? '更换新照片' : '添加新照片').height(48).width('100%')
-        .enabled(this.retainedPhotos.length < MAX_CARD_PHOTOS).onClick((): void => { void this.chooseOwnedPhoto(); }).attributeModifier(new SecondaryActionStyle());
+    Column({ space: 6 }) {
       Row({ space: 8 }) {
-        Checkbox({ name: 'photo-rights', group: 'manual-publish' }).select(this.ownsPhoto).onChange((value: boolean): void => { this.ownsPhoto = value; });
-        Text('确认照片由本人拍摄或已获授权').fontSize(13).fontColor($r('app.color.ink')).layoutWeight(1);
-      }.height(48).width('100%');
-    }.width('100%').padding(18).backgroundColor($r('app.color.surface')).borderRadius(24)
-      .border({ width: 1, color: $r('app.color.line') }).enabled(this.formEnabled());
+        Scroll() {
+          Row({ space: 8 }) {
+            ForEach(this.retainedPhotos, (photo: RetainedPhoto, index: number): void => {
+              this.photoThumbnail(photo.url, index);
+            }, (photo: RetainedPhoto, index: number): string => photo.id + ':' + index.toString() + ':' + photo.url);
+            ForEach(this.photoPreviewUris, (uri: string, index: number): void => {
+              this.photoThumbnail(uri, this.retainedPhotos.length + index);
+            }, (_uri: string, index: number): string => this.newPhotoKey(index));
+            if (this.photoCount() < MAX_CARD_PHOTOS) {
+              Button() {
+                Column({ space: 4 }) {
+                  Image($r('app.media.ic_create_photo')).width(24).height(24).fillColor(pageColor(this.palette, 'action')).accessibilityLevel('no');
+                  Text('添加实拍').fontSize(12).fontWeight(FontWeight.Bold).fontColor(pageColor(this.palette, 'action'));
+                }.justifyContent(FlexAlign.Center).width('100%').height('100%');
+              }.width(72).height(72).attributeModifier(new CreateActionStyle('SECONDARY', this.palette)).padding(0).borderRadius(12)
+                .enabled(this.formEnabled()).onClick((): void => { void this.chooseOwnedPhoto(); });
+            }
+          }.height(76);
+        }.scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).layoutWeight(1).height(76);
+        Column({ space: 2 }) {
+          Text(this.photoCount().toString() + '/6').fontSize(18).fontWeight(FontWeight.Bold).fontColor(pageColor(this.palette, 'ink'));
+          Text('我的实拍').fontSize(12).fontColor(pageColor(this.palette, 'muted'));
+        }.width(56).alignItems(HorizontalAlign.End);
+      }.width('100%');
+      this.fieldError(this.attemptedSubmit && this.photoCount() === 0 ? '请至少添加一张实拍图。' : '');
+    }.width('100%');
   }
   @Builder
-  private draftPanel() {
-    Column({ space: 8 }) {
+  private extrasEntry(): void {
+    Button() {
       Row({ space: 8 }) {
-        Text('本机草稿').fontSize(14).fontColor($r('app.color.muted')).layoutWeight(1)
-        Button('保存草稿').attributeModifier(new QuietActionStyle()).height(48)
-          .enabled(!this.initializing && !this.publishing).onClick((): void => { void this.flushDraft(); })
-        Button('草稿箱').attributeModifier(new QuietActionStyle()).height(48)
-          .onClick((): void => { this.showDraftChoices = !this.showDraftChoices; void this.loadDraftChoices(); })
-      }.width('100%').padding({ left: 12, right: 4 }).backgroundColor($r('app.color.surface'))
-        .borderRadius(20).border({ width: 1, color: $r('app.color.line') })
-      Text(this.draftNotice.length > 0 ? this.draftNotice : '最多 10 份 · 30 天未编辑自动清理。')
-        .fontSize(12).lineHeight(18).fontColor($r('app.color.muted')).width('100%')
-      if (this.showDraftChoices) { ForEach(this.draftChoices, (draft: LocalDraft): void => {
-        Row({ space: 8 }) { Button((draft.draftType === 'EDIT' ? '编辑 · ' : '新发布 · ') + (draft.form.productName || '未命名')).height(48).layoutWeight(1).enabled(draft.targetCardId === this.editCardId).onClick((): void => { void this.restoreDraft(draft); }).attributeModifier(new SecondaryActionStyle()); Button('删除').height(48).onClick((): void => { void this.deleteDraft(draft); }).attributeModifier(new DangerActionStyle()); }
-      }, (draft: LocalDraft): string => draft.draftId); }
-    }.width('100%')
+        Text('补充信息').fontSize(14).fontWeight(FontWeight.Medium).fontColor(pageColor(this.palette, 'ink'));
+        Text(this.extrasSummary()).fontSize(13).fontColor(pageColor(this.palette, 'muted')).layoutWeight(1).textAlign(TextAlign.End);
+        this.chevron();
+      }.width('100%');
+    }.width('100%').attributeModifier(new CreateActionStyle('SECONDARY', this.palette)).constraintSize({ minHeight: 52 })
+      .enabled(this.formEnabled()).onClick((): void => this.openSheet('EXTRAS'));
+    this.fieldError(this.extrasError());
+  }
+  @Builder
+  private photoRights(): void {
+    Row({ space: 4 }) {
+      Checkbox({ name: 'photo-rights', group: 'manual-publish' }).select(this.ownsPhoto).width(24).height(24).margin(12)
+        .responseRegion({ x: -12, y: -12, width: 48, height: 48 })
+        .selectedColor(pageColor(this.palette, 'action')).unselectedColor(pageColor(this.palette, 'muted'))
+        .accessibilityText('确认照片由本人拍摄或已获授权').enabled(this.formEnabled())
+        .onChange((value: boolean): void => { this.ownsPhoto = value; });
+      Text('照片由本人拍摄或已获授权').fontSize(13).lineHeight(19).fontColor(pageColor(this.palette, 'ink')).layoutWeight(1);
+    }.width('100%').constraintSize({ minHeight: 48 });
+    this.fieldError(this.attemptedSubmit && this.photoCount() > 0 ? this.photoError() : '');
+  }
+  @Builder
+  private scoreButton(score: number): void {
+    Button() {
+      Column({ space: 3 }) {
+        Text(score.toString()).fontSize(20).fontWeight(FontWeight.Bold).fontColor(pageColor(this.palette, 'ink'));
+        Text(this.scoreLabel(score)).fontSize(12).fontColor(pageColor(this.palette, 'action'));
+      }.width('100%').alignItems(HorizontalAlign.Center);
+    }.layoutWeight(1).constraintSize({ minHeight: 68 }).attributeModifier(new CreateActionStyle('SECONDARY', this.palette))
+      .padding({ top: 8, bottom: 8, left: 4, right: 4 })
+      .backgroundColor(this.isScoreSelected(score) ? pageColor(this.palette, 'soft') : pageColor(this.palette, 'canvas'))
+      .border({ width: this.isScoreSelected(score) ? 2 : 1, color: this.isScoreSelected(score) ? pageColor(this.palette, 'action') : pageColor(this.palette, 'line') })
+      .animation(this.choiceAnimation(140)).accessibilitySelected(this.isScoreSelected(score))
+      .accessibilityText(score.toString() + ' 分，' + this.scoreLabel(score) + (this.isScoreSelected(score) ? '，已选中' : ''))
+      .enabled(this.formEnabled()).onClick((): void => { this.tasteScore = score; this.resetPublicationState(); this.sheetVisible = false; });
+  }
+  @Builder
+  private scoreSheet(): void {
+    Column({ space: 12 }) {
+      Text(this.tasteScore.toString() + '/10 · ' + this.scoreLabel()).fontSize(22).fontWeight(FontWeight.Bold).fontColor(pageColor(this.palette, 'action'));
+      Text(this.scoreReason()).fontSize(14).lineHeight(21).fontColor(pageColor(this.palette, 'muted')).width('100%');
+      Row({ space: 8 }) { ForEach(FIRST_SCORE_ROW, (score: number): void => { this.scoreButton(score); }, (score: number): string => score.toString()); }.width('100%');
+      Row({ space: 8 }) { ForEach(SECOND_SCORE_ROW, (score: number): void => { this.scoreButton(score); }, (score: number): string => score.toString()); }.width('100%');
+      Text('1–10 分，按自己的真实口味选择。').fontSize(13).lineHeight(19).fontColor(pageColor(this.palette, 'muted'));
+    }.width('100%').alignItems(HorizontalAlign.Start);
+  }
+  @Builder
+  private extrasSheet(): void {
+    Column({ space: 8 }) {
+      if (this.mode === 'DELIVERY') {
+        this.fieldLabel('外卖平台');
+        Select(this.platformLabels()).selected(this.platformOptions().findIndex((value: DeliveryPlatform): boolean => value.key === this.extraPlatformKey))
+          .value(this.extraPlatformLabel.length > 0 ? this.extraPlatformLabel : '不填写平台').height(48).width('100%')
+          .font({ size: 15 }).fontColor(pageColor(this.palette, 'ink')).backgroundColor(pageColor(this.palette, 'canvas')).borderRadius(12)
+          .optionFontColor(pageColor(this.palette, 'ink')).optionBgColor(pageColor(this.palette, 'surface'))
+          .selectedOptionBgColor(pageColor(this.palette, 'soft')).selectedOptionFontColor(pageColor(this.palette, 'action'))
+          .accessibilityText('外卖平台，可选').onSelect((index: number): void => {
+            const platform: DeliveryPlatform | undefined = this.platformOptions()[index];
+            if (platform !== undefined && platform.enabled) { this.extraPlatformKey = platform.key; this.extraPlatformLabel = platform.key.length > 0 ? platform.label : ''; }
+          });
+        this.fieldLabel('订单总额（元）');
+        TextInput({ text: this.extraOrderTotal, placeholder: '留空表示未知' }).height(48).maxLength(12).type(InputType.NUMBER_DECIMAL)
+          .attributeModifier(new CreateInputStyle(false, this.palette)).accessibilityText('订单总额，可选，单位元').onChange((value: string): void => { this.extraOrderTotal = value; });
+        this.fieldLabel('配送费（元）');
+        TextInput({ text: this.extraDeliveryFee, placeholder: '留空表示未知' }).height(48).maxLength(12).type(InputType.NUMBER_DECIMAL)
+          .attributeModifier(new CreateInputStyle(false, this.palette)).accessibilityText('配送费，可选，单位元').onChange((value: string): void => { this.extraDeliveryFee = value; });
+        this.fieldLabel('购买日期');
+        TextInput({ text: this.extraDate, placeholder: 'YYYY-MM-DD' }).height(48).maxLength(10).attributeModifier(new CreateInputStyle(false, this.palette))
+          .accessibilityText('购买日期，可选，格式 YYYY-MM-DD').onChange((value: string): void => { this.extraDate = value; });
+        Text('请勿填写订单号、收货地址、电话或支付凭证。').fontSize(13).lineHeight(19).fontColor(pageColor(this.palette, 'muted'));
+      } else if (this.mode === 'DINE_IN') {
+        this.fieldLabel('单品价格（元）');
+        TextInput({ text: this.extraPrice, placeholder: '留空表示未知' }).height(48).maxLength(12).type(InputType.NUMBER_DECIMAL)
+          .attributeModifier(new CreateInputStyle(false, this.palette)).accessibilityText('单品价格，可选，单位元').onChange((value: string): void => { this.extraPrice = value; });
+      }
+      this.fieldLabel('来源链接');
+      TextInput({ text: this.extraLink, placeholder: 'https://…' }).height(48).maxLength(2048).attributeModifier(new CreateInputStyle(false, this.palette))
+        .accessibilityText('来源链接，可选，HTTPS 地址').onChange((value: string): void => { this.extraLink = value; });
+      Text(this.mode === 'DINE_IN' ? '人均与单品价分别保存；留空表示未知，0 表示明确零元。' : '金额留空表示未知，0 表示明确零元。')
+        .fontSize(13).lineHeight(19).fontColor(pageColor(this.palette, 'muted'));
+      Text('外部链接不代表实时优惠、库存或配送承诺。').fontSize(13).lineHeight(19).fontColor(pageColor(this.palette, 'muted'));
+      this.fieldError(this.extraError);
+      Row({ space: 12 }) {
+        Button('取消').layoutWeight(1).attributeModifier(new CreateActionStyle('SECONDARY', this.palette)).onClick((): void => { this.sheetVisible = false; });
+        Button('应用信息').layoutWeight(1).attributeModifier(new CreateActionStyle('PRIMARY', this.palette)).onClick((): void => this.applyExtras());
+      }.width('100%').padding({ top: 8 });
+    }.width('100%').alignItems(HorizontalAlign.Start).enabled(this.formEnabled());
+  }
+  @Builder
+  private merchantSheet(): void {
+    Column({ space: 10 }) {
+      if (this.merchant !== undefined) {
+        Text(this.merchant.name).fontSize(17).fontWeight(FontWeight.Bold).fontColor(pageColor(this.palette, 'ink')).width('100%');
+        Text(this.merchant.address).fontSize(14).lineHeight(21).fontColor(pageColor(this.palette, 'muted')).width('100%');
+        Text(this.merchant.verificationStatus === 'USER_CONFIRMED_PENDING' ? '用户确认地点 · 待审，不进入地图' :
+          this.merchant.verificationStatus === 'REJECTED' ? '店铺已拒绝，请更换或修正' :
+          this.merchant.coordinateSystem === 'UNKNOWN' ? '坐标系待验证，不进入地图' : '店铺已核实')
+          .fontSize(13).lineHeight(19).fontColor(pageColor(this.palette, 'muted')).width('100%');
+        if (this.merchant.reviewReason.length > 0) { this.fieldError('审核意见：' + this.merchant.reviewReason); }
+        if (this.merchant.sourceType === 'USER_CONFIRMED' && this.merchant.verificationStatus !== 'USER_CONFIRMED_APPROVED') {
+          Button('修正用户地点并重新送审').width('100%').attributeModifier(new CreateActionStyle('SECONDARY', this.palette))
+            .enabled(!this.merchantRequestUnconfirmed).onClick((): void => this.correctMerchant());
+        }
+        Button('取消店铺关联').width('100%').attributeModifier(new CreateActionStyle('QUIET', this.palette)).enabled(!this.merchantRequestUnconfirmed)
+          .onClick((): void => { this.merchant = undefined; this.historicalShop = ''; });
+      } else {
+        Text(this.historicalShop.length > 0 ? '历史店名：' + this.historicalShop : '无店铺也可以发布。').fontSize(14).lineHeight(21).fontColor(pageColor(this.palette, 'muted')).width('100%');
+        Text('未关联可靠店铺时，此内容不进入地图和距离功能。').fontSize(13).lineHeight(19).fontColor(pageColor(this.palette, 'muted'));
+      }
+      Button('在地图中选择店铺').width('100%').attributeModifier(new CreateActionStyle('SECONDARY', this.palette)).enabled(!this.merchantRequestUnconfirmed)
+        .onClick((): void => { void this.chooseMerchant(); });
+      if (this.merchantChoice !== undefined) {
+        this.fieldLabel('确认店名');
+        TextInput({ text: this.merchantName, placeholder: '普通地图点请补充店名' }).height(48).maxLength(100).enabled(!this.merchantRequestUnconfirmed)
+          .attributeModifier(new CreateInputStyle(false, this.palette)).accessibilityText('确认店名').onChange((value: string): void => { this.merchantName = value; });
+        this.fieldLabel('店铺地址');
+        TextInput({ text: this.merchantAddress, placeholder: '地点地址' }).height(48).maxLength(600).enabled(!this.merchantRequestUnconfirmed)
+          .attributeModifier(new CreateInputStyle(false, this.palette)).accessibilityText('店铺地址').onChange((value: string): void => { this.merchantAddress = value; });
+        if (this.merchantChoice.providerPoiId.length > 0 && this.providerEnabled) {
+          Button('关联官方 POI').width('100%').attributeModifier(new CreateActionStyle('SECONDARY', this.palette)).enabled(!this.merchantRequestUnconfirmed)
+            .onClick((): void => { void this.confirmMerchant(true); });
+        }
+        Button(this.merchantRequestUnconfirmed ? '重试原地点请求' : this.correctingMerchant ? '保存修正并重新送审' : '创建用户确认地点（待审）')
+          .width('100%').attributeModifier(new CreateActionStyle('PRIMARY', this.palette)).onClick((): void => { void this.confirmMerchant(false); });
+        Button('取消本次选点').width('100%').attributeModifier(new CreateActionStyle('QUIET', this.palette)).enabled(!this.merchantRequestUnconfirmed)
+          .onClick((): void => { this.merchantChoice = undefined; this.pendingMerchantRequest = undefined; });
+      }
+    }.width('100%').alignItems(HorizontalAlign.Start).enabled(this.merchantControlsEnabled());
+  }
+  @Builder
+  private photosSheet(): void {
+    Column({ space: 10 }) {
+      Text('最多六张，首张作为列表封面。').fontSize(14).lineHeight(21).fontColor(pageColor(this.palette, 'muted'));
+      ForEach(this.retainedPhotos, (photo: RetainedPhoto, index: number): void => {
+        Row({ space: 10 }) {
+          if (photo.url.length > 0) { Image(photo.url).width(64).height(64).objectFit(ImageFit.Contain).autoResize(true).syncLoad(false).borderRadius(12).accessibilityText('保留的实拍图'); }
+          else { Image($r('app.media.ic_create_photo')).width(64).height(64).accessibilityText('图片预览暂不可用'); }
+          Text(index === 0 ? '封面 · 已有实拍' : '已有实拍 ' + (index + 1).toString()).fontSize(14).fontColor(pageColor(this.palette, 'ink')).layoutWeight(1);
+          Button('移除').attributeModifier(new CreateActionStyle('DANGER', this.palette)).enabled(this.formEnabled())
+            .accessibilityText('移除第 ' + (index + 1).toString() + ' 张已有实拍').onClick((): void => {
+              if (this.formEnabled()) this.retainedPhotos = this.retainedPhotos.filter((value: RetainedPhoto): boolean => value.id !== photo.id);
+            });
+        }.width('100%');
+      }, (photo: RetainedPhoto, index: number): string => photo.id + ':' + index.toString() + ':' + photo.url);
+      ForEach(this.photoPreviewUris, (uri: string, index: number): void => {
+        Row({ space: 10 }) {
+          if (uri.length > 0) { Image(uri).width(64).height(64).objectFit(ImageFit.Contain).autoResize(true).syncLoad(false).borderRadius(12).accessibilityText('新增的实拍图'); }
+          else { Image($r('app.media.ic_create_photo')).width(64).height(64).accessibilityText('图片预览暂不可用'); }
+          Text(this.retainedPhotos.length + index === 0 ? '封面 · 新增实拍' : '新增实拍 ' + (index + 1).toString()).fontSize(14).fontColor(pageColor(this.palette, 'ink')).layoutWeight(1);
+          Button('移除').attributeModifier(new CreateActionStyle('DANGER', this.palette)).enabled(this.formEnabled())
+            .accessibilityText('移除第 ' + (index + 1).toString() + ' 张新增实拍').onClick((): void => this.removeNewPhoto(index));
+        }.width('100%');
+      }, (_uri: string, index: number): string => this.newPhotoKey(index));
+      if (this.photoLabel.length > 0) { Text(this.photoLabel).fontSize(13).lineHeight(19).fontColor(pageColor(this.palette, 'muted')); }
+      Button(this.photoCount() >= MAX_CARD_PHOTOS ? '已达六张上限' : '继续添加实拍').width('100%').attributeModifier(new CreateActionStyle('PRIMARY', this.palette))
+        .enabled(this.formEnabled() && this.photoCount() < MAX_CARD_PHOTOS).onClick((): void => { void this.chooseOwnedPhoto(); });
+      if (this.photoPreviewUris.length > 0) {
+        Button('重新选择全部新照片').width('100%').attributeModifier(new CreateActionStyle('SECONDARY', this.palette)).enabled(this.formEnabled())
+          .onClick((): void => { void this.chooseOwnedPhoto(true); });
+        Text('重新选择仅替换新增照片；取消选择会保留当前照片。').fontSize(13).lineHeight(19).fontColor(pageColor(this.palette, 'muted'));
+      }
+      this.photoRights();
+    }.width('100%').alignItems(HorizontalAlign.Start);
+  }
+  @Builder
+  private draftsSheet(): void {
+    Column({ space: 10 }) {
+      Text('草稿保存在本机 · 最多 10 份 · 30 天未编辑自动清理').fontSize(13).lineHeight(19).fontColor(pageColor(this.palette, 'muted')).width('100%');
+      if (this.draftNotice.length > 0) { Text(this.draftNotice).fontSize(13).lineHeight(19).fontColor(pageColor(this.palette, 'action')).width('100%'); }
+      if (this.loadingDraftChoices) { Text('正在读取本机草稿…').fontSize(14).fontColor(pageColor(this.palette, 'muted')); }
+      else if (this.draftChoices.length === 0) { Text('暂无本机草稿').fontSize(15).fontColor(pageColor(this.palette, 'muted')).padding({ top: 16, bottom: 16 }); }
+      ForEach(this.draftChoices, (draft: LocalDraft): void => {
+        Column({ space: 6 }) {
+          Text(draft.form.productName || '未命名推荐').fontSize(15).fontWeight(FontWeight.Medium).fontColor(pageColor(this.palette, 'ink')).width('100%');
+          Text(draft.draftType === 'EDIT' ? '编辑草稿 · 仅在对应推荐中恢复' : '新发布草稿').fontSize(12).lineHeight(18).fontColor(pageColor(this.palette, 'muted')).width('100%');
+          Row({ space: 8 }) {
+            Button('继续填写').layoutWeight(1).attributeModifier(new CreateActionStyle('SECONDARY', this.palette))
+              .enabled(draft.targetCardId === this.editCardId && !this.initializing && !this.publishing && !this.savingDraft && !this.loadingDraftChoices && !this.merchantBusy && !this.requestUnconfirmed && !this.merchantRequestUnconfirmed)
+              .onClick((): void => this.restoreFromUi(draft));
+            Button('删除').attributeModifier(new CreateActionStyle('DANGER', this.palette))
+              .enabled(!this.initializing && !this.publishing && !this.savingDraft && !this.loadingDraftChoices && !this.merchantBusy && !this.requestUnconfirmed && !this.merchantRequestUnconfirmed)
+              .onClick((): void => { void this.deleteDraft(draft); });
+          }.width('100%');
+        }.width('100%').padding(12).backgroundColor(pageColor(this.palette, 'canvas')).borderRadius(14).alignItems(HorizontalAlign.Start);
+      }, (draft: LocalDraft): string => draft.draftId + ':' + draft.updatedAt.toString());
+      Button('保存当前草稿').width('100%').attributeModifier(new CreateActionStyle('PRIMARY', this.palette))
+        .enabled(this.draftReady && !this.initializing && !this.publishing && !this.savingDraft && !this.loadingDraftChoices && !this.merchantBusy).onClick((): void => { void this.saveDraftFromUi(); });
+      Button('清空当前表单').width('100%').attributeModifier(new CreateActionStyle('QUIET', this.palette)).enabled(this.formEnabled() && !this.isEditing())
+        .onClick((): void => {
+          try { ModeFieldCache.clear(this.context(), this.activeUid, this.editCardId); } catch (_error) { }
+          this.resetForm();
+        });
+    }.width('100%').alignItems(HorizontalAlign.Start);
+  }
+  @Builder
+  private busyFeedback(): void {
+    if (this.initializing || this.publishing || this.merchantBusy || this.savingDraft) {
+      Row({ space: 8 }) {
+        if (!this.reducedMotion && this.pageActive && this.appActive) { LoadingProgress().width(24).height(24).color(pageColor(this.palette, 'action')); }
+        Text(this.initializing ? '正在读取表单…' : this.merchantBusy ? '正在选取 / 核验店铺…' : this.savingDraft ? '正在保存本机草稿…' : '正在处理照片或提交…')
+          .fontSize(13).lineHeight(19).fontColor(pageColor(this.palette, 'action')).layoutWeight(1);
+      }.width('100%').padding(10).backgroundColor(pageColor(this.palette, 'soft')).borderRadius(12);
+    }
+  }
+  @Builder
+  private sheetContent(): void {
+    Column({ space: 0 }) {
+      Row({ space: 8 }) {
+        Text(this.sheetTitle()).fontSize(18).fontWeight(FontWeight.Bold).fontColor(pageColor(this.palette, 'ink')).layoutWeight(1);
+        Button(this.sheetKind === 'EXTRAS' ? '取消' : '关闭').attributeModifier(new CreateActionStyle('QUIET', this.palette))
+          .enabled(!this.publishing && !this.savingDraft && !this.merchantBusy).onClick((): void => { this.sheetVisible = false; });
+      }.width('100%').padding({ left: 20, right: 12, top: 8, bottom: 4 });
+      Scroll() {
+        Column({ space: 12 }) {
+          if (this.sheetKind === 'SCORE') { this.scoreSheet(); }
+          else if (this.sheetKind === 'EXTRAS') { this.extrasSheet(); }
+          else if (this.sheetKind === 'MERCHANT') { this.merchantSheet(); }
+          else if (this.sheetKind === 'PHOTOS') { this.photosSheet(); }
+          else { this.draftsSheet(); }
+          this.busyFeedback();
+          if (this.sheetKind === 'MERCHANT' || this.sheetKind === 'PHOTOS') {
+            Text(this.status).fontSize(13).lineHeight(19).fontColor(pageColor(this.palette, 'muted')).width('100%');
+          }
+        }.width('100%').padding({ left: 20, right: 20, top: 8, bottom: 28 }).alignItems(HorizontalAlign.Start);
+      }.layoutWeight(1).width('100%').align(Alignment.TopStart);
+    }.width('100%').height('100%').backgroundColor(pageColor(this.palette, 'surface'));
+  }
+  @Builder
+  private formFeedback(): void {
+    this.busyFeedback();
+    Text(this.status === '填写美食信息，留下你的真实口碑。' && this.draftNotice.length > 0 ? this.draftNotice : this.status)
+      .fontSize(13).lineHeight(19).fontColor(this.hasPublishedNotice ? pageColor(this.palette, 'good') : pageColor(this.palette, 'muted')).width('100%');
+    if (this.mode === 'DINE_IN') { Text('到店人均与单品价分别记录，未填人均不以单品价替代。').fontSize(12).lineHeight(18).fontColor(pageColor(this.palette, 'muted')).width('100%'); }
+    if (this.requestUnconfirmed) { Text('提交结果尚未确认，输入已保留。重试会继续上次提交。').fontSize(13).lineHeight(19).fontColor(pageColor(this.palette, 'error')).width('100%'); }
+    if (this.merchantRequestUnconfirmed || this.merchantChoice !== undefined) {
+      Button(this.merchantRequestUnconfirmed ? '查看并重试原地点请求' : '继续确认店铺').width('100%').attributeModifier(new CreateActionStyle('SECONDARY', this.palette))
+        .enabled(this.merchantControlsEnabled()).onClick((): void => this.openSheet('MERCHANT'));
+    }
+    if (this.isEditing() && !this.editContextReady && !this.initializing && !this.requestUnconfirmed) {
+      Button(this.savedEditNeedsReload ? '重新读取已保存内容' : '读取最新基准并保留表单').width('100%').attributeModifier(new CreateActionStyle('SECONDARY', this.palette))
+        .enabled(!this.publishing && !this.savingDraft).onClick((): void => { void this.reloadEditBasis(); });
+    }
+    if (this.isEditing() && this.currentRevision !== undefined && this.currentRevision.status === 'PENDING') {
+      Button('撤回旧待审编辑').width('100%').attributeModifier(new CreateActionStyle('DANGER', this.palette)).enabled(this.formEnabled())
+        .onClick((): void => { void this.withdraw(); });
+    }
+  }
+  @Builder
+  private submitBar(): void {
+    Row({ space: 12 }) {
+      Button(this.savingDraft ? '保存中…' : '保存草稿').layoutWeight(1).attributeModifier(new CreateActionStyle('SECONDARY', this.palette))
+        .enabled(this.draftReady && !this.initializing && !this.publishing && !this.savingDraft && !this.loadingDraftChoices && !this.merchantBusy)
+        .onClick((): void => { void this.saveDraftFromUi(); });
+      Button(this.publishing ? '正在处理…' : this.requestUnconfirmed ? '重试原请求' : this.hasPublishedNotice ? '继续制作同店菜品' : this.isEditing() ? '保存修改' : '发布推荐')
+        .layoutWeight(1.5).attributeModifier(new CreateActionStyle('PRIMARY', this.palette)).fontSize(16).fontWeight(FontWeight.Bold)
+        .enabled((!this.isEditing() || this.editContextReady || this.requestUnconfirmed) && !this.publishing && !this.initializing && !this.savingDraft && !this.merchantBusy && !this.merchantRequestUnconfirmed)
+        .onClick((): void => this.submitFromUi());
+    }.width('100%').padding({ left: 16, right: 16, top: 10, bottom: 10 }).backgroundColor(pageColor(this.palette, 'canvas'))
+      .border({ width: { top: 1 }, color: pageColor(this.palette, 'line') });
   }
   build() {
-    Scroll() {
-      Column({ space: 14 }) {
-        Row({ space: 12 }) {
-          Text(this.isEditing() ? '编辑推荐' : '制作推荐').fontSize(23).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink')).layoutWeight(1);
-          if (this.isEditing()) {
-            Button('返回详情').height(48).onClick((): void => this.onEditingFinished()).attributeModifier(new QuietActionStyle());
-          } else {
-            Button('重置').height(48).enabled(this.formEnabled()).onClick((): void => {
-              try { ModeFieldCache.clear(this.context(), this.activeUid, this.editCardId); } catch (_error) { }
-              this.resetForm();
-            }).attributeModifier(new QuietActionStyle());
-          }
-        }.width('100%');
-        this.draftPanel();
-        if (this.initializing) {
-          LoadingProgress().height(40).width(40).color($r('app.color.accent_action'));
-          Text('正在读取编辑状态…').fontSize(13).fontColor($r('app.color.muted'));
-        }
-        if (this.hasPublishedNotice) {
-          Button('继续发布同店菜品').height(52).width('100%').onClick((): void => this.continueSameMerchant()).attributeModifier(new SecondaryActionStyle());
-        }
-        Column({ space: 6 }) {
-          Text('记录这一口的好味道').fontSize(21).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'));
-          Text('实拍 · 评分 · 真实感受').fontSize(14).fontColor($r('app.color.action_text'));
-        }.width('100%').alignItems(HorizontalAlign.Start).padding(20).backgroundColor($r('app.color.accent_soft')).borderRadius(24);
-        this.productInfoSection(); this.merchantSection();
-        if (this.mode === 'DELIVERY') { this.deliverySection(); }
-        this.reviewSection(); this.photoSection();
-        Text(this.status).fontSize(13).lineHeight(20).fontColor(this.hasPublishedNotice ? $r('app.color.leaf') : $r('app.color.muted'))
-          .width('100%').padding(12).backgroundColor($r('app.color.accent_soft')).borderRadius(16);
-        if (this.isEditing() && !this.editContextReady && !this.initializing && !this.requestUnconfirmed) {
-          Button(this.savedEditNeedsReload ? '重新读取已保存内容' : '读取最新基准并保留表单').height(48).width('100%').enabled(!this.publishing)
-            .onClick((): void => { void this.reloadEditBasis(); }).attributeModifier(new SecondaryActionStyle());
-        }
-        Button(this.publishing ? '正在保存…' : this.requestUnconfirmed ? '重试原请求' : this.isEditing() ? '保存修改' : '发布这张卡')
-          .enabled((!this.isEditing() || this.editContextReady || this.requestUnconfirmed) && !this.publishing && !this.initializing && !this.merchantBusy && !this.merchantRequestUnconfirmed).width('100%').height(52)
-          .onClick((): void => { void this.publish(); }).attributeModifier(new PrimaryActionStyle()).fontSize(16).fontWeight(FontWeight.Bold);
-        if (this.isEditing() && this.currentRevision !== undefined && this.currentRevision.status === 'PENDING') {
-          Button('撤回旧待审编辑').height(48).width('100%').enabled(this.formEnabled()).onClick((): void => { void this.withdraw(); }).attributeModifier(new DangerActionStyle());
-        }
-        if (!this.formEnabled() && !this.initializing && this.requestUnconfirmed) {
-          Text('提交结果尚未确认，输入已保留。点击重试将继续上次提交。').fontSize(13).lineHeight(19).fontColor($r('app.color.warning'));
-        }
-      }.width('100%').padding({ left: 14, right: 14, top: 14, bottom: 28 }).alignItems(HorizontalAlign.Start);
-    }.width('100%').height('100%').align(Alignment.TopStart).backgroundColor($r('app.color.canvas'));
+    Stack({ alignContent: Alignment.TopStart }) {
+      CreateCardBackdrop({ palette: this.palette });
+      Column({ space: 0 }) {
+        this.pageHeader();
+        Scroll() {
+          Column({ space: 8 }) {
+            this.modeControl(); this.commonFields(); this.reviewSection(); this.photoSection(); this.extrasEntry(); this.photoRights(); this.formFeedback();
+          }.width('100%').padding({ left: 16, right: 16, bottom: 16 }).alignItems(HorizontalAlign.Start);
+        }.width('100%').layoutWeight(1).align(Alignment.TopStart);
+        this.submitBar();
+      }.width('100%').height('100%');
+    }.width('100%').height('100%').backgroundColor(pageColor(this.palette, 'canvas'))
+      .bindSheet($$this.sheetVisible, this.sheetContent(), this.sheetOptions());
   }
 }

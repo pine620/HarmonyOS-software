@@ -1,9 +1,11 @@
+import { PagePaletteName, pageColor } from '../common/PagePaletteUi';
 import { common } from '@kit.AbilityKit';
 import util from '@ohos.util';
 import { FoodCard } from '../model/CloudContracts';
 import { cardPriceText } from '../model/CardPrice';
 import { FoodChoiceReceipt, FoodChoiceRequest, RandomFoodCards, RandomFoodCardsRequest, RandomFoodPool,
-  RandomFoodPoolRequest, RandomFoodRound, RandomFoodSource, copyRandomFoodRound, randomFoodSourceLabel } from '../model/RandomFoodModels';
+  RandomFoodPoolRequest, RandomFoodRound, RandomFoodSource, copyRandomFoodRound, randomFoodSourceLabel,
+  randomFoodNextMealAt, randomFoodCanStartNextMeal } from '../model/RandomFoodModels';
 import { RandomPrimaryStyle, RandomSecondaryStyle, RandomFoodMotionObserver, randomFoodTransition,
   randomFoodAccountUnavailable } from '../common/RandomFoodUi';
 import { stage47ErrorText } from '../common/Stage47Ui';
@@ -17,10 +19,13 @@ import { ReadRequestOptions } from '../service/ReadScheduler';
 
 @Component
 export struct RandomFoodPage {
+  @Prop palette: PagePaletteName = 'NOTE';
   @Prop @Watch('onVisibilityChanged') navigationVisible: boolean = true;
   @StorageLink('stage47AppActive') @Watch('onActiveChanged') appActive: boolean = true;
   @StorageLink('accountContentRevision') @Watch('onRevisionChanged') accountRevision: number = 0;
   @StorageLink('contentMutationRevision') @Watch('onRevisionChanged') contentRevision: number = 0;
+  // Votes no longer bump contentMutationRevision; the personal pool is built from favorites.
+  @StorageLink('favoritesMutationRevision') @Watch('onRevisionChanged') favoritesRevision: number = 0;
   onBack: () => void = (): void => {};
   onOpenCard: (card: FoodCard) => void = (_card: FoodCard): void => {};
   onOpenHistory: () => void = (): void => {};
@@ -34,10 +39,13 @@ export struct RandomFoodPage {
   @State motion: boolean = true;
   @State systemReduced: boolean = true;
   @State rangeOpen: boolean = false;
+  @State mealNow: number = Date.now();
   private owner: string = '';
   private session: number = 0;
   private generation: number = 0;
   private active: boolean = false;
+  private mealClockTimer: number = -1;
+  private mealClockGeneration: number = 0;
   private motionObserver: RandomFoodMotionObserver = new RandomFoodMotionObserver((reduced: boolean): void => {
     if (this.active) this.systemReduced = reduced;
   });
@@ -52,7 +60,7 @@ export struct RandomFoodPage {
   private largeText(): boolean { return this.fontScale() > 1.3; }
   private motionAllowed(): boolean { return this.motion && !this.systemReduced; }
   private showError(error: Object, fallback: string): void {
-    if (randomFoodAccountUnavailable(error)) { this.cards = []; this.round = undefined; }
+    if (randomFoodAccountUnavailable(error)) { this.cards = []; this.round = undefined; this.stopMealClock(); }
     this.message = stage47ErrorText(error, fallback);
   }
   private viewer(): string { const uid: string = AccountRequestGuard.owner(); return uid.length === 0 ? 'guest' : 'user:' + uid; }
@@ -70,7 +78,7 @@ export struct RandomFoodPage {
   private onActiveChanged(): void { if (this.appActive) this.resume(); else this.pause(); }
   private onRevisionChanged(): void { this.pause(); this.resume(); }
   private pause(): void {
-    this.active = false; this.motionObserver.stop(); this.generation++; this.cards = []; this.busy = false;
+    this.active = false; this.motionObserver.stop(); this.stopMealClock(); this.generation++; this.cards = []; this.busy = false;
   }
   private resume(): void {
     if (this.active || !this.navigationVisible || !this.appActive) return;
@@ -83,10 +91,12 @@ export struct RandomFoodPage {
     } catch (error) { this.round = undefined; this.message = stage47ErrorText(error as Object, '本轮进度暂不可读取。'); }
   }
   private loadSource(): void {
+    this.stopMealClock();
     this.generation++; this.cards = []; this.index = 0; this.busy = false; this.rangeOpen = false;
     this.round = RandomFoodRoundStore.read(this.context(), this.owner, this.source);
     this.message = this.round !== undefined && this.round.ended ? '本轮已结束，点击开始新一轮。' : '翻开三张，选一个喜欢的。';
     if (this.round !== undefined && this.round.batchIds.length > 0) void this.restore();
+    this.refreshMealClock();
   }
   private switchSource(source: RandomFoodSource): void {
     if (this.busy || source === this.source) return;
@@ -97,6 +107,31 @@ export struct RandomFoodPage {
   private commit(round: RandomFoodRound): void {
     RandomFoodRoundStore.write(this.context(), round);
     this.round = copyRandomFoodRound(round);
+    this.refreshMealClock();
+  }
+  private nextMealAt(): number { return this.round === undefined ? 0 : randomFoodNextMealAt(this.round); }
+  private nextMealReady(now: number): boolean {
+    return this.round !== undefined && randomFoodCanStartNextMeal(this.round, now);
+  }
+  private nextMealRemaining(): string {
+    const totalMinutes: number = Math.ceil(Math.max(0, this.nextMealAt() - this.mealNow) / 60000);
+    const hours: number = Math.floor(totalMinutes / 60), minutes: number = totalMinutes % 60;
+    return (hours > 0 ? hours.toString() + '小时' : '') + (minutes > 0 || hours === 0 ? minutes.toString() + '分钟' : '');
+  }
+  private stopMealClock(): void {
+    this.mealClockGeneration++;
+    if (this.mealClockTimer !== -1) clearTimeout(this.mealClockTimer);
+    this.mealClockTimer = -1;
+  }
+  private refreshMealClock(): void {
+    this.stopMealClock(); this.mealNow = Date.now();
+    const remaining: number = this.nextMealAt() - this.mealNow;
+    if (!this.current(this.generation) || !this.confirmed() || !Number.isFinite(remaining) || remaining <= 0) return;
+    const clockGeneration: number = this.mealClockGeneration, generation: number = this.generation;
+    // Refresh presentation only; expiration never clears a choice or starts a request.
+    this.mealClockTimer = setTimeout((): void => {
+      if (clockGeneration === this.mealClockGeneration && this.current(generation)) this.refreshMealClock();
+    }, Math.max(1, Math.min(60000, remaining)));
   }
   private blankRound(): RandomFoodRound {
     const value: RandomFoodRound = { version: 1, owner: this.owner, source: this.source, roundId: util.generateRandomUUID(),
@@ -145,12 +180,16 @@ export struct RandomFoodPage {
     this.message = round.shownCount === 0 ? '本轮候选不足三张，请换来源或稍后开始新一轮。' : '剩余可用候选不足三张，本轮结束。';
   }
   private async draw(newRound: boolean = false): Promise<void> {
-    if (this.busy || !this.active) return;
+    if (this.busy || !this.current(this.generation)) return;
     if (this.round !== undefined && this.round.pendingCardId.length > 0) { this.message = '先重试保存上次选择，再继续抽取。'; return; }
+    const nextMeal: boolean = this.confirmed();
+    if (nextMeal && !this.nextMealReady(Date.now())) {
+      this.refreshMealClock(); this.message = '本餐已经选定，满6小时后可抽下一餐。'; return;
+    }
     const generation: number = ++this.generation;
-    this.busy = true; this.message = '正在准备这一轮的三张…';
+    this.busy = true; this.message = nextMeal ? '正在准备下一餐的三张…' : '正在准备这一轮的三张…';
     try {
-      let round: RandomFoodRound = this.round === undefined || newRound ? this.blankRound() : copyRandomFoodRound(this.round);
+      let round: RandomFoodRound = this.round === undefined || newRound || nextMeal ? this.blankRound() : copyRandomFoodRound(this.round);
       if (round.ended && !newRound) return;
       if (round.preparedAt === 0) {
         this.commit(round);
@@ -255,9 +294,14 @@ export struct RandomFoodPage {
   }
   private confirmed(): boolean { return this.round !== undefined && this.round.chosenCardId.length > 0; }
   private drawStyle(): AttributeModifier<ButtonAttribute> {
-    return this.cards.length > 0 ? new RandomSecondaryStyle() : new RandomPrimaryStyle();
+    return !this.confirmed() && this.cards.length > 0 ? new RandomSecondaryStyle(this.palette) : new RandomPrimaryStyle(this.palette);
   }
-  private sourceNote(): string { return this.source === 'MY' ? '想吃 + 收藏' : this.source === 'FRIENDS' ? '当前好友发布的卡片' : '公开发布的美食卡片'; }
+  private drawLabel(): string {
+    if (this.confirmed()) return '抽下一餐';
+    if (this.round !== undefined && this.round.ended) return '开始新一轮';
+    return this.cards.length > 0 || (this.round !== undefined && this.round.batchIds.length > 0) ? '再抽三张' : '帮我选';
+  }
+  private sourceNote(): string { return this.source === 'MY' ? '我的收藏' : this.source === 'FRIENDS' ? '当前好友发布的卡片' : '公开发布的美食卡片'; }
   private merchant(card: FoodCard): string { return card.merchantNameSnapshot || card.shop || '未关联店铺'; }
   private cardRenderKey(card: FoodCard): string {
     // Match the feed: rebuild the placeholder when an asynchronous cover settles.
@@ -282,15 +326,15 @@ export struct RandomFoodPage {
   }
   @Builder private header() {
     Row({ space: 8 }) {
-      Button('‹').fontSize(30).width(48).height(48).backgroundColor(Color.Transparent).fontColor($r('app.color.random_ink'))
+      Button('‹').fontSize(30).width(48).height(48).backgroundColor(Color.Transparent).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'ink') : $r('app.color.random_ink')))
         .accessibilityText('返回').onClick((): void => this.onBack())
       Column({ space: 2 }) {
-        Text('食刻').fontSize(19).fontWeight(FontWeight.Bold).fontColor($r('app.color.random_ink'))
-        Text('FOOD MOMENTS').fontSize(10).letterSpacing(1).fontColor($r('app.color.random_accent')).accessibilityLevel('no')
+        Text('食刻').fontSize(19).fontWeight(FontWeight.Bold).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'ink') : $r('app.color.random_ink')))
+        Text('FOOD MOMENTS').fontSize(10).letterSpacing(1).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'action') : $r('app.color.random_accent'))).accessibilityLevel('no')
       }.layoutWeight(1)
       Button('选择记录').fontSize(13).labelStyle({ maxLines: 2, overflow: TextOverflow.Ellipsis })
         .constraintSize({ minWidth: 64, minHeight: 48 }).backgroundColor(Color.Transparent)
-        .fontColor($r('app.color.random_muted')).onClick((): void => { if (this.owner === 'guest') this.onLogin(); else this.onOpenHistory(); })
+        .fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'muted') : $r('app.color.random_muted'))).onClick((): void => { if (this.owner === 'guest') this.onLogin(); else this.onOpenHistory(); })
     }.width('100%')
   }
   @Builder private sourcesControl() {
@@ -300,29 +344,29 @@ export struct RandomFoodPage {
           Button(randomFoodSourceLabel(source)).type(ButtonType.Normal).constraintSize({ minHeight: 48 }).layoutWeight(1).borderRadius(8)
             .labelStyle({ maxLines: 2, overflow: TextOverflow.Ellipsis })
             .backgroundColor(Color.Transparent)
-            .fontColor(source === this.source ? $r('app.color.random_accent') : $r('app.color.random_muted')).fontSize(15)
+            .fontColor(source === this.source ? (this.palette === 'PERSONAL' ? pageColor(this.palette, 'action') : $r('app.color.random_accent')) : (this.palette === 'PERSONAL' ? pageColor(this.palette, 'muted') : $r('app.color.random_muted'))).fontSize(15)
             .fontWeight(source === this.source ? FontWeight.Bold : FontWeight.Normal).enabled(!this.busy)
             .accessibilitySelected(source === this.source).onClick((): void => this.switchSource(source))
         }, (source: RandomFoodSource): string => source)
       }.width('100%')
       Row() {
-        Row().width('33.333%').height(2).backgroundColor($r('app.color.random_accent'))
+        Row().width('33.333%').height(2).backgroundColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'action') : $r('app.color.random_accent')))
           .translate({ x: (this.sources.indexOf(this.source) * 100).toString() + '%' })
           .animation({ duration: this.motionAllowed() ? 180 : 0, curve: Curve.EaseOut })
-      }.width('100%').height(2).backgroundColor($r('app.color.random_line'))
+      }.width('100%').height(2).backgroundColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'line') : $r('app.color.random_line')))
     }.width('100%')
   }
   @Builder private cardBack(ordinal: string, angle: number, offset: number) {
     Column({ space: 8 }) {
-      Text(ordinal).fontSize(24).maxFontScale(1.4).fontWeight(FontWeight.Medium).fontColor($r('app.color.random_accent'))
+      Text(ordinal).fontSize(24).maxFontScale(1.4).fontWeight(FontWeight.Medium).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'action') : $r('app.color.random_accent')))
         .width('100%').margin({ top: 16 })
       Blank()
       Image($r('app.media.ic_random_food_back')).width(128).height(128).accessibilityLevel('no')
-      Text('下一份灵感').fontSize(14).maxFontScale(1.4).fontColor($r('app.color.random_muted'))
+      Text('下一份灵感').fontSize(14).maxFontScale(1.4).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'muted') : $r('app.color.random_muted')))
       Blank()
-      Text('食刻 · 今日篇').fontSize(11).maxFontScale(1.4).fontColor($r('app.color.random_muted')).margin({ bottom: 16 })
-    }.width('72%').height(this.backHeight()).padding({ left: 20, right: 20 }).backgroundColor($r('app.color.random_surface'))
-      .borderRadius(16).border({ width: 1, color: $r('app.color.random_line') }).rotate({ angle }).translate({ x: offset })
+      Text('食刻 · 今日篇').fontSize(11).maxFontScale(1.4).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'muted') : $r('app.color.random_muted'))).margin({ bottom: 16 })
+    }.width('72%').height(this.backHeight()).padding({ left: 20, right: 20 }).backgroundColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'surface') : $r('app.color.random_surface')))
+      .borderRadius(16).border({ width: 1, color: (this.palette === 'PERSONAL' ? pageColor(this.palette, 'line') : $r('app.color.random_line')) }).rotate({ angle }).translate({ x: offset })
   }
   @Builder private backs() {
     Stack({ alignContent: Alignment.Center }) {
@@ -340,19 +384,19 @@ export struct RandomFoodPage {
       } else {
         Column({ space: 12 }) {
           Image($r('app.media.ic_random_food_back')).width(this.largeText() ? 48 : 64).height(this.largeText() ? 48 : 64).accessibilityLevel('no')
-          Text(card.photoPath.length === 0 ? '暂无实拍图' : '实拍图加载中或暂不可用').fontSize(13).fontColor($r('app.color.random_muted'))
+          Text(card.photoPath.length === 0 ? '暂无实拍图' : '实拍图加载中或暂不可用').fontSize(13).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'muted') : $r('app.color.random_muted')))
             .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis }).textAlign(TextAlign.Center)
-        }.width('100%').height(224).padding(16).justifyContent(FlexAlign.Center).backgroundColor($r('app.color.random_soft'))
+        }.width('100%').height(224).padding(16).justifyContent(FlexAlign.Center).backgroundColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'soft') : $r('app.color.random_soft')))
       }
       Column({ space: 6 }) {
         Text(card.productName).fontSize(21).fontWeight(FontWeight.Bold).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
-          .fontColor($r('app.color.random_ink')).width('100%')
-        Text(this.merchant(card)).fontSize(13).fontColor($r('app.color.random_muted')).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
-        Text(cardPriceText(card)).fontSize(16).fontWeight(FontWeight.Medium).fontColor($r('app.color.random_accent'))
+          .fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'ink') : $r('app.color.random_ink'))).width('100%')
+        Text(this.merchant(card)).fontSize(13).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'muted') : $r('app.color.random_muted'))).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
+        Text(cardPriceText(card)).fontSize(16).fontWeight(FontWeight.Medium).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'action') : $r('app.color.random_accent')))
           .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
       }.padding(16).width('100%').alignItems(HorizontalAlign.Start)
-    }.width('100%').backgroundColor($r('app.color.random_surface')).borderRadius(16).clip(true)
-      .border({ width: 1, color: $r('app.color.random_line') })
+    }.width('100%').backgroundColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'surface') : $r('app.color.random_surface'))).borderRadius(16).clip(true)
+      .border({ width: 1, color: (this.palette === 'PERSONAL' ? pageColor(this.palette, 'line') : $r('app.color.random_line')) })
   }
   @Builder private results(key: string) {
     Swiper(this.swiper) {
@@ -368,12 +412,12 @@ export struct RandomFoodPage {
   @Builder private navigationButtons() {
     Row({ space: 4 }) {
       if (!this.confirmed() && this.cards.length === 3) {
-        Button('‹').width(48).height(48).fontSize(24).backgroundColor(Color.Transparent).fontColor($r('app.color.random_ink'))
+        Button('‹').width(48).height(48).fontSize(24).backgroundColor(Color.Transparent).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'ink') : $r('app.color.random_ink')))
           .enabled(!this.busy && this.index > 0).accessibilityText('上一张美食卡片').onClick((): void => this.moveCard(true))
-        Text((this.index + 1).toString() + ' / 3').fontSize(14).fontWeight(FontWeight.Medium).fontColor($r('app.color.random_ink'))
+        Text((this.index + 1).toString() + ' / 3').fontSize(14).fontWeight(FontWeight.Medium).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'ink') : $r('app.color.random_ink')))
           .layoutWeight(1).textAlign(TextAlign.Center).maxLines(1)
           .accessibilityText('第' + (this.index + 1).toString() + '张，共三张')
-        Button('›').width(48).height(48).fontSize(24).backgroundColor(Color.Transparent).fontColor($r('app.color.random_ink'))
+        Button('›').width(48).height(48).fontSize(24).backgroundColor(Color.Transparent).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'ink') : $r('app.color.random_ink')))
           .enabled(!this.busy && this.index < 2).accessibilityText('下一张美食卡片').onClick((): void => this.moveCard(false))
       }
     }.width(this.largeText() ? '100%' : '58%')
@@ -381,7 +425,7 @@ export struct RandomFoodPage {
   @Builder private previewButton() {
     Button('查看卡片 ›').constraintSize({ minHeight: 48 }).fontSize(13).backgroundColor(Color.Transparent)
       .width(this.largeText() || this.cards.length !== 3 ? '100%' : '42%')
-      .labelStyle({ maxLines: 2, overflow: TextOverflow.Ellipsis }).fontColor($r('app.color.random_accent'))
+      .labelStyle({ maxLines: 2, overflow: TextOverflow.Ellipsis }).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'action') : $r('app.color.random_accent')))
       .enabled(!this.busy).onClick((): void => { void this.preview(); })
   }
   @Builder private navigationRail() {
@@ -400,55 +444,61 @@ export struct RandomFoodPage {
         this.header()
         Text(this.confirmed() ? '这餐，就它了。' : this.cards.length > 0 ? '今天，从这三张选。' : '今天，吃点什么？')
           .fontSize(this.cards.length > 0 ? 26 : 30).fontWeight(FontWeight.Bold)
-          .fontColor($r('app.color.random_ink')).width('100%').margin({ top: 8 })
+          .fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'ink') : $r('app.color.random_ink'))).width('100%').margin({ top: 8 })
         if (!this.confirmed()) { this.sourcesControl() }
-        Text(this.sourceNote()).fontSize(13).fontColor($r('app.color.random_muted')).width('100%')
+        Text(this.sourceNote()).fontSize(13).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'muted') : $r('app.color.random_muted'))).width('100%')
         if (this.cards.length > 0) {
           ForEach(this.resultKeys(), (key: string): void => { this.results(key) }, (key: string): string => key)
           this.navigationRail()
           if (!this.confirmed()) {
             Button(this.busy ? '正在确认…' : this.round !== undefined && this.round.pendingCardId.length > 0 ? '重试保存' : '就吃这个')
-              .attributeModifier(new RandomPrimaryStyle()).width('100%').enabled(!this.busy).onClick((): void => { void this.choose(); })
+              .attributeModifier(new RandomPrimaryStyle(this.palette)).width('100%').enabled(!this.busy).onClick((): void => { void this.choose(); })
           }
         } else if (this.confirmed()) {
-          Text('已确认的卡片当前不可展示').fontSize(16).fontColor($r('app.color.random_muted')).width('100%')
+          Text('已确认的卡片当前不可展示').fontSize(16).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'muted') : $r('app.color.random_muted'))).width('100%')
             .constraintSize({ minHeight: 180 }).padding(20).textAlign(TextAlign.Center)
         } else if (this.round !== undefined && this.round.ended) {
           Column({ space: 12 }) {
             Image($r('app.media.ic_random_food_back')).width(80).height(80).accessibilityLevel('no')
-            Text('这一轮，到这里。').fontSize(25).fontWeight(FontWeight.Bold).fontColor($r('app.color.random_ink'))
-            Text('不足三张的尾批留在本轮，重新开一轮再遇见。').fontSize(14).fontColor($r('app.color.random_muted')).textAlign(TextAlign.Center)
+            Text('这一轮，到这里。').fontSize(25).fontWeight(FontWeight.Bold).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'ink') : $r('app.color.random_ink')))
+            Text('不足三张的尾批留在本轮，重新开一轮再遇见。').fontSize(14).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'muted') : $r('app.color.random_muted'))).textAlign(TextAlign.Center)
           }.width('100%').constraintSize({ minHeight: 250 }).justifyContent(FlexAlign.Center).padding(24)
-            .backgroundColor($r('app.color.random_soft')).borderRadius(16)
+            .backgroundColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'soft') : $r('app.color.random_soft'))).borderRadius(16)
         } else { this.backs() }
-        if (this.busy) { LoadingProgress().width(28).height(28).color($r('app.color.random_ink')) }
-        Text(this.message).fontSize(14).fontColor($r('app.color.random_muted')).width('100%').textAlign(TextAlign.Center)
-        Button(this.round !== undefined && this.round.ended ? '开始新一轮' : this.cards.length > 0 ? this.confirmed() ? '继续抽取' : '再抽三张' :
-          this.round !== undefined && this.round.batchIds.length > 0 ? '再抽三张' : '帮我选')
+        if (this.busy) { LoadingProgress().width(28).height(28).color((this.palette === 'PERSONAL' ? pageColor(this.palette, 'ink') : $r('app.color.random_ink'))) }
+        Text(this.message).fontSize(14).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'muted') : $r('app.color.random_muted'))).width('100%').textAlign(TextAlign.Center)
+        if (this.confirmed()) {
+          Text(this.nextMealReady(this.mealNow) ? '已满6小时，可以重新抽下一餐。' : '还需' + this.nextMealRemaining() + '，即可抽下一餐。')
+            .fontSize(14).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'ink') : $r('app.color.random_ink'))).width('100%').textAlign(TextAlign.Center)
+          Text('下一餐可抽取时间：' + new Date(this.nextMealAt()).toLocaleString())
+            .fontSize(12).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'muted') : $r('app.color.random_muted'))).width('100%').textAlign(TextAlign.Center)
+        }
+        Button(this.drawLabel())
           .attributeModifier(this.drawStyle()).width('100%')
-          .enabled(!this.busy && (this.round === undefined || this.round.pendingCardId.length === 0))
+          .enabled(!this.busy && (this.round === undefined || this.round.pendingCardId.length === 0) &&
+            (!this.confirmed() || this.nextMealReady(this.mealNow)))
           .onClick((): void => { void this.draw(this.round !== undefined && this.round.ended); })
         if (this.round !== undefined && this.round.pendingCardId.length > 0 && this.cards.length === 0) {
-          Button('重试保存上次选择').attributeModifier(new RandomPrimaryStyle()).width('100%').enabled(!this.busy)
+          Button('重试保存上次选择').attributeModifier(new RandomPrimaryStyle(this.palette)).width('100%').enabled(!this.busy)
             .onClick((): void => { void this.choose(); })
         }
         if (this.confirmed() && this.round !== undefined) {
-          Text(new Date(this.round.selectedAt).toLocaleString()).fontSize(12).fontColor($r('app.color.random_muted'))
-          if (this.owner === 'guest') { Button('登录后使用选择记录').attributeModifier(new RandomSecondaryStyle()).width('100%').onClick((): void => this.onLogin()) }
+          Text('本餐选定时间：' + new Date(this.round.selectedAt).toLocaleString()).fontSize(12).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'muted') : $r('app.color.random_muted')))
+          if (this.owner === 'guest') { Button('登录后使用选择记录').attributeModifier(new RandomSecondaryStyle(this.palette)).width('100%').onClick((): void => this.onLogin()) }
         }
         Button(this.round === undefined || this.round.preparedAt === 0 ? '本轮最多60张 · 池内随机' :
           '本轮已翻' + this.round.shownCount.toString() + '张 · 候选池' + this.round.cardIds.length.toString() + '张')
-          .constraintSize({ minHeight: 48 }).backgroundColor(Color.Transparent).fontColor($r('app.color.random_muted')).fontSize(12)
+          .constraintSize({ minHeight: 48 }).backgroundColor(Color.Transparent).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'muted') : $r('app.color.random_muted'))).fontSize(12)
           .onClick((): void => { this.rangeOpen = !this.rangeOpen; })
         if (this.rangeOpen) {
           Text((this.round === undefined || this.round.rangeLabel.length === 0 ? '每轮最多60张；从明确范围准备候选，不覆盖来源全部卡片。' : this.round.rangeLabel) +
             '。池内等概率，每次三张、本轮不重复；新增卡片下一轮加入，不可用卡片即时跳过。')
-            .fontSize(12).fontColor($r('app.color.random_muted')).width('100%')
+            .fontSize(12).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'muted') : $r('app.color.random_muted'))).width('100%')
         }
         Button(!this.motion ? '页面动效：关 · 点此开启' : this.systemReduced ? '当前使用减少动态 · 点此关闭页面动效' :
           '页面动效：开 · 点此关闭').constraintSize({ minHeight: 48 })
-          .backgroundColor(Color.Transparent).fontColor($r('app.color.random_muted')).fontSize(12).onClick((): void => { void this.toggleMotion(); })
+          .backgroundColor(Color.Transparent).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'muted') : $r('app.color.random_muted'))).fontSize(12).onClick((): void => { void this.toggleMotion(); })
       }.width('100%').constraintSize({ maxWidth: 560 }).padding({ left: 20, right: 20, top: 8, bottom: 24 })
-    }.width('100%').height('100%').backgroundColor($r('app.color.random_canvas'))
+    }.width('100%').height('100%').backgroundColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'canvas') : $r('app.color.random_canvas')))
   }
 }

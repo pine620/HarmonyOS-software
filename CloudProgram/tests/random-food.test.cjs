@@ -82,9 +82,10 @@ function fixture() {
     cardId, kind, createdAt: data.CardAction.length + 1 });
   return { service: createRandomFoodServices(ctx), data, addCard, reference, setReady: value => { ready = value; } };
 }
-test('personal pool deduplicates wanted and favorites and requires completed migration', async () => {
+test('personal pool uses favorites only, deduplicates and requires completed migration', async () => {
   const f = fixture(); f.addCard('a'); f.addCard('b');
   f.reference('a', 'FAVORITE'); f.reference('a', 'WANT_TO_EAT'); f.reference('b', 'FAVORITE');
+  f.addCard('wanted-only'); f.reference('wanted-only', 'WANT_TO_EAT');
   const result = await f.service.pool('viewer', { source: 'MY', roundId: ROUND }, {});
   assert.deepEqual(result.cardIds.slice().sort(), ['a', 'b']); assert.equal(result.poolSize, 2);
   f.setReady(false);

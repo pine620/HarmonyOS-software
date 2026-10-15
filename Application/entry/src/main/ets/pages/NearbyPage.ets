@@ -5,6 +5,7 @@ import { DiscoveryRepository } from '../repository/DiscoveryRepository';
 import { ServiceCardStore } from '../service/ServiceCardStore';
 import { ServiceCardRemoteSyncService } from '../service/ServiceCardRemoteSyncService';
 import { AuthSessionStore } from '../service/AuthSessionStore';
+import { CloudBusinessError } from '../service/CloudReadErrors';
 import { DiscoveryFeed } from './DiscoveryFeed';
 
 @Component
@@ -12,9 +13,11 @@ export struct NearbyPage {
   onOpenCard: (card: FoodCard) => void = (_card: FoodCard): void => {};
   @Prop revision: number = 0;
   @Prop @Watch('onAccountChanged') loggedIn: boolean = false;
+  @StorageLink('authSessionRevision') @Watch('onAccountChanged') sessionRevision: number = 0;
   onOpenMeal: () => void = (): void => {};
   @State capabilities: DiscoveryCapabilities = emptyCapabilities();
   @State ready: boolean = false;
+  @State capabilitiesLoading: boolean = false;
   private active: boolean = false;
   private generation: number = 0;
   private repository: DiscoveryRepository = new DiscoveryRepository();
@@ -22,15 +25,36 @@ export struct NearbyPage {
   private pendingCard: FoodCard | undefined = undefined;
   private pendingRemote: boolean = false;
   aboutToAppear(): void { this.active = true; if (!this.ready) void this.loadCapabilities(); }
-  aboutToDisappear(): void { this.active = false; this.generation++; this.pendingCard = undefined; }
-  private onAccountChanged(): void { this.ready = false; this.generation++; if (this.active) void this.loadCapabilities(); }
+  aboutToDisappear(): void { this.active = false; this.generation++; this.capabilitiesLoading = false; this.pendingCard = undefined; }
+  private onAccountChanged(): void {
+    this.ready = false; this.generation++; this.capabilitiesLoading = false; this.capabilities = emptyCapabilities();
+    if (this.active) void this.loadCapabilities();
+  }
+  private capabilityRequestCurrent(generation: number, session: number): boolean {
+    return this.active && generation === this.generation && session === AuthSessionStore.generation();
+  }
   private async loadCapabilities(): Promise<void> {
+    if (!this.active || this.capabilitiesLoading) return;
+    this.capabilitiesLoading = true;
     const generation: number = ++this.generation; const session: number = AuthSessionStore.generation();
     try {
       const value: DiscoveryCapabilities = await this.repository.capabilities();
-      if (this.active && generation === this.generation && session === AuthSessionStore.generation()) this.capabilities = value;
-    } catch (_error) { if (this.active && generation === this.generation) this.capabilities = emptyCapabilities(); }
-    finally { if (this.active && generation === this.generation && session === AuthSessionStore.generation()) this.ready = true; }
+      if (this.capabilityRequestCurrent(generation, session)) {
+        this.capabilities = value;
+        console.info('[DiscoveryCapabilities] searchEnabled=' + String(value.searchEnabled) + ' searchReason=' + value.searchReason +
+          ' mapEnabled=' + String(value.mapEnabled) + ' mapReason=' + value.mapReason);
+      }
+    } catch (error) {
+      if (this.capabilityRequestCurrent(generation, session)) {
+        const unavailable: DiscoveryCapabilities = { searchEnabled: false, mapEnabled: false,
+          searchReason: 'CAPABILITIES_LOAD_FAILED', mapReason: 'CAPABILITIES_LOAD_FAILED' };
+        this.capabilities = unavailable;
+        const code: string = error instanceof CloudBusinessError ? error.code : 'REQUEST_FAILED';
+        console.warn('[DiscoveryCapabilities] load_failed code=' + code);
+      }
+    } finally {
+      if (this.capabilityRequestCurrent(generation, session)) { this.ready = true; this.capabilitiesLoading = false; }
+    }
   }
   private enqueueCard(card: FoodCard, remote: boolean): void {
     if (!this.active) return;
@@ -53,7 +77,8 @@ export struct NearbyPage {
   }
   build() {
     if (this.ready) {
-      DiscoveryFeed({ capabilities: this.capabilities, revision: this.revision,
+      DiscoveryFeed({ capabilities: this.capabilities, revision: this.revision, capabilitiesLoading: this.capabilitiesLoading,
+        onReloadCapabilities: (): void => { void this.loadCapabilities(); },
         onOpenMeal: this.onOpenMeal,
         onPrimaryCard: (card: FoodCard, remote: boolean): void => this.enqueueCard(card, remote), onOpenCard: this.onOpenCard,
         onUnavailable: (): void => { this.capabilities = emptyCapabilities(); } })

@@ -120,6 +120,9 @@ export class ImageRepository {
   static getRevisionDownloadUrl(context: common.Context, revisionId: string, mediaId: string, mayContinue?: MediaRequestGuard): Promise<string> {
     return ImageRepository.subscribe(context, mediaId, 'REVISION', 'ORIGINAL', revisionId, 'high', mayContinue, true);
   }
+  static getCardReportPhotoUrl(context: common.Context, mediaId: string, reportId: string, admin: boolean, cover: boolean, mayContinue: MediaRequestGuard): Promise<string> {
+    return ImageRepository.subscribe(context, mediaId, admin ? 'REPORT' : 'PUBLIC', cover ? 'COVER_480' : 'ORIGINAL', admin ? reportId : '', 'high', mayContinue, true);
+  }
   static getReviewDownloadUrl(context: common.Context, mediaId: string, mayContinue: MediaRequestGuard): Promise<string> {
     return ImageRepository.subscribe(context, mediaId, 'REVIEW', 'ORIGINAL', '', 'high', mayContinue, true);
   }
@@ -290,6 +293,7 @@ export class ImageRepository {
   }
   private static async fetchLegacy(context: common.Context, tasks: Array<ImageTask>): Promise<void> {
     for (const task of tasks) {
+      if (task.mode === 'REPORT') { task.fail(new Error('审核图片需要新版 shike-image 云函数，请更新后重试。')); continue; }
       if (!await task.needed()) { task.fail(new ReadCancelledError()); continue; }
       const payload: LegacyImageRequest = { mediaId: task.mediaId, revisionId: task.revisionId, bucketName: task.bucket, cloudPath: task.path,
         variant: task.variant, knownSha256: task.cached === undefined ? '' : task.cached.descriptor.sha256,

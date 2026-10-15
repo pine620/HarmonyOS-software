@@ -6,7 +6,7 @@ const TYPE = 'MIGRATE_PERSONAL_COLLECTION';
 const VERSION = 1;
 const BATCH = 10;
 const LEASE_MS = 120000;
-const KINDS = ['FAVORITE', 'WANT_TO_EAT'];
+const KINDS = ['FAVORITE'];
 
 function createPersonalCollections(ctx) {
   const { collection, one, models } = ctx;
@@ -206,9 +206,11 @@ function createPersonalCollections(ctx) {
     return status(uid, env);
   }
   async function set(uid, payload, env, kind) {
+    if (!KINDS.includes(kind)) throw fail('该标记功能已下线，请更新客户端。', 'CLIENT_UPDATE_REQUIRED');
     requireEnabled(env);
     const cardId = id(payload.cardId), requestId = uuid(payload.requestId);
     if (typeof payload.active !== 'boolean') throw fail('收藏状态无效。');
+    if (payload.responseMode !== undefined && payload.responseMode !== 'ACK') throw fail('收藏响应模式无效。');
     const desired = payload.active;
     const operation = 'SET_' + kind;
     const receiptId = hash([uid, 'collection-action', requestId]);
@@ -237,23 +239,23 @@ function createPersonalCollections(ctx) {
       return true;
     }});
     if (!committed) throw fail('操作未保存，请重试。', 'CONFLICT');
+    if (payload.responseMode === 'ACK') return { cardId, kind, active: desired, requestId,
+      committed: true, contentAvailable: false };
     const result = { cardId, kind, active: desired, requestId, contentAvailable: false };
     const card = await one(collection(env, 'FoodCard').query().equalTo('id', cardId));
     if (!card || !await ctx.contentPolicy(env).canReadCard(uid, card)) return result;
-    const summary = await ctx.stage1().reactionSummary(cardId, uid, env);
+    const summary = kind === 'FAVORITE' ? await ctx.stage1().favoriteSummary(cardId, uid, env)
+      : await ctx.stage1().reactionSummary(cardId, uid, env);
     const fresh = await one(collection(env, 'FoodCard').query().equalTo('id', cardId));
     if (!fresh || Number(fresh.updatedAt) !== Number(card.updatedAt) ||
         !await ctx.contentPolicy(env).canReadCard(uid, fresh)) return result;
     return { ...result, ...summary, contentAvailable: true };
   }
   async function flags(cardId, uid, env) {
-    if (!uid) return { viewerWanted: false, collectionReady: false, collectionStatus: 'GUEST' };
-    const [wanted, job] = await Promise.all([
-      enabled(env) ? one(collection(env, 'CardAction').query().equalTo('id', ctx.actionId('card:WANT_TO_EAT', uid, cardId))) : null,
-      one(collection(env, 'MaintenanceJob').query().equalTo('jobId', jobId(uid)))
-    ]);
+    if (!uid) return { collectionReady: false, collectionStatus: 'GUEST' };
+    const job = await one(collection(env, 'MaintenanceJob').query().equalTo('jobId', jobId(uid)));
     const view = statusView(job, env);
-    return { viewerWanted: !!wanted, collectionReady: view.collectionReady,
+    return { collectionReady: view.collectionReady,
       collectionStatus: enabled(env) ? view.status : 'FEATURE_NOT_READY', collectionReason: !enabled(env)?'收藏服务尚未完成上线验证':view.collectionReady?'':view.status==='FAILED'?'旧收藏整理失败，可继续整理':'旧收藏尚未整理完成' };
   }
   async function assemble(uid, ids, env, includeDetailPhotos = false) {

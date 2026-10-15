@@ -61,34 +61,35 @@ export class AuthSessionStore {
     return email;
   }
 
-  static async requestEmailVerifyCode(rawEmail: string): Promise<void> {
+  static async requestEmailVerifyCode(rawEmail: string, resetPassword: boolean = false): Promise<void> {
     const auth: AGConnectAuth = AuthSessionStore.requireAuth();
     const email: string = AuthSessionStore.normalizeEmail(rawEmail);
     const settings: VerifyCodeSettings = new VerifyCodeSettingBuilder()
-      .setAction(VerifyCodeAction.REGISTER_LOGIN)
+      .setAction(resetPassword ? VerifyCodeAction.RESET_PASSWORD : VerifyCodeAction.REGISTER_LOGIN)
       .setLang('zh_CN')
       .setSendInterval(60)
       .build();
     await auth.requestEmailVerifyCode(email, settings);
   }
 
+  static validateNewPassword(password: string): void {
+    if (password.length < 8 || password.length > 128) throw new Error('密码需为 8–128 个字符。');
+    let kinds: number = 0;
+    if (/[a-z]/.test(password)) kinds++;
+    if (/[A-Z]/.test(password)) kinds++;
+    if (/[0-9]/.test(password)) kinds++;
+    if (/[^a-zA-Z0-9]/.test(password)) kinds++;
+    if (kinds < 2) throw new Error('密码需包含大小写字母、数字或符号中的至少两种。');
+  }
+
   static async registerEmail(rawEmail: string, verifyCode: string): Promise<void> {
-    AuthSessionStore.sessionGeneration++; AppStorage.setOrCreate('authSessionRevision', AuthSessionStore.sessionGeneration);
     const auth: AGConnectAuth = AuthSessionStore.requireAuth();
     const email: string = AuthSessionStore.normalizeEmail(rawEmail);
     const code: string = verifyCode.trim();
     if (code.length === 0) {
       throw new Error('请输入邮箱验证码。');
     }
-    // Registration must start from a neutral AGC Auth state. This matters
-    // after a prior partial attempt: AGC may already have restored a user
-    // even though the app-owned profile initialization did not finish.
-    const existingUser: AGConnectUser | null = await auth.getCurrentUser();
-    if (existingUser !== null) {
-      await auth.signOut();
-    }
-    // Password is intentionally omitted. AGC supports code-only email
-    // registration/login, so the app never collects or persists a password.
+    await AuthSessionStore.signOut();
     const emailUser: EmailUser = new EmailUserBuilder()
       .setEmail(email)
       .setVerifyCode(code)
@@ -100,17 +101,13 @@ export class AuthSessionStore {
   }
 
   static async signInWithEmail(rawEmail: string, verifyCode: string): Promise<void> {
-    AuthSessionStore.sessionGeneration++; AppStorage.setOrCreate('authSessionRevision', AuthSessionStore.sessionGeneration);
     const auth: AGConnectAuth = AuthSessionStore.requireAuth();
     const email: string = AuthSessionStore.normalizeEmail(rawEmail);
     const code: string = verifyCode.trim();
     if (code.length === 0) {
       throw new Error('请输入邮箱验证码。');
     }
-    const existingUser: AGConnectUser | null = await auth.getCurrentUser();
-    if (existingUser !== null) {
-      await auth.signOut();
-    }
+    await AuthSessionStore.signOut();
     const credential: AGConnectAuthCredential =
       EmailAuthProvider.credentialWithVerifyCode(email, code);
     await auth.signIn(credential);

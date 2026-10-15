@@ -47,15 +47,7 @@
           {
             "entities": ["entity.system.browsable"],
             "actions": ["ohos.want.action.viewData"],
-            "uris": [
-              {
-                "scheme": "https",
-                "host": "shike.drcn.agconnect.link",
-                "path": "card",
-                "linkFeature": "Share"
-              }
-            ],
-            "domainVerify": true
+            "uris": [{ "scheme": "shike", "host": "card", "linkFeature": "Share" }]
           }
         ]
       }

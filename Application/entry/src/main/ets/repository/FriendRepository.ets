@@ -8,7 +8,7 @@ import {
   GroupIdRequest, GroupMemberProfile, GroupMessage, GroupMessagesResponse, ListGroupMessagesRequest, ListMessagesRequest,
   MessagesResponse, PageRequest, RemoveFriendRequest, RemoveGroupMemberRequest, RespondFriendRequestRequest,
   SearchUsersRequest, SearchUsersResponse, SendFriendRequestRequest, SendGroupMessageRequest,
-  ReportUserRequest, SendGroupMessageResponse, SendMessageRequest, SendMessageResponse, SocialUser, UserIdRequest
+  SendGroupMessageResponse, SendMessageRequest, SendMessageResponse, SocialUser, UserIdRequest
 } from '../model/FriendModels';
 import { AuthService } from '../service/AuthService';
 import { CloudGateway } from '../service/CloudGateway';
@@ -115,12 +115,6 @@ export class FriendRepository {
     await AuthService.ensureSession(context);
     const request: UserIdRequest = { targetUid };
     await CloudGateway.callAuthenticated<OperationResponse>('unblock-user', request);
-  }
-
-  async reportUser(context: common.Context, targetUid: string, reason: string): Promise<void> {
-    await AuthService.ensureSession(context);
-    const request: ReportUserRequest = { targetUid, reason };
-    await CloudGateway.callAuthenticated<OperationResponse>('report-user', request);
   }
 
   async removeFriend(context: common.Context, friendUid: string, expectedUpdatedAt: number | undefined): Promise<void> {

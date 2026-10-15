@@ -1,13 +1,10 @@
 import { QuietActionStyle, SecondaryActionStyle } from '../common/Stage47Ui';
-import { ReportRoute } from '../model/ContentStatusModels';
-import { AuthService } from '../service/AuthService';
 import { FoodCard } from '../model/CloudContracts';
 import { MapMerchant } from '../model/DiscoveryModels';
 import { DiscoveryCard } from './DiscoveryCard';
 
 @Component
 export struct MerchantRecommendationSheet {
-  @Consume('pathStack') pathStack: NavPathStack;
   @Require @Prop merchant: MapMerchant;
   @Prop cards: Array<FoodCard> = [];
   @Prop status: string = '';
@@ -27,7 +24,6 @@ export struct MerchantRecommendationSheet {
       Text(this.merchant.address).fontSize(12).fontColor($r('app.color.muted')).maxLines(2).width('100%');
       Text('商家推荐不受当前分类／价格筛选影响').fontSize(12).fontColor($r('app.color.muted')).width('100%');
       Text(this.status).fontSize(12).fontColor($r('app.color.ink')).width('100%');
-      Button('举报商家资料').enabled(AuthService.profile() !== undefined).attributeModifier(new QuietActionStyle()).width('100%').onClick((): void => { const request: ReportRoute = { targetType: 'MERCHANT', targetId: this.merchant.merchantId }; this.onClose(); this.pathStack.pushPathByName('report-content', request); });
       Button('刷新商家推荐').height(48).enabled(!this.loading).onClick((): void => this.onRetry()).attributeModifier(new QuietActionStyle());
       Scroll() {
         Row({ space: 8 }) {

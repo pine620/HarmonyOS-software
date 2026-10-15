@@ -27,17 +27,17 @@ export struct PersonalPreviewTile {
             Image(this.row.card.photoUrl).width(64).height(64).objectFit(ImageFit.Cover).borderRadius(12)
               .accessibilityLevel('no').onError((): void => { this.row.state = 'ERROR'; });
           } else {
-            Column() { Text(this.photoLabel()).fontSize(11).fontColor($r('app.color.muted')).textAlign(TextAlign.Center); }
-              .width(64).height(64).backgroundColor($r('app.color.canvas')).borderRadius(12)
+            Column() { Text(this.photoLabel()).fontSize(11).fontColor($r('app.color.personal_muted')).textAlign(TextAlign.Center); }
+              .width(64).height(64).backgroundColor($r('app.color.personal_canvas')).borderRadius(12)
               .justifyContent(FlexAlign.Center).accessibilityLevel('no');
           }
           Column({ space: 4 }) {
-            Text(this.label()).fontSize(16).fontWeight(FontWeight.Medium).fontColor($r('app.color.ink'))
+            Text(this.label()).fontSize(16).fontWeight(FontWeight.Medium).fontColor($r('app.color.personal_ink'))
               .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%');
             if (this.row.card !== undefined) {
-              Text(cardPriceText(this.row.card)).fontSize(13).fontColor($r('app.color.action_text'));
+              Text(cardPriceText(this.row.card)).fontSize(13).fontColor($r('app.color.personal_action'));
               Text(this.row.visitedAt > 0 ? new Date(this.row.visitedAt).toLocaleDateString() : this.row.card.authorNickname || '食刻用户')
-                .fontSize(12).fontColor($r('app.color.muted')).maxLines(1);
+                .fontSize(12).fontColor($r('app.color.personal_muted')).maxLines(1);
             }
           }.layoutWeight(1).alignItems(HorizontalAlign.Start);
           if (!this.removable) { Image($r('app.media.ic_chevron_right')).width(20).height(20).accessibilityLevel('no'); }
@@ -47,9 +47,9 @@ export struct PersonalPreviewTile {
         .accessibilityText(`${this.label()}，打开详情`).onClick((): void => this.onOpen(this.row.cardId));
       if (this.removable) {
         Button('移除').constraintSize({ minWidth: 48, minHeight: 48 }).fontSize(12)
-          .backgroundColor(Color.Transparent).fontColor($r('app.color.muted')).enabled(!this.busy)
+          .backgroundColor(Color.Transparent).fontColor($r('app.color.personal_muted')).enabled(!this.busy)
           .accessibilityText('移除这条记录').onClick((): void => this.onRemove(this.row.cardId));
       }
-    }.width('100%').backgroundColor($r('app.color.surface')).borderRadius(16);
+    }.width('100%').backgroundColor($r('app.color.personal_surface')).borderRadius(16);
   }
 }

@@ -1,4 +1,4 @@
-import { RandomPrimaryStyle } from '../common/RandomFoodUi';
+import { RandomFoodMotionObserver } from '../common/RandomFoodUi';
 import { ReadCancelledError } from '../service/CloudReadErrors';
 import { CardPreviewsRequest, CardPreviewsResponse, CardPreviewItem } from '../model/PersonalCollectionModels';
 import { ReadRequestOptions, ReadScheduler } from '../service/ReadScheduler';
@@ -18,11 +18,18 @@ import { MapViewportStore } from '../service/MapViewportStore';
 import { SearchHistoryStore } from '../service/SearchHistoryStore';
 import { DiscoveryMap } from '../components/DiscoveryMap';
 import { DiscoveryCard } from '../components/DiscoveryCard';
+import { DISCOVERY_IDLE_MOTION_ENABLED, DISCOVERY_SHORTCUTS, DiscoveryActionStyle, DiscoveryBackdrop,
+  DiscoveryCategoryKey, DiscoveryChoiceStyle, DiscoveryLoadingMark, DiscoveryShortcut,
+  discoveryCategoryIcon, discoveryPanelTransition } from '../components/DiscoveryVisuals';
 import { MerchantRecommendationSheet } from '../components/MerchantRecommendationSheet';
 import { BreakpointSystem, LayoutBreakpoint } from '../common/BreakpointSystem';
-import { ChoiceActionStyle, PrimaryActionStyle, QuietActionStyle, SecondaryActionStyle, stage47ErrorText } from '../common/Stage47Ui';
+import { invalidatesProtectedPage, stage47ErrorText } from '../common/Stage47Ui';
 
 interface SortOption { value: DiscoverySort; label: string; }
+interface DiscoveryFilterValues {
+  categories: Array<FoodCategoryV2>; sort: DiscoverySort; priceMin: string; priceMax: string; pricePreset: number;
+}
+type DiscoveryPanel = 'CATEGORIES' | 'FILTERS' | 'HISTORY' | 'NONE';
 const SORT_OPTIONS: Array<SortOption> = [{ value: 'LATEST', label: '最新发布' }, { value: 'SCORE_DESC', label: '评分优先' },
   { value: 'PRICE_ASC', label: '价格升序' }, { value: 'PRICE_DESC', label: '价格降序' }];
 
@@ -31,17 +38,21 @@ export struct DiscoveryFeed {
   @StorageLink('stage47AppActive') @Watch('onAppActiveChanged') appActive: boolean = true;
   @StorageLink('discoveryVisible') @Watch('onNavigationVisibilityChanged') navigationVisible: boolean = true;
   private visibleLifecycle: boolean = true;
-  private onNavigationVisibilityChanged(): void { if (this.navigationVisible && this.appActive && this.visibleLifecycle) this.resume(); else this.pause(false); }
+  // Covering the feed with a secondary page keeps decoded covers, so the back animation reveals the
+  // same images instead of blank placeholders that reload mid-transition.
+  private onNavigationVisibilityChanged(): void { if (this.navigationVisible && this.appActive && this.visibleLifecycle) this.resume(); else this.pause(false, !this.navigationVisible && this.appActive); }
   private onAppActiveChanged(): void { if (!this.appActive) this.pause(false); else if (this.visibleLifecycle) this.resume(); }
 
   @Consume('windowBreakpoint') windowBreakpoint: LayoutBreakpoint;
   @Require @Prop @Watch('onCapabilitiesChanged') capabilities: DiscoveryCapabilities;
+  @Prop @Watch('syncIdleMotion') capabilitiesLoading: boolean = false;
   @Prop @Watch('onRevisionChanged') revision: number = 0;
   onOpenMeal: () => void = (): void => {};
   onOpenCard: (card: FoodCard) => void = (_card: FoodCard): void => {};
   onPrimaryCard: (card: FoodCard, remoteSync: boolean) => void = (_card: FoodCard, _remoteSync: boolean): void => {};
   onUnavailable: () => void = (): void => {};
-  @State cards: Array<DiscoveryEntry> = [];
+  onReloadCapabilities: () => void = (): void => {};
+  @State @Watch('syncIdleMotion') cards: Array<DiscoveryEntry> = [];
   @State keywordInput: string = '';
   @State mode: DiscoveryMode = 'ALL';
   @State categories: Array<FoodCategoryV2> = [];
@@ -49,30 +60,41 @@ export struct DiscoveryFeed {
   @State priceMin: string = '';
   @State priceMax: string = '';
   @State pricePreset: number = -1;
-  @State filtersOpen: boolean = false;
-  @State historyOpen: boolean = false;
+  @State @Watch('syncIdleMotion') filtersOpen: boolean = false;
+  @State @Watch('syncIdleMotion') historyOpen: boolean = false;
+  @State @Watch('syncIdleMotion') categoriesOpen: boolean = false;
+  @State draftCategories: Array<FoodCategoryV2> = [];
+  @State draftSort: DiscoverySort = 'LATEST';
+  @State draftPriceMin: string = '';
+  @State draftPriceMax: string = '';
+  @State draftPricePreset: number = -1;
+  @State filterError: string = '';
+  @State motionActive: boolean = false;
+  @State idleMotionReady: boolean = false;
+  @State resultOpacity: number = 1;
+  @State resultOffset: number = 0;
   @State history: Array<string> = [];
   @State status: string = '正在准备公开推荐。';
-  @State loading: boolean = false;
+  @State @Watch('syncIdleMotion') loading: boolean = false;
   @State loadFailed: boolean = false;
   @State featureNotReady: boolean = false;
-  @State loadingMore: boolean = false;
+  @State @Watch('syncIdleMotion') loadingMore: boolean = false;
   @State loadMoreFailed: boolean = false;
   @State nextCursor: string = '';
   @State scope: DiscoveryScope = 'ALL_PUBLIC';
   @State merchants: Array<MapMerchant> = [];
   @State mapCursor: string = '';
   @State mapStatus: string = '';
-  @State mapLoading: boolean = false;
+  @State @Watch('syncIdleMotion') mapLoading: boolean = false;
   @State viewportDirty: boolean = false;
-  @State expanded: boolean = false;
-  @State listOpen: boolean = false;
+  @State @Watch('syncIdleMotion') expanded: boolean = false;
+  @State @Watch('syncIdleMotion') listOpen: boolean = false;
   @State selectedMerchantId: string = '';
-  @State selectedMerchant: MapMerchant | undefined = undefined;
+  @State @Watch('syncIdleMotion') selectedMerchant: MapMerchant | undefined = undefined;
   @State merchantCards: Array<FoodCard> = [];
   @State merchantStatus: string = '';
   @State merchantCursor: string = '';
-  @State merchantLoading: boolean = false;
+  @State @Watch('syncIdleMotion') merchantLoading: boolean = false;
   @State cameraTarget: DiscoveryCamera = { latitude: 39.9, longitude: 116.4, zoom: 15 };
   @State showingPrevious: boolean = false;
   @State availableHeight: number = 700;
@@ -81,6 +103,7 @@ export struct DiscoveryFeed {
   private submittedQuery: PublicCardQuery | undefined = undefined;
   private queryCamera: DiscoveryCamera | undefined = undefined;
   private resultScroller: Scroller = new Scroller();
+  private bottomPageTimer: number | undefined = undefined;
   private viewport: DiscoveryViewport | undefined = undefined;
   private searchedViewport: DiscoveryViewport | undefined = undefined;
   private queryViewport: DiscoveryViewport | undefined = undefined;
@@ -112,6 +135,13 @@ export struct DiscoveryFeed {
   private feedLoadStartedAt: number = Date.now();
   private visibleFirst: number = 0;
   private visibleLast: number = 3;
+  private scrolling: boolean = false;
+  private decodedCovers: Map<string, string> = new Map<string, string>();
+  private motionObserver: RandomFoodMotionObserver = new RandomFoodMotionObserver((reduced: boolean): void => {
+    this.motionActive = this.active && this.appActive && this.navigationVisible && this.visibleLifecycle && !reduced;
+    if (!this.motionActive) this.stopResultMotion();
+    this.syncIdleMotion();
+  });
   @StorageLink('accountContentRevision') @Watch('onRevisionChanged') accountContentRevision: number = 0;
   private onVisibilityChanged(visible: boolean): void { if (visible === this.visibleLifecycle) return; this.visibleLifecycle = visible; if (visible && this.appActive) this.resume(); else this.pause(false); }
   private isPublicFeedQuery(query: PublicCardQuery): boolean { return query.scope === 'ALL_PUBLIC' && query.keyword.length === 0 && query.mode === 'ALL' && query.categories.length === 0 && query.sort === 'LATEST' && query.priceMinFen === undefined && query.priceMaxExclusiveFen === undefined; }
@@ -132,6 +162,37 @@ export struct DiscoveryFeed {
   private signature(): string { return this.revision + ':' + this.accountContentRevision; }
   aboutToAppear(): void { this.resume(); }
   aboutToDisappear(): void { this.pause(true); }
+  private syncIdleMotion(): void {
+    // The feature is off by default, so no image or list work is added during ordinary browsing.
+    let ready: boolean = DISCOVERY_IDLE_MOTION_ENABLED && this.motionActive && this.active && this.appActive &&
+      this.navigationVisible && this.visibleLifecycle && !this.scrolling && !this.loading && !this.loadingMore && !this.capabilitiesLoading &&
+      !this.hydrationRunning && this.loadingPhotoIds.size === 0 && !this.prefetchRunning && this.prefetchTimer === undefined &&
+      !this.mapLoading && !this.merchantLoading && !this.expanded && !this.listOpen && !this.filtersOpen &&
+      !this.categoriesOpen && !this.historyOpen && this.selectedMerchant === undefined && this.debounce === undefined;
+    if (ready) {
+      const visible: Array<DiscoveryEntry> = this.cards.slice(Math.max(0, this.visibleFirst), this.visibleLast + 1);
+      ready = visible.length > 0 && visible.every((entry: DiscoveryEntry): boolean =>
+        entry.coverUrl.length > 0 ? this.decodedCovers.get(entry.card.id) === entry.coverUrl :
+          entry.card.primaryPhotoLoadFailed === true || entry.card.primaryPhotoResolved === true || entry.card.photoPath.length === 0);
+    }
+    if (this.idleMotionReady !== ready) this.idleMotionReady = ready;
+  }
+  private coverDecoded(id: string, url: string): void {
+    const entry: DiscoveryEntry | undefined = this.cards.find((value: DiscoveryEntry): boolean => value.card.id === id);
+    if (!this.active || entry === undefined || entry.coverUrl !== url) return;
+    this.decodedCovers.set(id, url); this.syncIdleMotion();
+  }
+  private stopResultMotion(): void {
+    const options: AnimateParam = { duration: 0 };
+    this.getUIContext().animateTo(options, (): void => { this.resultOpacity = 1; this.resultOffset = 0; });
+  }
+  private revealResults(): void {
+    if (!this.motionActive || !this.active || this.cards.length === 0) return;
+    const reset: AnimateParam = { duration: 0 };
+    const reveal: AnimateParam = { duration: 180, curve: Curve.EaseOut };
+    this.getUIContext().animateTo(reset, (): void => { this.resultOpacity = 0.72; this.resultOffset = 6; });
+    this.getUIContext().animateTo(reveal, (): void => { this.resultOpacity = 1; this.resultOffset = 0; });
+  }
   private saveSnapshot(): void {
     if (this.submittedQuery === undefined || this.owner !== this.viewer() || this.loadedSignature !== this.signature()) return;
     const value: DiscoverySnapshot = {
@@ -168,10 +229,17 @@ export struct DiscoveryFeed {
     };
     DiscoveryFeedState.save(value);
   }
+  private snapshotAllowed(snapshot: DiscoverySnapshot): boolean {
+    const query: PublicCardQuery | undefined = snapshot.submittedQuery;
+    if (!this.capabilities.searchEnabled && (query === undefined || !this.isPublicFeedQuery(query))) return false;
+    return this.capabilities.mapEnabled || (!snapshot.expanded && snapshot.scope !== 'VIEWPORT');
+  }
   private resume(): void {
     if (this.active || !this.appActive || !this.visibleLifecycle || !this.navigationVisible) return;
     this.active = true; this.feedLoadStartedAt = Date.now(); const owner: string = this.viewer();
-    const snapshot: DiscoverySnapshot | undefined = DiscoveryFeedState.read(owner, this.signature());
+    this.motionActive = !this.motionObserver.start();
+    let snapshot: DiscoverySnapshot | undefined = DiscoveryFeedState.read(owner, this.signature());
+    if (snapshot !== undefined && !this.snapshotAllowed(snapshot)) snapshot = undefined;
     this.owner = owner;
     console.info('[DiscoveryFeed] event=resume viewGeneration=' + this.listGeneration + ' snapshot=' + String(snapshot !== undefined) + ' first=' + this.visibleFirst + ' last=' + this.visibleLast);
     try { this.history = SearchHistoryStore.read(this.context(), owner); } catch (_error) { this.history = []; }
@@ -220,20 +288,29 @@ export struct DiscoveryFeed {
       this.cameraTarget = MapViewportStore.read(this.context(), owner); this.currentCamera = this.cameraTarget;
       void this.reload();
     }
+    this.syncIdleMotion();
   }
-  private pause(destroying: boolean): void {
+  private pause(destroying: boolean, keepCovers: boolean = false): void {
+    this.cancelBottomPage();
+    this.motionObserver.stop(); this.motionActive = false; this.idleMotionReady = false; this.scrolling = false;
+    this.stopResultMotion();
     if (!this.active) return;
     console.info('[DiscoveryFeed] event=pause viewGeneration=' + this.listGeneration);
     if (this.prefetchTimer !== undefined) { clearTimeout(this.prefetchTimer); this.prefetchTimer = undefined; }
     this.saveSnapshot(); this.active = false; this.listGeneration++; this.mapGeneration++; this.merchantGeneration++; ImageRepository.subscriptionsChanged(); ReadScheduler.subscriptionsChanged();
-    if (!destroying) { this.selectedMerchant = undefined; this.merchantCards = []; this.cards = this.cards.map((entry: DiscoveryEntry): DiscoveryEntry => { return { card: entry.card, coverUrl: '', loadedAt: entry.loadedAt }; }); }
+    if (!destroying) {
+      this.selectedMerchant = undefined; this.merchantCards = [];
+      if (!keepCovers) { this.cards = this.cards.map((entry: DiscoveryEntry): DiscoveryEntry => { return { card: entry.card, coverUrl: '', loadedAt: entry.loadedAt }; }); }
+    }
     if (this.debounce !== undefined) { clearTimeout(this.debounce); this.debounce = undefined; }
+    this.setPanel('NONE');
   }
   private async revalidateVisible(scrollY: number): Promise<void> {
     // Restore layout before any remote work; stale content refresh is independent.
     this.resultScroller.scrollTo({ xOffset: 0, yOffset: scrollY, animation: false });
     const generation: number = this.listGeneration;
     void this.hydrateVisible(this.visibleFirst, this.visibleLast);
+    this.scheduleBottomPage(generation);
     const now: number = Date.now();
     const ids: Array<string> = this.cards.slice(this.visibleFirst, this.visibleLast + 1)
       .filter((entry: DiscoveryEntry): boolean => now - entry.loadedAt >= 30000)
@@ -242,8 +319,13 @@ export struct DiscoveryFeed {
     await this.refreshChangedCards(ids, generation);
     if (!this.current(generation)) return;
     void this.hydrateVisible(this.visibleFirst, this.visibleLast);
+    this.scheduleBottomPage(generation);
   }
   private onCapabilitiesChanged(): void {
+    if (!this.capabilities.searchEnabled) {
+      this.keyword = ''; this.keywordInput = ''; this.mode = 'ALL'; this.resetFilters();
+      this.scope = 'ALL_PUBLIC'; this.queryViewport = undefined;
+    }
     if (!this.capabilities.mapEnabled) {
       this.expanded = false; this.listOpen = false; this.scope = 'ALL_PUBLIC'; this.queryViewport = undefined;
       this.searchedViewport = undefined; this.merchants = []; this.mapCursor = ''; this.mapLoading = false; this.mapEmpty = false;
@@ -252,6 +334,7 @@ export struct DiscoveryFeed {
   }
   private onRevisionChanged(): void {
     if (!this.active) return;
+    this.setPanel('NONE'); this.decodedCovers.clear();
     DiscoveryFeedState.clear(); this.listGeneration++; this.mapGeneration++; this.closeMerchant();
     if (this.owner !== this.viewer()) {
       this.owner = this.viewer(); this.cards = []; this.previousCards = []; this.previousResultRegion = undefined;
@@ -268,27 +351,41 @@ export struct DiscoveryFeed {
     this.showingPrevious = false; void this.reload();
     if (this.searchedViewport !== undefined) void this.queryMap(this.searchedViewport, false);
   }
-  private makeQuery(cursor: string = ''): PublicCardQuery {
+  private makeQuery(cursor: string = '', filters: DiscoveryFilterValues | undefined = undefined): PublicCardQuery {
     const keyword: string = normalizeSearch(this.keywordInput);
     if (keyword.length > 50) throw new Error('搜索内容最多 50 字符。');
-    const query: PublicCardQuery = { keyword, mode: this.mode, categories: this.categories.slice(), sort: this.sort,
+    const categories: Array<FoodCategoryV2> = filters === undefined ? this.categories : filters.categories;
+    const sort: DiscoverySort = filters === undefined ? this.sort : filters.sort;
+    const pricePreset: number = filters === undefined ? this.pricePreset : filters.pricePreset;
+    const priceMin: string = filters === undefined ? this.priceMin : filters.priceMin;
+    const priceMax: string = filters === undefined ? this.priceMax : filters.priceMax;
+    const query: PublicCardQuery = { keyword, mode: this.mode, categories: categories.slice(), sort,
       scope: this.scope, cursor, pageSize: 20 };
     if (this.scope === 'VIEWPORT' && this.queryViewport !== undefined) query.viewport = copyViewport(this.queryViewport);
-    if (this.pricePreset >= 0) {
-      query.priceMinFen = this.pricePreset * 1000;
-      if (this.pricePreset < 3) query.priceMaxExclusiveFen = (this.pricePreset + 1) * 1000;
-    } else if (this.priceMin.length > 0 || this.priceMax.length > 0) {
-      if (this.priceMin.length === 0 || this.priceMax.length === 0) throw new Error('自定义价格区间两端都要填写。');
-      const min: number | null = parseYuanInputToFen(this.priceMin);
-      const max: number | null = parseYuanInputToFen(this.priceMax);
+    if (pricePreset >= 0) {
+      query.priceMinFen = pricePreset * 1000;
+      if (pricePreset < 3) query.priceMaxExclusiveFen = (pricePreset + 1) * 1000;
+    } else if (priceMin.length > 0 || priceMax.length > 0) {
+      if (priceMin.length === 0 || priceMax.length === 0) throw new Error('自定义价格区间两端都要填写。');
+      const min: number | null = parseYuanInputToFen(priceMin);
+      const max: number | null = parseYuanInputToFen(priceMax);
       if (min === null || max === null || max <= min) throw new Error('请输入有效区间，上限大于下限，最多两位小数。');
       query.priceMinFen = min; query.priceMaxExclusiveFen = max;
     }
     return query;
   }
-  private entries(cards: Array<FoodCard>): Array<DiscoveryEntry> {
+  private entries(cards: Array<FoodCard>, retained: Array<DiscoveryEntry> = []): Array<DiscoveryEntry> {
     const loadedAt: number = Date.now();
-    return cards.map((card: FoodCard): DiscoveryEntry => { return { card, coverUrl: card.photoUrl, loadedAt }; });
+    return cards.map((card: FoodCard): DiscoveryEntry => {
+      const previous: DiscoveryEntry | undefined = retained.find((entry: DiscoveryEntry): boolean => entry.card.id === card.id);
+      if ((card.contentRevision || '').length > 0 && previous !== undefined && previous.coverUrl.length > 0 &&
+        previous.card.contentRevision === card.contentRevision && ImageRepository.canReuseCover(previous.card)) {
+        card.photoUrl = previous.coverUrl; card.primaryPhotoResolved = true; card.primaryPhotoLoadFailed = false;
+        this.hydratedIds.add(card.id);
+      }
+      const entry: DiscoveryEntry = { card, coverUrl: card.photoUrl, loadedAt };
+      return entry;
+    });
   }
   private entryRenderKey(entry: DiscoveryEntry): string {
     // Entries are replaced after asynchronous reads. An ID-only ForEach key keeps
@@ -319,14 +416,22 @@ export struct DiscoveryFeed {
       scannedCandidateCount: response.scannedCandidateCount || 0, fetchedCandidateCount: response.fetchedCandidateCount || 0, merchantReadCount: 0, returnedCount: response.cards.length, scope: 'ALL_PUBLIC' };
   }
   private async reload(recordHistory: boolean = false, remoteSync: boolean = false): Promise<void> {
+    this.cancelBottomPage();
     if (this.debounce !== undefined) { clearTimeout(this.debounce); this.debounce = undefined; }
+    let query: PublicCardQuery;
+    try { query = this.makeQuery(); } catch (failure) { this.status = stage47ErrorText(failure as Object, '筛选条件无效。'); return; }
+    const previousQuery: PublicCardQuery | undefined = this.submittedQuery;
+    const retain: boolean = remoteSync && this.cards.length > 0 && !this.showingPrevious && this.owner === this.viewer() &&
+      this.loadedSignature === this.signature() && previousQuery !== undefined &&
+      JSON.stringify(copyCardQuery(query)) === JSON.stringify(copyCardQuery(previousQuery));
+    const retained: Array<DiscoveryEntry> = retain ? this.cards.slice() : [];
+    const retainedCursor: string = retain ? this.nextCursor : '';
     const generation: number = ++this.listGeneration;
     this.feedLoadStartedAt = Date.now();
     this.loadFailed = false; this.featureNotReady = false;
     this.loading = true; this.loadingMore = false; this.loadMoreFailed = false; this.hydrationRunning = false; this.hydratedIds.clear(); this.failedPhotoIds.clear(); this.loadingPhotoIds.clear(); this.nextCursor = '';
-    let query: PublicCardQuery;
-    try { query = this.makeQuery(); } catch (failure) { this.status = stage47ErrorText(failure as Object, '筛选条件无效。'); this.loading = false; return; }
-    this.cards = []; this.status = '正在加载推荐…';
+    if (!retain) { this.cards = []; this.decodedCovers.clear(); }
+    this.stopResultMotion(); this.status = retain ? '正在刷新好味道…' : '正在加载推荐…';
     try {
       const result: DiscoveryCardPage = await this.queryCards(query, '');
       if (!this.current(generation)) return;
@@ -334,12 +439,20 @@ export struct DiscoveryFeed {
         if (!this.current(generation)) return; this.cards = this.previousCards.map((entry: DiscoveryEntry): DiscoveryEntry => { return { card: entry.card, coverUrl: '', loadedAt: entry.loadedAt }; }); this.hydratedIds.clear(); this.showingPrevious = true; this.nextCursor = '';
         this.status = '当前区域无结果，暂时展示上一地区结果。';
       } else {
-        this.cards = this.entries(result.cards); this.nextCursor = result.nextCursor; this.showingPrevious = false;
+        this.cards = this.entries(result.cards, retained); this.nextCursor = result.nextCursor; this.showingPrevious = false;
         this.status = this.resultStatus(this.cards.length, result.coverage, result.nextCursor);
       }
       this.submittedQuery = copyCardQuery(query);
       this.primaryRemoteSync = remoteSync; this.loadedSignature = this.signature();
+      const primary: DiscoveryEntry | undefined = this.cards.length > 0 ? this.cards[0] : undefined;
+      if (retain && !this.showingPrevious && this.isPublicFeedQuery(query) && primary !== undefined &&
+        primary.coverUrl.length > 0 && primary.card.primaryPhotoLoadFailed !== true) {
+        this.onPrimaryCard(primary.card, remoteSync); this.primaryRemoteSync = false;
+      }
       this.historyOpen = false;
+      this.visibleFirst = 0; this.visibleLast = Math.min(3, this.cards.length - 1);
+      this.scrolling = false; this.resultScroller.scrollTo({ xOffset: 0, yOffset: 0, animation: false });
+      if (retain) this.revealResults();
       // A submitted search is recorded only after the matching successful result state is assigned.
       if (recordHistory && query.keyword.length > 0 && !this.showingPrevious) {
         try { this.history = SearchHistoryStore.record(this.context(), this.owner, query.keyword); } catch (_error) { }
@@ -349,21 +462,50 @@ export struct DiscoveryFeed {
       if (!this.current(generation)) return;
       this.loadFailed = true;
       this.featureNotReady = failure instanceof CloudBusinessError && failure.code === 'FEATURE_NOT_READY';
+      if (retain && !invalidatesProtectedPage(failure as Object)) {
+        this.nextCursor = retainedCursor;
+        this.status = stage47ErrorText(failure as Object, '刷新失败，当前推荐已保留。');
+      } else if (invalidatesProtectedPage(failure as Object)) {
+        DiscoveryFeedState.clear(); this.cards = []; this.decodedCovers.clear(); this.submittedQuery = undefined;
+      }
       if (this.featureNotReady) {
         DiscoveryFeedState.clear(); this.cards = [];
         if (this.capabilities.searchEnabled || this.capabilities.mapEnabled) this.onUnavailable();
       }
-      this.status = stage47ErrorText(failure as Object, '推荐加载失败，请稍后重试。');
-    } finally { if (this.current(generation)) { this.loading = false; this.scheduleHomepagePrefetch(generation); } }
+      if (!retain || invalidatesProtectedPage(failure as Object)) this.status = stage47ErrorText(failure as Object, '推荐加载失败，请稍后重试。');
+    } finally { if (this.current(generation)) { this.loading = false; this.scheduleHomepagePrefetch(generation); this.syncIdleMotion(); this.scheduleBottomPage(generation); } }
+  }
+  private cancelBottomPage(): void {
+    if (this.bottomPageTimer !== undefined) clearTimeout(this.bottomPageTimer);
+    this.bottomPageTimer = undefined;
+  }
+  private scheduleBottomPage(generation: number): void {
+    this.cancelBottomPage();
+    if (!this.current(generation) || this.loading || this.loadingMore || this.loadFailed || this.loadMoreFailed ||
+      this.nextCursor.length === 0 || this.showingPrevious || this.submittedQuery === undefined) return;
+    // Wait for appended cards/footer to lay out before checking the true end.
+    this.bottomPageTimer = setTimeout((): void => {
+      this.bottomPageTimer = undefined;
+      if (!this.current(generation)) return;
+      let atEnd: boolean = this.cards.length === 0;
+      if (!atEnd) {
+        try { atEnd = this.resultScroller.isAtEnd(); } catch (_error) { return; }
+      }
+      if (atEnd) void this.loadMore(true);
+    }, 80);
   }
   private async loadMore(automatic: boolean = false): Promise<void> {
-    if (this.loading || this.loadingMore || this.nextCursor.length === 0 || this.showingPrevious || automatic && this.loadMoreFailed) return;
+    if (!this.current(this.listGeneration) || this.loading || this.loadingMore || this.loadFailed ||
+      this.nextCursor.length === 0 || this.showingPrevious || automatic && this.loadMoreFailed) return;
     const query: PublicCardQuery | undefined = this.submittedQuery;
     if (query === undefined) return;
+    this.cancelBottomPage();
+    const cursor: string = this.nextCursor;
     const generation: number = this.listGeneration; this.loadingMore = true; this.feedLoadStartedAt = Date.now();
     try {
-      const result: DiscoveryCardPage = await this.queryCards(query, this.nextCursor);
+      const result: DiscoveryCardPage = await this.queryCards(query, cursor);
       if (!this.current(generation)) return;
+      if (result.nextCursor === cursor) throw new Error('分页没有推进，请点击顶部刷新后重试。');
       this.cards = this.merge(this.cards, result.cards); this.nextCursor = result.nextCursor;
       this.loadMoreFailed = false;
       this.status = this.resultStatus(this.cards.length, result.coverage, result.nextCursor);
@@ -377,10 +519,11 @@ export struct DiscoveryFeed {
         this.status = stage47ErrorText(failure as Object, '推荐暂未开放。');
       }
       else this.status = stage47ErrorText(failure as Object, '推荐加载失败。');
-    } finally { if (this.current(generation)) { this.loadingMore = false; this.scheduleHomepagePrefetch(generation); } }
+    } finally { if (this.current(generation)) { this.loadingMore = false; this.scheduleHomepagePrefetch(generation); this.syncIdleMotion(); this.scheduleBottomPage(generation); } }
   }
   private async hydrateVisible(first: number, last: number): Promise<void> {
     this.visibleFirst = first; this.visibleLast = last;
+    this.syncIdleMotion();
     if (this.hydrationRunning || !this.active || !this.navigationVisible || !this.appActive) return;
     const generation: number = this.listGeneration;
     const chosen: Array<FoodCard> = this.cards.slice(Math.max(0, first), Math.min(this.cards.length, last + 1))
@@ -388,6 +531,7 @@ export struct DiscoveryFeed {
     if (chosen.length === 0) { this.scheduleHomepagePrefetch(generation); return; }
     console.info('[DiscoveryFeed] event=hydrate viewGeneration=' + generation + ' count=' + chosen.length + ' first=' + first + ' last=' + last);
     this.hydrationRunning = true; const changed: Array<string> = [];
+    this.syncIdleMotion();
     for (const card of chosen) this.loadingPhotoIds.add(card.id);
     try {
       if (!this.current(generation)) return;
@@ -416,6 +560,7 @@ export struct DiscoveryFeed {
         for (const card of chosen) this.loadingPhotoIds.delete(card.id);
         if (changed.length > 0 || this.visibleFirst !== first || this.visibleLast !== last || this.cards.slice(this.visibleFirst, this.visibleLast + 1).some((entry: DiscoveryEntry): boolean => !this.hydratedIds.has(entry.card.id) && !this.failedPhotoIds.has(entry.card.id))) void this.hydrateVisible(this.visibleFirst, this.visibleLast);
         else this.scheduleHomepagePrefetch(generation);
+        this.syncIdleMotion();
       }
     }
   }
@@ -425,10 +570,12 @@ export struct DiscoveryFeed {
     const signature: string = this.cards.map((entry: DiscoveryEntry): string => this.prefetchCardKey(entry.card)).join('|');
     if (this.prefetchGeneration === generation && this.prefetchCompletedSignature === signature) return;
     this.prefetchRunning = true;
+    this.syncIdleMotion();
     void this.prefetchHomepage(generation).finally((): void => {
       this.prefetchRunning = false;
       // A refresh may replace the generation while a background request is settling.
       if (generation !== this.listGeneration) this.scheduleHomepagePrefetch(this.listGeneration);
+      this.syncIdleMotion();
     });
   }
   private deferPrefetch(generation: number): void {
@@ -437,6 +584,7 @@ export struct DiscoveryFeed {
       this.prefetchTimer = undefined;
       this.scheduleHomepagePrefetch(this.listGeneration);
     }, 400);
+    this.syncIdleMotion();
   }
   private prefetchCardKey(card: FoodCard): string { return card.id + ':' + (card.contentRevision || ''); }
   private async prefetchHomepage(generation: number): Promise<void> {
@@ -570,6 +718,7 @@ export struct DiscoveryFeed {
     this.keywordInput = value; this.listGeneration++; this.loading = false; this.loadingMore = false; this.nextCursor = ''; this.submittedQuery = undefined;
     if (this.debounce !== undefined) { clearTimeout(this.debounce); this.debounce = undefined; }
     this.debounce = setTimeout((): void => { this.debounce = undefined; if (this.active) this.submitSearch(false); }, 300);
+    this.syncIdleMotion();
   }
   private submitSearch(recordHistory: boolean = true): void {
     if (!this.capabilities.searchEnabled) return;
@@ -580,6 +729,7 @@ export struct DiscoveryFeed {
     void this.reload(recordHistory);
   }
   private selectMode(mode: DiscoveryMode): void {
+    if (!this.capabilities.searchEnabled) return;
     if (this.mode === mode) return;
     this.mode = mode; this.closeMerchant(); this.showingPrevious = false; this.previousCards = []; this.previousResultRegion = undefined;
     void this.reload();
@@ -685,13 +835,63 @@ export struct DiscoveryFeed {
     this.onOpenCard(card);
   }
   private coverFailed(card: FoodCard): void {
+    const currentEntry: DiscoveryEntry | undefined = this.cards.find((entry: DiscoveryEntry): boolean => entry.card.id === card.id);
+    if (!this.active || currentEntry === undefined || (currentEntry.card !== card && currentEntry.card.contentRevision !== card.contentRevision)) return;
+    card = currentEntry.card; this.decodedCovers.delete(card.id);
     card.photoUrl = ''; card.primaryPhotoLoadFailed = true; this.failedPhotoIds.add(card.id); this.hydratedIds.delete(card.id);
     this.cards = this.cards.map((entry: DiscoveryEntry): DiscoveryEntry => { const failed: DiscoveryEntry = { card, coverUrl: '', loadedAt: entry.loadedAt }; return entry.card.id === card.id ? failed : entry; });
   }
   private toggleCategory(key: FoodCategoryV2): void {
-    if (this.categories.includes(key)) this.categories = this.categories.filter((value: FoodCategoryV2): boolean => value !== key);
-    else if (this.categories.length < 3) this.categories = this.categories.concat([key]);
-    else this.status = '最多选择 3 个分类。';
+    this.filterError = '';
+    if (this.draftCategories.includes(key)) this.draftCategories = this.draftCategories.filter((value: FoodCategoryV2): boolean => value !== key);
+    else if (this.draftCategories.length < 3) this.draftCategories = this.draftCategories.concat([key]);
+    else this.filterError = '最多选择 3 个分类。';
+  }
+  private setPanel(panel: DiscoveryPanel): void {
+    const options: AnimateParam = { duration: this.motionActive ? 180 : 0, curve: Curve.EaseOut };
+    this.getUIContext().animateTo(options, (): void => {
+      this.categoriesOpen = panel === 'CATEGORIES'; this.filtersOpen = panel === 'FILTERS'; this.historyOpen = panel === 'HISTORY';
+    });
+    this.syncIdleMotion();
+  }
+  private openFilters(): void {
+    this.draftCategories = this.categories.slice(); this.draftSort = this.sort;
+    this.draftPriceMin = this.priceMin; this.draftPriceMax = this.priceMax; this.draftPricePreset = this.pricePreset;
+    this.filterError = ''; this.setPanel('FILTERS');
+  }
+  private selectCategory(key: DiscoveryCategoryKey): void {
+    if (!this.capabilities.searchEnabled) return;
+    if (key === 'MORE') { this.setPanel(this.categoriesOpen ? 'NONE' : 'CATEGORIES'); return; }
+    this.setPanel('NONE');
+    if (key === 'ALL' && this.categories.length === 0 || this.categories.length === 1 && this.categories[0] === key) return;
+    this.categories = key === 'ALL' ? [] : [key];
+    this.closeMerchant(); this.showingPrevious = false; this.previousCards = []; this.previousResultRegion = undefined;
+    void this.reload();
+  }
+  private shortcutSelected(key: DiscoveryCategoryKey): boolean {
+    if (key === 'ALL') return this.categories.length === 0;
+    if (key === 'MORE') return this.categories.length > 1 || this.categories.length === 1 &&
+      !DISCOVERY_SHORTCUTS.some((item: DiscoveryShortcut): boolean => item.key === this.categories[0]);
+    return this.categories.length === 1 && this.categories[0] === key;
+  }
+  private shortcutLabel(shortcut: DiscoveryShortcut): string {
+    if (shortcut.key !== 'MORE' || !this.shortcutSelected('MORE')) return shortcut.label;
+    return this.categories.length === 1 ? categoryV2Label(this.categories[0]) : '组合分类';
+  }
+  private browseMap(): void {
+    this.setPanel('NONE'); this.cameraTarget = this.currentCamera; this.expanded = true; this.listOpen = false;
+  }
+  private refreshFeed(): void {
+    this.setPanel('NONE'); DiscoveryFeedState.clear(); void this.reload(false, true);
+  }
+  private categoryAvailabilityText(): string {
+    if (this.capabilitiesLoading) return '正在检查分类是否可用…';
+    if (this.capabilities.searchReason === 'CAPABILITIES_LOAD_FAILED') return '分类暂时无法连接，可重新检查。';
+    if (this.capabilities.searchReason === 'CARD_HISTORY_REQUIRED') return '分类历史数据尚未整理完成，可先浏览全部推荐。';
+    if (this.capabilities.searchReason === 'INDEX_VERIFICATION_REQUIRED') return '分类查询尚未完成验证，可先浏览全部推荐。';
+    if (this.capabilities.searchReason === 'HISTORY_OR_INDEX_REQUIRED') return '分类数据或查询尚未就绪，可先浏览全部推荐。';
+    if (this.capabilities.searchReason === 'VALIDATION_REQUIRED') return '分类功能正在准备中，可先浏览全部推荐。';
+    return '分类暂时不可用，可先浏览全部推荐。';
   }
   private filterSummary(): string {
     const categories: string = this.categories.length === 0 ? '全部分类' : this.categories.map((key: FoodCategoryV2): string => categoryV2Label(key)).join('、');
@@ -700,216 +900,352 @@ export struct DiscoveryFeed {
     return categories + ' · ' + price + ' · ' + (option === undefined ? '最新发布' : option.label);
   }
   private resetFilters(): void { this.categories = []; this.pricePreset = -1; this.priceMin = ''; this.priceMax = ''; this.sort = 'LATEST'; }
-  private applyFilters(): void {
-    try { this.makeQuery(); } catch (failure) { this.status = stage47ErrorText(failure as Object, '筛选条件无效。'); return; }
-    this.filtersOpen = false; this.showingPrevious = false; this.previousCards = []; this.previousResultRegion = undefined; void this.reload();
+  private resetDraftFilters(): void {
+    this.draftCategories = []; this.draftPricePreset = -1; this.draftPriceMin = ''; this.draftPriceMax = '';
+    this.draftSort = 'LATEST'; this.filterError = '';
   }
-  private compactMapHeight(): number { return Math.max(120, Math.min(136, this.availableHeight - 580)); }
-  private showsFullMap(): boolean { return this.expanded || this.availableHeight >= 680; }
+  private applyFilters(): void {
+    const draft: DiscoveryFilterValues = { categories: this.draftCategories.slice(), sort: this.draftSort,
+      priceMin: this.draftPriceMin, priceMax: this.draftPriceMax, pricePreset: this.draftPricePreset };
+    try { this.makeQuery('', draft); } catch (failure) { this.filterError = stage47ErrorText(failure as Object, '筛选条件无效。'); return; }
+    this.categories = draft.categories; this.sort = draft.sort; this.pricePreset = draft.pricePreset;
+    this.priceMin = draft.priceMin; this.priceMax = draft.priceMax;
+    this.setPanel('NONE'); this.closeMerchant(); this.showingPrevious = false; this.previousCards = []; this.previousResultRegion = undefined; void this.reload();
+  }
   @Builder
   private modeButton(mode: DiscoveryMode, label: string): void {
     Button({ type: ButtonType.Normal }) {
-      Column({ space: 6 }) {
-        Text(label).fontSize(16).fontWeight(this.mode === mode ? FontWeight.Bold : FontWeight.Medium)
-          .fontColor(this.mode === mode ? $r('app.color.action_text') : $r('app.color.muted'))
+      Column({ space: 5 }) {
+        Text(label).fontSize(15).fontWeight(this.mode === mode ? FontWeight.Bold : FontWeight.Medium)
+          .fontColor(this.mode === mode ? $r('app.color.discovery_ink') : $r('app.color.discovery_muted'))
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
         Row() {}.width(24).height(3).borderRadius(2)
-          .backgroundColor(this.mode === mode ? $r('app.color.accent_action') : Color.Transparent)
+          .backgroundColor(this.mode === mode ? $r('app.color.discovery_gold') : Color.Transparent)
       }.width('100%').height('100%').justifyContent(FlexAlign.Center)
-    }.height(48).layoutWeight(1).padding(0).backgroundColor(Color.Transparent).borderRadius(12)
+    }.height(44).layoutWeight(1).padding(0).backgroundColor(Color.Transparent).borderRadius(12)
+      .enabled(this.capabilities.searchEnabled).opacity(this.capabilities.searchEnabled || mode === 'ALL' ? 1 : 0.45)
       .accessibilityText(label + (this.mode === mode ? '，已选中' : '，未选中'))
       .accessibilitySelected(this.mode === mode).onClick((): void => this.selectMode(mode))
+  }
+  private shortcutBorder(key: DiscoveryCategoryKey): BorderOptions {
+    if (this.shortcutSelected(key)) {
+      const selected: BorderOptions = { width: 2, color: $r('app.color.discovery_accent'), style: BorderStyle.Solid };
+      return selected;
+    }
+    const idle: BorderOptions = { width: 1.2, color: $r('app.color.discovery_line'), style: BorderStyle.Dashed };
+    return idle;
+  }
+  @Builder
+  private categoryShortcut(shortcut: DiscoveryShortcut): void {
+    Button({ type: ButtonType.Normal }) {
+      Column({ space: 4 }) {
+        Stack() {
+          // The icons are multi-colour artwork with separate light/dark files; tinting them flattened
+          // strokes and fills into one colour, so they are drawn as designed on a neutral surface.
+          Image(discoveryCategoryIcon(shortcut.key)).width(30).height(30).objectFit(ImageFit.Contain)
+            .accessibilityLevel('no')
+        }.width(44).height(44).borderRadius(15)
+          .backgroundColor(this.shortcutSelected(shortcut.key) ? $r('app.color.discovery_soft') : $r('app.color.discovery_surface'))
+          .border(this.shortcutBorder(shortcut.key))
+        Text(this.shortcutLabel(shortcut)).fontSize(11).fontWeight(this.shortcutSelected(shortcut.key) ? FontWeight.Bold : FontWeight.Medium)
+          .fontColor(this.shortcutSelected(shortcut.key) ? $r('app.color.discovery_accent') : $r('app.color.discovery_muted'))
+          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%').textAlign(TextAlign.Center)
+      }.width('100%').justifyContent(FlexAlign.Center)
+    }.layoutWeight(1).height(64).constraintSize({ minWidth: 44 }).padding(0).borderRadius(14).backgroundColor(Color.Transparent)
+      .enabled(this.capabilities.searchEnabled).opacity(this.capabilities.searchEnabled ? 1 : 0.5)
+      .accessibilityText(this.shortcutLabel(shortcut) + (this.shortcutSelected(shortcut.key) ? '，已选中' : '') +
+        (this.capabilities.searchEnabled ? '' : '，分类暂未开放'))
+      .accessibilitySelected(this.shortcutSelected(shortcut.key)).onClick((): void => this.selectCategory(shortcut.key))
+  }
+  @Builder
+  private iconAction(icon: Resource, label: string, action: () => void, enabled: boolean = true): void {
+    Button({ type: ButtonType.Normal }) {
+      Image(icon).width(20).height(20).objectFit(ImageFit.Contain).fillColor($r('app.color.discovery_accent')).accessibilityLevel('no')
+    }.width(44).height(44).padding(10).backgroundColor(Color.Transparent).borderRadius(14)
+      .enabled(enabled).opacity(enabled ? 1 : 0.45).accessibilityText(label).onClick(action)
+  }
+  @Builder
+  private homeHeader(): void {
+    Row({ space: 8 }) {
+      Text('食刻').fontSize(24).fontWeight(FontWeight.Bold).fontColor($r('app.color.discovery_ink'))
+      Text(this.owner === 'guest' ? '游客 · 发现好味道' : '发现每一餐的好味道').fontSize(11).fontColor($r('app.color.discovery_muted'))
+        .layoutWeight(1).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+      Button('吃什么 ›').height(44).constraintSize({ minWidth: 72 }).fontSize(13).padding({ left: 12, right: 12 })
+        .borderRadius(18).backgroundColor($r('app.color.discovery_soft')).fontColor($r('app.color.discovery_accent'))
+        .accessibilityText('今日吃什么，随机翻三张').onClick((): void => this.onOpenMeal())
+    }.width('100%').height(44)
+    if (this.capabilities.searchEnabled) {
+      Row({ space: 2 }) {
+        Image($r('app.media.ic_discovery_search')).width(18).height(18).margin({ left: 12 }).accessibilityLevel('no')
+        TextInput({ text: this.keywordInput, placeholder: '搜索菜品、店名' }).height(48).layoutWeight(1).maxLength(50)
+          .fontSize(14).fontColor($r('app.color.discovery_ink')).placeholderColor($r('app.color.discovery_muted'))
+          .backgroundColor(Color.Transparent).padding({ left: 6, right: 4 }).caretColor($r('app.color.discovery_accent'))
+          .accessibilityText('搜索菜品或店名').onChange((value: string): void => this.inputChanged(value)).onSubmit((): void => this.submitSearch())
+        this.iconAction($r('app.media.ic_discovery_history'), '本机搜索历史', (): void => this.setPanel(this.historyOpen ? 'NONE' : 'HISTORY'))
+        Button('搜索').height(44).fontSize(13).padding({ left: 12, right: 12 }).borderRadius(14)
+          .backgroundColor($r('app.color.discovery_gold')).fontColor($r('app.color.discovery_on_gold'))
+          .onClick((): void => this.submitSearch())
+      }.width('100%').padding({ right: 4 }).backgroundColor($r('app.color.discovery_surface')).borderRadius(18)
+    }
+    Row() {
+      ForEach(DISCOVERY_SHORTCUTS, (shortcut: DiscoveryShortcut) => { this.categoryShortcut(shortcut); },
+        (shortcut: DiscoveryShortcut): string => shortcut.key)
+    }.width('100%')
+    Row() {
+      Row({ space: 2 }) {
+        this.modeButton('ALL', '推荐'); this.modeButton('DELIVERY', '外卖'); this.modeButton('DINE_IN', '到店');
+      }.layoutWeight(1)
+      if (this.capabilities.searchEnabled) { this.iconAction($r('app.media.ic_discovery_filter'), '高级筛选与排序，' + this.filterSummary(), (): void => this.openFilters()); }
+      if (this.capabilities.mapEnabled) { this.iconAction($r('app.media.map_marker'), '浏览地图', (): void => this.browseMap()); }
+      this.iconAction($r('app.media.ic_discovery_refresh'), '刷新推荐', (): void => this.refreshFeed(), !this.loading)
+    }.width('100%')
+    if (this.categories.length > 0 || this.pricePreset >= 0 || this.priceMin.length > 0 || this.sort !== 'LATEST') {
+      Text(this.filterSummary()).width('100%').fontSize(12).fontColor($r('app.color.discovery_muted'))
+        .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).margin({ bottom: 4 })
+    }
+  }
+  @Builder
+  private categoryPanel(): void {
+    Scroll() {
+      Column({ space: 8 }) {
+        Text('点选一个分类，立即更新推荐').fontSize(13).fontColor($r('app.color.discovery_muted')).width('100%')
+        Button('全部分类').width('100%').height(48).onClick((): void => this.selectCategory('ALL'))
+          .attributeModifier(new DiscoveryChoiceStyle(this.categories.length === 0))
+        Flex({ wrap: FlexWrap.Wrap }) {
+          ForEach(CATEGORY_V2_OPTIONS, (option: CategoryV2Option) => {
+            Button({ type: ButtonType.Normal }) {
+              Column({ space: 6 }) {
+                Image(discoveryCategoryIcon(option.key)).width(30).height(30).objectFit(ImageFit.Contain).accessibilityLevel('no')
+                Text(option.label).fontSize(12).fontColor($r('app.color.discovery_ink')).maxLines(2).textAlign(TextAlign.Center)
+              }.width('100%').justifyContent(FlexAlign.Center)
+            }.width('31%').height(78).padding(6).margin({ right: '2%', bottom: 8 }).borderRadius(14)
+              .backgroundColor(this.categories.length === 1 && this.categories[0] === option.key ? $r('app.color.discovery_soft') : $r('app.color.discovery_surface'))
+              .border({ width: 1, color: this.categories.length === 1 && this.categories[0] === option.key ? $r('app.color.discovery_accent') : $r('app.color.discovery_line') })
+              .accessibilitySelected(this.categories.length === 1 && this.categories[0] === option.key)
+              .accessibilityText(option.label).onClick((): void => this.selectCategory(option.key))
+          }, (option: CategoryV2Option): string => option.key)
+        }.width('100%')
+      }.width('100%')
+    }.width('100%').height(Math.min(400, this.availableHeight * 0.62)).scrollBar(BarState.Off)
   }
   @Builder
   private filterPanel(): void {
     Scroll() {
       Column({ space: 8 }) {
-        Text('分类最多选 3 项，按任一分类匹配').fontSize(13).fontColor($r('app.color.muted')).width('100%');
+        Text('分类最多选 3 项，按任一分类匹配').fontSize(13).fontColor($r('app.color.discovery_muted')).width('100%')
         Flex({ wrap: FlexWrap.Wrap }) {
           ForEach(CATEGORY_V2_OPTIONS, (option: CategoryV2Option) => {
             Button(option.label).height(48).fontSize(12).margin({ right: 8, bottom: 8 })
-              .accessibilityText(option.label + (this.categories.includes(option.key) ? '，已选中' : '，未选中')).onClick((): void => this.toggleCategory(option.key)).attributeModifier(new ChoiceActionStyle(this.categories.includes(option.key)))
+              .accessibilityText(option.label + (this.draftCategories.includes(option.key) ? '，已选中' : '，未选中'))
+              .onClick((): void => this.toggleCategory(option.key)).attributeModifier(new DiscoveryChoiceStyle(this.draftCategories.includes(option.key)))
           }, (option: CategoryV2Option): string => option.key)
         }.width('100%')
-        Text('按各内容对应价格：外卖单品／到店人均；未知价不进入价格筛选。').fontSize(12).fontColor($r('app.color.muted'));
+        Text('按外卖单品／到店人均筛选，未知价格不进入区间。').fontSize(12).fontColor($r('app.color.discovery_muted'))
         Flex({ wrap: FlexWrap.Wrap }) {
           ForEach([0, 1, 2, 3], (value: number) => {
             Button(value === 3 ? '30 元起' : value * 10 + '–' + (value + 1) * 10 + ' 元').height(48).margin(4)
-              .onClick((): void => { this.pricePreset = this.pricePreset === value ? -1 : value; this.priceMin = ''; this.priceMax = ''; }).attributeModifier(new ChoiceActionStyle(this.pricePreset === value))
+              .onClick((): void => { this.draftPricePreset = this.draftPricePreset === value ? -1 : value; this.draftPriceMin = ''; this.draftPriceMax = ''; this.filterError = ''; })
+              .attributeModifier(new DiscoveryChoiceStyle(this.draftPricePreset === value))
           }, (value: number): string => value.toString())
         }.width('100%')
         Row({ space: 8 }) {
-          TextInput({ text: this.priceMin, placeholder: '最低价（元）' }).height(48).layoutWeight(1).maxLength(12)
-            .accessibilityText('自定义最低价格，单位元').onChange((value: string): void => { this.priceMin = value; this.pricePreset = -1; });
-          TextInput({ text: this.priceMax, placeholder: '最高价，不含（元）' }).height(48).layoutWeight(1).maxLength(12)
-            .accessibilityText('自定义最高价格，不含上限，单位元').onChange((value: string): void => { this.priceMax = value; this.pricePreset = -1; });
+          TextInput({ text: this.draftPriceMin, placeholder: '最低价（元）' }).height(48).layoutWeight(1).maxLength(12)
+            .fontSize(14).fontColor($r('app.color.discovery_ink')).backgroundColor($r('app.color.discovery_canvas'))
+            .accessibilityText('最低价格，单位元').onChange((value: string): void => { this.draftPriceMin = value; this.draftPricePreset = -1; this.filterError = ''; })
+          TextInput({ text: this.draftPriceMax, placeholder: '最高价，不含' }).height(48).layoutWeight(1).maxLength(12)
+            .fontSize(14).fontColor($r('app.color.discovery_ink')).backgroundColor($r('app.color.discovery_canvas'))
+            .accessibilityText('最高价格，不含上限，单位元').onChange((value: string): void => { this.draftPriceMax = value; this.draftPricePreset = -1; this.filterError = ''; })
         }.width('100%')
         Flex({ wrap: FlexWrap.Wrap }) {
           ForEach(SORT_OPTIONS, (option: SortOption) => {
-            Button(option.label).height(48).fontSize(13).margin({ right: 8, bottom: 8 })
-              .onClick((): void => { this.sort = option.value; }).attributeModifier(new ChoiceActionStyle(this.sort === option.value))
+            Button(option.label).height(48).margin({ right: 8, bottom: 8 }).onClick((): void => { this.draftSort = option.value; })
+              .attributeModifier(new DiscoveryChoiceStyle(this.draftSort === option.value))
           }, (option: SortOption): string => option.value)
-        }
-        Row({ space: 8 }) {
-          Button('清除筛选').height(48).layoutWeight(1).onClick((): void => this.resetFilters()).attributeModifier(new QuietActionStyle());
-          Button('应用筛选').height(48).layoutWeight(1).onClick((): void => this.applyFilters()).attributeModifier(new PrimaryActionStyle());
         }.width('100%')
-      }.width('100%').padding(8)
-    }.width('100%').height(Math.min(260, this.availableHeight * 0.5)).scrollBar(BarState.Off)
+        if (this.filterError.length > 0) { Text(this.filterError).width('100%').fontSize(13).fontColor($r('app.color.danger')); }
+        Row({ space: 8 }) {
+          Button('清除筛选').height(48).layoutWeight(1).onClick((): void => this.resetDraftFilters()).attributeModifier(new DiscoveryActionStyle())
+          Button('应用筛选').height(48).layoutWeight(1).onClick((): void => this.applyFilters()).attributeModifier(new DiscoveryActionStyle(true))
+        }.width('100%')
+      }.width('100%').padding(4)
+    }.width('100%').height(Math.min(420, this.availableHeight * 0.62)).scrollBar(BarState.Off)
   }
   private coverScale(): number {
     if (this.windowBreakpoint === 'sm' || this.waterfallWidthVp <= 0) return 1;
     const columns: number = BreakpointSystem.columns(this.windowBreakpoint);
     const cardWidth: number = (this.waterfallWidthVp - (columns - 1) * BreakpointSystem.CARD_GAP) / columns;
-    return Math.max(1, Math.min(1.45, (cardWidth - 24) / 150));
+    return Math.max(1, Math.min(1.45, (cardWidth - 20) / 150));
   }
-
+  @Builder
+  private paginationFooter(): void {
+    Column({ space: 6 }) {
+      if (this.loadingMore) {
+        Row({ space: 8 }) {
+          DiscoveryLoadingMark({ markSize: 24, motionEnabled: this.motionActive });
+          Text('正在加载更多推荐…').fontSize(13).fontColor($r('app.color.discovery_muted'));
+        }.width('100%').constraintSize({ minHeight: 40 }).justifyContent(FlexAlign.Center);
+      } else if (this.loadMoreFailed) {
+        Text('加载暂时失败，请点击顶部刷新重试。').fontSize(13).lineHeight(19)
+          .fontColor($r('app.color.discovery_muted')).width('100%').textAlign(TextAlign.Center);
+      } else if (this.nextCursor.length === 0 && !this.loading && !this.showingPrevious) {
+        Text('已经到底了').fontSize(12).fontColor($r('app.color.discovery_muted')).width('100%').textAlign(TextAlign.Center);
+      }
+    }.width('100%').padding({ top: 8, bottom: 12 });
+  }
   @Builder
   private cardResults(): void {
-    Row({ space: 8 }) {
-      Text(this.showingPrevious ? '上一地区结果' : this.scope === 'VIEWPORT' ? '本区域推荐' : '全部公开推荐').fontSize(13).fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.ink')).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1);
-      Button('刷新').attributeModifier(new QuietActionStyle()).height(48).enabled(!this.loading)
-        .onClick((): void => { DiscoveryFeedState.clear(); void this.reload(false, true); })
-    }.width('100%')
-    if (this.showingPrevious) { Button('返回上一地区').height(48).fontSize(12).onClick((): void => this.returnPrevious()).attributeModifier(new QuietActionStyle()); }
-    else if (this.scope === 'VIEWPORT') { Button('搜全部公开').height(48).fontSize(12).onClick((): void => this.submitSearch(false)).attributeModifier(new SecondaryActionStyle()); }
-    if (!this.loadFailed) {
-      Text(this.status).fontSize(12).fontColor($r('app.color.muted')).maxLines(3).width('100%')
+    if (this.showingPrevious || this.scope === 'VIEWPORT') {
+      Row({ space: 8 }) {
+        Text(this.showingPrevious ? '上一地区结果' : '本区域推荐').layoutWeight(1).fontSize(13).fontColor($r('app.color.discovery_ink'))
+        Button(this.showingPrevious ? '返回上一地区' : '搜全部公开').height(48).fontSize(12)
+          .onClick((): void => { if (this.showingPrevious) this.returnPrevious(); else this.submitSearch(false); }).attributeModifier(new DiscoveryActionStyle())
+      }.width('100%')
+    }
+    if (this.loading && this.cards.length > 0) {
+      Row({ space: 8 }) {
+        DiscoveryLoadingMark({ markSize: 24, motionEnabled: this.motionActive })
+        Text('正在刷新好味道').fontSize(12).fontColor($r('app.color.discovery_accent'))
+      }.width('100%').height(36).justifyContent(FlexAlign.Center).backgroundColor($r('app.color.discovery_soft')).borderRadius(12)
+    } else if (this.cards.length > 0 && (this.loadFailed || this.loadMoreFailed)) {
+      // The normal-state status line is omitted so the first cards start higher; failures still explain themselves.
+      Text(this.status).width('100%').fontSize(12).fontColor(this.loadFailed || this.loadMoreFailed ? $r('app.color.danger') : $r('app.color.discovery_muted'))
+        .maxLines(this.loadFailed || this.loadMoreFailed ? 2 : 1).textOverflow({ overflow: TextOverflow.Ellipsis })
+      if (this.loadFailed) { Button('重试刷新').height(48).onClick((): void => this.refreshFeed()).attributeModifier(new DiscoveryActionStyle()); }
     }
     if (this.cards.length === 0) {
-      Column({ space: 8 }) {
-        if (this.loading) {
-          LoadingProgress().width(36).height(36).color($r('app.color.accent_action'))
-          Text('正在加载推荐').fontSize(16).fontColor($r('app.color.ink'))
-        } else if (this.loadFailed) {
-          Column({ space: 12 }) {
-            Text(this.featureNotReady ? '推荐暂未开放' : '推荐暂时加载失败')
-              .fontSize(18).fontWeight(FontWeight.Medium).fontColor($r('app.color.ink'))
-            Text(this.status).fontSize(14).lineHeight(20).fontColor($r('app.color.muted'))
-              .textAlign(TextAlign.Center).width('100%')
-            Button('重新加载').attributeModifier(new SecondaryActionStyle()).height(48)
-              .onClick((): void => { void this.reload(); })
-          }.width('100%').padding(24).backgroundColor($r('app.color.surface')).borderRadius(18)
-            .border({ width: 1, color: $r('app.color.line') })
+      Column({ space: 14 }) {
+        if (this.loading || this.loadingMore) {
+          DiscoveryLoadingMark({ markSize: 58, motionEnabled: this.motionActive })
+          Text('正在发现好味道').fontSize(18).fontWeight(FontWeight.Medium).fontColor($r('app.color.discovery_ink'))
+          Text('加载就绪后显示商品与实拍图').fontSize(13).fontColor($r('app.color.discovery_muted'))
+        } else if (this.loadFailed || this.loadMoreFailed) {
+          Text(this.featureNotReady ? '推荐暂未开放' : '推荐暂时加载失败').fontSize(18).fontWeight(FontWeight.Medium).fontColor($r('app.color.discovery_ink'))
+          Text(this.status).fontSize(14).lineHeight(21).fontColor($r('app.color.discovery_muted')).textAlign(TextAlign.Center).width('100%')
+          Button('重新加载').height(48).onClick((): void => { void this.reload(); }).attributeModifier(new DiscoveryActionStyle(true))
         } else {
-          Text(this.nextCursor.length > 0 ? '扫描尚未完成' : '没有符合条件的推荐')
-            .fontSize(16).fontColor($r('app.color.ink'))
+          Image($r('app.media.ic_discovery_search')).width(36).height(36).accessibilityLevel('no')
+          Text(this.nextCursor.length > 0 ? '扫描尚未完成' : '没有符合条件的推荐').fontSize(18).fontColor($r('app.color.discovery_ink'))
+          Text(this.status).fontSize(13).fontColor($r('app.color.discovery_muted')).textAlign(TextAlign.Center).width('100%')
           if (this.nextCursor.length === 0 && this.capabilities.searchEnabled) {
-            Button('清除筛选并搜索全部公开').height(48).onClick((): void => { this.resetFilters(); this.keywordInput = ''; this.submitSearch(false); }).attributeModifier(new QuietActionStyle())
+            Button('清除筛选并搜索全部').height(48).onClick((): void => { this.resetFilters(); this.keywordInput = ''; this.submitSearch(false); })
+              .attributeModifier(new DiscoveryActionStyle(true))
           }
         }
-      }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center)
+      }.layoutWeight(1).width('100%').padding(20).justifyContent(FlexAlign.Center)
     } else {
-      WaterFlow({ scroller: this.resultScroller }) {
+      WaterFlow({ scroller: this.resultScroller, footer: (): void => { this.paginationFooter(); } }) {
         ForEach(this.cards, (entry: DiscoveryEntry, index: number) => {
           FlowItem() {
-            DiscoveryCard({ card: entry.card, coverUrl: entry.coverUrl, featured: index % 2 === 0, coverScale: this.coverScale(), selected: !this.showingPrevious && this.selectedMerchantId.length > 0 && entry.card.merchantId === this.selectedMerchantId,
+            DiscoveryCard({ card: entry.card, coverUrl: entry.coverUrl, featured: index % 2 === 0, coverScale: this.coverScale(),
+              marketStyle: true, motionEnabled: this.motionActive,
+              selected: !this.showingPrevious && this.selectedMerchantId.length > 0 && entry.card.merchantId === this.selectedMerchantId,
+              onCoverDecoded: (id: string, url: string): void => this.coverDecoded(id, url),
               onCoverFailed: (): void => this.coverFailed(entry.card),
-              onRetry: (): void => { ImageRepository.retryUnavailableService(); this.failedPhotoIds.delete(entry.card.id); this.hydratedIds.delete(entry.card.id); void this.hydrateVisible(index, index); },
+              onRetry: (): void => { ImageRepository.retryUnavailableService(); this.failedPhotoIds.delete(entry.card.id); this.hydratedIds.delete(entry.card.id); this.decodedCovers.delete(entry.card.id); void this.hydrateVisible(index, index); },
               onOpen: (): void => this.openCard(entry.card) })
           }.width('100%')
         }, (entry: DiscoveryEntry): string => this.entryRenderKey(entry))
       }.width('100%').layoutWeight(1).columnsTemplate(BreakpointSystem.columnsTemplate(this.windowBreakpoint))
         .columnsGap(BreakpointSystem.CARD_GAP).rowsGap(BreakpointSystem.CARD_GAP).scrollBar(BarState.Off)
+        .opacity(this.resultOpacity).translate({ y: this.resultOffset }).onAppear((): void => this.revealResults())
         .onAreaChange((_oldArea: Area, newArea: Area): void => {
           const width: number = Number(newArea.width);
           if (Number.isFinite(width) && width > 0 && this.waterfallWidthVp !== width) this.waterfallWidthVp = width;
         })
+        .onScrollStart((): void => { this.scrolling = true; this.syncIdleMotion(); })
+        .onScrollStop((): void => { this.scrolling = false; this.syncIdleMotion(); this.scheduleBottomPage(this.listGeneration); })
+        .onReachEnd((): void => { void this.loadMore(true); })
         .onScrollIndex((first: number, last: number): void => {
-          if (first > 0) this.filtersOpen = false;
           void this.hydrateVisible(first, last);
-          if (first > 0 && last >= this.cards.length - 2) void this.loadMore(true);
         })
     }
-    if (this.nextCursor.length > 0 && !this.showingPrevious) {
-      Button(this.loadingMore ? '加载中…' : '继续搜索推荐').height(48).width('100%').enabled(!this.loading && !this.loadingMore)
-        .onClick((): void => { void this.loadMore(); }).attributeModifier(new SecondaryActionStyle());
-    }
     if (!this.capabilities.searchEnabled && !this.expanded) {
-      Text('当前展示全部公开推荐，筛选功能暂未开放。')
-        .fontSize(12).fontColor($r('app.color.muted')).width('100%').margin({ top: 4 })
+      Row({ space: 8 }) {
+        Text(this.categoryAvailabilityText()).fontSize(12).fontColor($r('app.color.discovery_muted')).layoutWeight(1)
+        Button(this.capabilitiesLoading ? '检查中…' : '重新检查').constraintSize({ minWidth: 104, minHeight: 48 })
+          .enabled(!this.capabilitiesLoading && !this.loading && !this.loadingMore)
+          .accessibilityText(this.capabilitiesLoading ? '正在检查分类是否可用' : '重新检查分类是否可用')
+          .onClick((): void => this.onReloadCapabilities()).attributeModifier(new DiscoveryActionStyle())
+      }.width('100%')
     }
+  }
+  @Builder
+  private panelHeading(title: string): void {
+    Row() {
+      Text(title).fontSize(18).fontWeight(FontWeight.Bold).fontColor($r('app.color.discovery_ink')).layoutWeight(1)
+      Button('关闭').height(48).fontSize(13).onClick((): void => this.setPanel('NONE')).attributeModifier(new DiscoveryActionStyle())
+    }.width('100%')
   }
   build() {
     Stack({ alignContent: Alignment.Bottom }) {
+      DiscoveryBackdrop({ idleMotion: this.idleMotionReady })
       Column({ space: 4 }) {
-        if (!this.expanded || this.availableHeight >= 360) {
-        Row() {
-          Text(this.expanded ? '地图浏览' : '推荐').fontSize(24).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'));
-          Blank()
-          if (this.expanded) {
-            Button('刷新').attributeModifier(new QuietActionStyle()).height(48).enabled(!this.loading)
-              .onClick((): void => { DiscoveryFeedState.clear(); void this.reload(false, true); })
-          } else {
-            Button('今日吃什么 ›').attributeModifier(new RandomPrimaryStyle()).fontSize(14).padding({ left: 14, right: 14 })
-              .accessibilityText('今日吃什么，随机翻三张').onClick((): void => this.onOpenMeal())
-          }
-        }.width('100%')
-        }
-        if (!this.expanded && this.capabilities.searchEnabled) {
+        if (!this.expanded) {
+          this.homeHeader();
+          this.cardResults();
+        } else {
           Row({ space: 8 }) {
-            TextInput({ text: this.keywordInput, placeholder: '搜产品或店名' }).height(48).layoutWeight(1).maxLength(50)
-              .accessibilityText('搜索产品或店名').onChange((value: string): void => this.inputChanged(value)).onSubmit((): void => this.submitSearch());
-            Button('搜索').height(48).onClick((): void => this.submitSearch()).attributeModifier(new PrimaryActionStyle());
-            Button('历史').height(48).fontSize(12).onClick((): void => { this.historyOpen = !this.historyOpen; this.filtersOpen = false; }).attributeModifier(new QuietActionStyle());
+            Text('地图浏览').fontSize(20).fontWeight(FontWeight.Bold).fontColor($r('app.color.discovery_ink')).layoutWeight(1)
+            Button('返回商品流').height(48).fontSize(13).onClick((): void => { this.expanded = false; this.listOpen = false; this.closeMerchant(); })
+              .attributeModifier(new DiscoveryActionStyle())
           }.width('100%')
-        }
-        if (!this.expanded || this.availableHeight >= 360) {
-          Row({ space: 8 }) { this.modeButton('ALL', '全部'); this.modeButton('DELIVERY', '外卖'); this.modeButton('DINE_IN', '到店'); }.width('100%')
-        }
-        if (!this.expanded && this.capabilities.searchEnabled) {
-          Button(this.filterSummary()).width('100%').height(48).fontSize(12)
-            .accessibilityText('筛选与排序，' + this.filterSummary()).onClick((): void => { this.filtersOpen = !this.filtersOpen; this.historyOpen = false; }).attributeModifier(new SecondaryActionStyle());
-        }
-        if (this.capabilities.mapEnabled) {
-          if (this.showsFullMap()) {
-          DiscoveryMap({ merchants: this.merchants, selectedMerchantId: this.selectedMerchantId, camera: this.cameraTarget, expanded: this.expanded,
-            dirty: this.viewportDirty, loading: this.mapLoading, onViewport: (viewport: DiscoveryViewport, camera: DiscoveryCamera): void => this.changedViewport(viewport, camera),
-            onSelect: (merchant: MapMerchant): void => this.selectMerchant(merchant), onSearch: (): void => this.searchArea(),
-            onExpand: (): void => { this.cameraTarget = this.currentCamera; this.expanded = !this.expanded; this.listOpen = false; this.filtersOpen = false; this.historyOpen = false; } })
-            .width('100%').height(this.expanded ? Math.max(120, this.availableHeight - (this.availableHeight < 360 ? 116 : 236) - (this.mapCursor.length > 0 ? 52 : 0)) : this.compactMapHeight())
-          Text(this.mapStatus).fontSize(12).fontColor($r('app.color.muted')).maxLines(2).width('100%');
-          if (this.mapCursor.length > 0) {
-            Button(this.mapLoading ? '搜索中…' : '继续搜索区域地点').height(48).enabled(!this.mapLoading)
-              .onClick((): void => { if (this.searchedViewport !== undefined) void this.queryMap(this.searchedViewport, true); }).attributeModifier(new SecondaryActionStyle());
+          if (this.availableHeight >= 360) {
+            Row({ space: 6 }) { this.modeButton('ALL', '推荐'); this.modeButton('DELIVERY', '外卖'); this.modeButton('DINE_IN', '到店'); }.width('100%')
           }
-          } else {
-            Button('浏览地图').width('100%').height(48).accessibilityText('展开地图，未主动定位')
-              .onClick((): void => { this.cameraTarget = this.currentCamera; this.expanded = true; this.filtersOpen = false; this.historyOpen = false; }).attributeModifier(new SecondaryActionStyle());
+          if (this.capabilities.mapEnabled) {
+            DiscoveryMap({ merchants: this.merchants, selectedMerchantId: this.selectedMerchantId, camera: this.cameraTarget, expanded: true,
+              dirty: this.viewportDirty, loading: this.mapLoading,
+              onViewport: (viewport: DiscoveryViewport, camera: DiscoveryCamera): void => this.changedViewport(viewport, camera),
+              onSelect: (merchant: MapMerchant): void => this.selectMerchant(merchant), onSearch: (): void => this.searchArea(),
+              onExpand: (): void => { this.cameraTarget = this.currentCamera; this.expanded = false; this.listOpen = false; this.closeMerchant(); } })
+              .width('100%').layoutWeight(1)
+            Text(this.mapStatus).fontSize(12).fontColor($r('app.color.discovery_muted')).maxLines(2).width('100%')
+            if (this.mapCursor.length > 0) {
+              Button(this.mapLoading ? '搜索中…' : '继续搜索区域地点').height(48).enabled(!this.mapLoading)
+                .onClick((): void => { if (this.searchedViewport !== undefined) void this.queryMap(this.searchedViewport, true); })
+                .attributeModifier(new DiscoveryActionStyle())
+            }
           }
-        }
-        if (!this.expanded) { this.cardResults(); }
-        else {
-          Button('展开推荐列表').width('100%').height(48).onClick((): void => { this.closeMerchant(); this.listOpen = true; }).attributeModifier(new SecondaryActionStyle());
+          Button('展开推荐列表').width('100%').height(48).onClick((): void => { this.closeMerchant(); this.listOpen = true; })
+            .attributeModifier(new DiscoveryActionStyle())
         }
       }.height('100%').width('100%').padding({ left: BreakpointSystem.pagePadding(this.windowBreakpoint), right: BreakpointSystem.pagePadding(this.windowBreakpoint), top: 8, bottom: 8 })
+      if (!this.expanded && (this.categoriesOpen || this.filtersOpen || this.historyOpen)) {
+        Button({ type: ButtonType.Normal }) {}.width('100%').height('100%').borderRadius(0).padding(0)
+          .backgroundColor($r('app.color.scrim')).accessibilityText('关闭当前面板').onClick((): void => this.setPanel('NONE'))
+      }
       if (this.expanded && this.listOpen) {
         Column({ space: 6 }) {
-          Button('收起推荐列表').width('100%').height(48).onClick((): void => { this.listOpen = false; }).attributeModifier(new QuietActionStyle());
+          Button('收起推荐列表').width('100%').height(48).onClick((): void => { this.listOpen = false; }).attributeModifier(new DiscoveryActionStyle())
           this.cardResults();
         }.width('94%').height(Math.min(this.availableHeight * 0.7, 560)).padding(12).margin({ bottom: 8 })
-          .backgroundColor($r('app.color.surface')).borderRadius(18).border({ width: 1, color: $r('app.color.line') })
+          .backgroundColor($r('app.color.discovery_surface')).borderRadius(20).border({ width: 1, color: $r('app.color.discovery_line') })
+      }
+      if (this.categoriesOpen && !this.expanded) {
+        Column({ space: 8 }) { this.panelHeading('选择分类'); this.categoryPanel(); }
+          .width('94%').padding(14).margin({ bottom: 8 }).backgroundColor($r('app.color.discovery_surface')).borderRadius(20)
+          .transition(discoveryPanelTransition(this.motionActive))
       }
       if (this.filtersOpen && !this.expanded) {
-        Column({ space: 8 }) {
-          Button('关闭筛选面板').width('100%').height(48).onClick((): void => { this.filtersOpen = false; }).attributeModifier(new QuietActionStyle());
-          this.filterPanel();
-        }.width('94%').padding(12).margin({ bottom: 8 }).backgroundColor($r('app.color.surface')).borderRadius(18)
+        Column({ space: 8 }) { this.panelHeading('筛选与排序'); this.filterPanel(); }
+          .width('94%').padding(14).margin({ bottom: 8 }).backgroundColor($r('app.color.discovery_surface')).borderRadius(20)
+          .transition(discoveryPanelTransition(this.motionActive))
       }
       if (this.historyOpen && !this.expanded) {
         Column({ space: 8 }) {
-          Button('关闭搜索历史').width('100%').height(48).onClick((): void => { this.historyOpen = false; }).attributeModifier(new QuietActionStyle());
+          this.panelHeading('搜索历史');
           Scroll() {
-            Column({ space: 6 }) {
-              Text('本机搜索历史，最多 20 条').fontSize(12).fontColor($r('app.color.muted'));
+            Column({ space: 8 }) {
+              Text(this.history.length === 0 ? '暂无本机搜索历史' : '仅保存在本机，最多 20 条').fontSize(13).fontColor($r('app.color.discovery_muted'))
               ForEach(this.history, (value: string) => {
-                Button(value).height(48).width('100%').onClick((): void => { this.keywordInput = value; this.submitSearch(); }).attributeModifier(new SecondaryActionStyle());
+                Button(value).height(48).width('100%').onClick((): void => { this.keywordInput = value; this.setPanel('NONE'); this.submitSearch(); })
+                  .attributeModifier(new DiscoveryActionStyle())
               }, (value: string): string => value)
-              Button('清空本机历史').height(48).onClick((): void => { SearchHistoryStore.clear(this.context(), this.owner); this.history = []; }).attributeModifier(new QuietActionStyle());
+              if (this.history.length > 0) { Button('清空本机历史').height(48).onClick((): void => { SearchHistoryStore.clear(this.context(), this.owner); this.history = []; }).attributeModifier(new DiscoveryActionStyle()); }
             }.width('100%')
-          }.width('100%').height(180).scrollBar(BarState.Off)
-        }.width('94%').padding(12).margin({ bottom: 8 }).backgroundColor($r('app.color.surface')).borderRadius(18)
+          }.width('100%').height(Math.min(240, this.availableHeight * 0.5)).scrollBar(BarState.Off)
+        }.width('94%').padding(14).margin({ bottom: 8 }).backgroundColor($r('app.color.discovery_surface')).borderRadius(20)
+          .transition(discoveryPanelTransition(this.motionActive))
       }
       if (this.selectedMerchant !== undefined) {
         MerchantRecommendationSheet({ merchant: this.selectedMerchant, cards: this.merchantCards, status: this.merchantStatus,
@@ -917,7 +1253,8 @@ export struct DiscoveryFeed {
           onMore: (): void => { void this.loadMerchant(true); }, onRetry: (): void => { void this.loadMerchant(false); }, onOpen: (card: FoodCard): void => { this.onOpenCard(card); } })
           .width('94%').margin({ bottom: 8 })
       }
-    }.height('100%').width('100%').backgroundColor($r('app.color.canvas')).onVisibleAreaChange([0, 1], (_visible: boolean, ratio: number): void => this.onVisibilityChanged(ratio > 0))
+    }.height('100%').width('100%').backgroundColor($r('app.color.discovery_canvas'))
+      .onVisibleAreaChange([0, 1], (_visible: boolean, ratio: number): void => this.onVisibilityChanged(ratio > 0))
       .onAreaChange((_oldArea: Area, newArea: Area): void => { const height: number = Number(newArea.height); if (Number.isFinite(height) && height > 0) this.availableHeight = height; })
   }
 }

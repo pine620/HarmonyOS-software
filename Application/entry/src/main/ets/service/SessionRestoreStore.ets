@@ -1,7 +1,7 @@
 import { common } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
 
-export type SessionProviderHint = 'AUTO' | 'EMAIL' | 'HUAWEI' | 'SIGNED_OUT';
+export type SessionProviderHint = 'AUTO' | 'EMAIL' | 'HUAWEI' | 'NICKNAME' | 'SIGNED_OUT';
 
 // Only a non-secret provider hint is persisted. Tokens remain owned by AGC or
 // in memory; SIGNED_OUT prevents silent login after an explicit user logout.
@@ -12,6 +12,7 @@ export class SessionRestoreStore {
     const store: preferences.Preferences = await preferences.getPreferences(context, options);
     const value: preferences.ValueType = await store.get('provider', 'AUTO');
     if (value === 'EMAIL') return 'EMAIL';
+    if (value === 'NICKNAME') return 'NICKNAME';
     if (value === 'HUAWEI') return 'HUAWEI';
     if (value === 'SIGNED_OUT') return 'SIGNED_OUT';
     return 'AUTO';

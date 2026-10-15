@@ -92,6 +92,27 @@
           "sortType": "ASC"
         }
       ]
+    },
+    {
+      "indexName": "card_actor_kind_id",
+      "indexList": [
+        {
+          "fieldName": "cardId",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "actorUid",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "kind",
+          "sortType": "ASC"
+        },
+        {
+          "fieldName": "id",
+          "sortType": "ASC"
+        }
+      ]
     }
   ],
   "permissions": [

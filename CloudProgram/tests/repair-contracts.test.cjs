@@ -10,6 +10,7 @@ const {createFoodRankingServices}=require('../cloudfunctions/shike-service/food-
 const {createStage7Services}=require('../cloudfunctions/shike-service/stage7-services');
 const {createPersonalCollections}=require('../cloudfunctions/shike-service/personal-collections');
 const {createStage1Services}=require('../cloudfunctions/shike-service/stage1-services');
+const {createStage3Services}=require('../cloudfunctions/shike-service/stage3-services');
 
 test('Cloud DB Long timestamps are accepted without coercing invalid values',()=>{
  for(const value of [0,100,1791470500000]){
@@ -49,6 +50,68 @@ test('historical readiness uses one bounded query and requires verified completi
  assert.equal(readiness.cardCoverageComplete,true);assert.equal(readiness.reactionCoverageComplete,false);assert.equal(readiness.indexedQueryReady,false);
  rows[1].checkpointJson=JSON.stringify({coverageComplete:true,failures:0,verificationMissing:0});
  assert.equal((await service.migrationReadiness({SHIKE_INDEXED_QUERY_VERIFIED:'true'})).indexedQueryReady,true);
+});
+
+function discoveryReadinessFixture(cardChanges = {}, checkpointChanges = {}) {
+ const cardId=crypto.createHash('sha256').update('BACKFILL_CARD:stage1-v1:1').digest('hex');
+ const reactionId=crypto.createHash('sha256').update('MIGRATE_REACTION:stage1-v1:1').digest('hex');
+ const card={jobId:cardId,jobType:'BACKFILL_CARD',entityId:'stage1-v1',generation:1,status:'DONE',
+  checkpointJson:JSON.stringify({coverageComplete:true,failures:0,verificationMissing:0,...checkpointChanges}),...cardChanges};
+ // A malformed unrelated reaction checkpoint must not be parsed by category readiness.
+ const rows=[card,{jobId:reactionId,jobType:'MIGRATE_REACTION',checkpointJson:'invalid-json'}],reads=[],metrics=[];
+ const ctx={
+  collection:(_env,name)=>{
+   assert.equal(name,'MaintenanceJob');let selected='',size=0;
+   const query={equalTo:(field,value)=>{assert.equal(field,'jobId');selected=value;return query;},
+    limit:value=>{size=value;return query;},get:async()=>{reads.push(selected);return rows.filter(row=>row.jobId===selected).slice(0,size);}};
+   return {query:()=>query,runTransaction:()=>{throw new Error('Capability status attempted a write');}};
+  },
+  one:async query=>(await query.limit(1).get())[0]||null,
+  withReadPhase:(_name,action)=>action(),
+  recordReadReadiness:(feature,enabled,reason,facts)=>metrics.push({feature,enabled,reason,facts})
+ };
+ const stage1=createStage1Services(ctx);ctx.stage1=()=>stage1;
+ return {service:createStage3Services(ctx),reads,metrics,cardId};
+}
+const discoveryVerified={SHIKE_STAGE3_SEARCH_VERIFIED:'true',SHIKE_STAGE3_MAP_VERIFIED:'false',SHIKE_INDEXED_QUERY_VERIFIED:'true'};
+
+test('categories read only verified card history and tolerate an unrelated malformed reaction task',async()=>{
+ const f=discoveryReadinessFixture();const result=await f.service.capabilities(discoveryVerified);
+ assert.equal(result.searchEnabled,true);assert.equal(result.searchReason,'');assert.equal(result.mapEnabled,false);
+ assert.deepEqual(f.reads,[f.cardId]);
+ assert.equal(f.metrics.find(row=>row.feature==='search').facts.searchQueryReady,true);
+});
+
+test('categories stay closed for incomplete, failed or unverified card coverage',async()=>{
+ const cases=[[{status:'PENDING'},{}],[{status:'FAILED'},{}],[{}, {coverageComplete:false}],
+  [{},{failures:1}],[{},{verificationMissing:1}]];
+ for(const [changes,checkpoint]of cases){
+  const f=discoveryReadinessFixture(changes,checkpoint);const result=await f.service.capabilities(discoveryVerified);
+  assert.equal(result.searchEnabled,false);assert.equal(result.searchReason,'CARD_HISTORY_REQUIRED');
+ }
+});
+
+test('categories require index verification and report it separately from card history',async()=>{
+ const f=discoveryReadinessFixture();
+ const result=await f.service.capabilities({...discoveryVerified,SHIKE_INDEXED_QUERY_VERIFIED:'false'});
+ assert.equal(result.searchEnabled,false);assert.equal(result.searchReason,'INDEX_VERIFICATION_REQUIRED');
+});
+
+test('unverified discovery does not read maintenance records',async()=>{
+ const f=discoveryReadinessFixture();
+ const result=await f.service.capabilities({...discoveryVerified,SHIKE_STAGE3_SEARCH_VERIFIED:'false'});
+ assert.equal(result.searchEnabled,false);assert.equal(result.searchReason,'VALIDATION_REQUIRED');
+ assert.deepEqual(f.reads,[]);
+});
+
+test('shared readiness opens categories without relaxing the map or reaction history gate',async()=>{
+ const f=discoveryReadinessFixture();
+ const readiness={cardCoverageComplete:true,reactionCoverageComplete:false,indexedQueryReady:false};
+ const result=await f.service.capabilities({...discoveryVerified,SHIKE_STAGE3_MAP_VERIFIED:'true',
+  SHIKE_STAGE3_MAP_COORDINATE_SYSTEM:'GCJ02'},readiness);
+ assert.equal(result.searchEnabled,true);assert.equal(result.searchReason,'');
+ assert.equal(result.mapEnabled,false);assert.equal(result.mapReason,'HISTORY_OR_INDEX_REQUIRED');
+ assert.deepEqual(f.reads,[]);
 });
 
 test('media integrity errors identify the failed check without exposing image data',()=>{

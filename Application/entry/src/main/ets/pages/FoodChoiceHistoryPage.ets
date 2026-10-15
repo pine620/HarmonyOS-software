@@ -1,3 +1,4 @@
+import { PagePaletteName, pageColor } from '../common/PagePaletteUi';
 import { common } from '@kit.AbilityKit';
 import { FoodCard } from '../model/CloudContracts';
 import { cardPriceText } from '../model/CardPrice';
@@ -14,6 +15,7 @@ import { RandomFoodRoundStore } from '../service/RandomFoodRoundStore';
 
 @Component
 export struct FoodChoiceHistoryPage {
+  @Prop palette: PagePaletteName = 'NOTE';
   @Prop @Watch('onVisibilityChanged') navigationVisible: boolean = true;
   @StorageLink('stage47AppActive') @Watch('onActiveChanged') appActive: boolean = true;
   @StorageLink('accountContentRevision') @Watch('onRevisionChanged') accountRevision: number = 0;
@@ -137,20 +139,20 @@ export struct FoodChoiceHistoryPage {
         Image(this.photo(item)).width(80).height(80).objectFit(ImageFit.Cover).borderRadius(10).syncLoad(false)
           .accessibilityText(this.name(item) + '实拍图，查看卡片').onClick((): void => { void this.preview(item); })
       } else {
-        Text(item.card === null ? '不可用' : '实拍图').fontSize(12).textAlign(TextAlign.Center).fontColor($r('app.color.random_muted'))
-          .width(80).height(80).backgroundColor($r('app.color.random_soft')).borderRadius(10)
+        Text(item.card === null ? '不可用' : '实拍图').fontSize(12).textAlign(TextAlign.Center).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'muted') : $r('app.color.random_muted')))
+          .width(80).height(80).backgroundColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'soft') : $r('app.color.random_soft'))).borderRadius(10)
           .onClick((): void => { void this.preview(item); })
       }
       Column({ space: 6 }) {
-        Text(this.name(item)).fontSize(16).fontWeight(FontWeight.Bold).fontColor($r('app.color.random_ink')).maxLines(2)
+        Text(this.name(item)).fontSize(16).fontWeight(FontWeight.Bold).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'ink') : $r('app.color.random_ink'))).maxLines(2)
           .textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
-        Text(this.merchant(item)).fontSize(12).fontColor($r('app.color.random_muted')).maxLines(1)
+        Text(this.merchant(item)).fontSize(12).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'muted') : $r('app.color.random_muted'))).maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
         if (this.price(item).length > 0) {
-          Text(this.price(item)).fontSize(14).fontWeight(FontWeight.Medium).fontColor($r('app.color.random_accent')).maxLines(2)
+          Text(this.price(item)).fontSize(14).fontWeight(FontWeight.Medium).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'action') : $r('app.color.random_accent'))).maxLines(2)
             .textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
         }
-        Text(randomFoodSourceLabel(item.source) + ' · ' + this.time(item)).fontSize(12).fontColor($r('app.color.random_muted')).width('100%')
+        Text(randomFoodSourceLabel(item.source) + ' · ' + this.time(item)).fontSize(12).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'muted') : $r('app.color.random_muted'))).width('100%')
       }.layoutWeight(1).constraintSize({ minHeight: 48 }).alignItems(HorizontalAlign.Start).onClick((): void => { void this.preview(item); })
         .accessibilityText(this.name(item) + '，' + new Date(item.selectedAt).toLocaleString())
       Button() {
@@ -162,38 +164,38 @@ export struct FoodChoiceHistoryPage {
   }
   @Builder private deletePrompt() {
     Column({ space: 10 }) {
-      Text('删除这条选择记录？').fontSize(16).fontWeight(FontWeight.Bold).fontColor($r('app.color.random_ink'))
+      Text('删除这条选择记录？').fontSize(16).fontWeight(FontWeight.Bold).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'ink') : $r('app.color.random_ink')))
       Row({ space: 8 }) {
-        Button('取消').attributeModifier(new RandomSecondaryStyle()).layoutWeight(1).enabled(!this.busy)
+        Button('取消').attributeModifier(new RandomSecondaryStyle(this.palette)).layoutWeight(1).enabled(!this.busy)
           .onClick((): void => { this.deletingId = ''; })
-        Button('确认删除').attributeModifier(new RandomPrimaryStyle()).layoutWeight(1).enabled(!this.busy)
+        Button('确认删除').attributeModifier(new RandomPrimaryStyle(this.palette)).layoutWeight(1).enabled(!this.busy)
           .onClick((): void => { void this.remove(); })
       }.width('100%')
-    }.padding(16).width('100%').backgroundColor($r('app.color.random_soft')).borderRadius(12)
+    }.padding(16).width('100%').backgroundColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'soft') : $r('app.color.random_soft'))).borderRadius(12)
       .transition(randomFoodTransition(this.motionAllowed(), 'RECORD'))
   }
   build() {
     Scroll() {
       Column({ space: 12 }) {
         Row({ space: 8 }) {
-          Button('‹').fontSize(30).width(48).height(48).backgroundColor(Color.Transparent).fontColor($r('app.color.random_ink'))
+          Button('‹').fontSize(30).width(48).height(48).backgroundColor(Color.Transparent).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'ink') : $r('app.color.random_ink')))
             .accessibilityText('返回').onClick((): void => this.onBack())
-          Text('选择记录').fontSize(19).fontWeight(FontWeight.Bold).fontColor($r('app.color.random_ink')).layoutWeight(1)
-          Button('刷新').constraintSize({ minWidth: 48, minHeight: 48 }).backgroundColor(Color.Transparent).fontColor($r('app.color.random_muted'))
+          Text('选择记录').fontSize(19).fontWeight(FontWeight.Bold).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'ink') : $r('app.color.random_ink'))).layoutWeight(1)
+          Button('刷新').constraintSize({ minWidth: 48, minHeight: 48 }).backgroundColor(Color.Transparent).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'muted') : $r('app.color.random_muted')))
             .enabled(!this.busy && AccountRequestGuard.owner().length > 0).onClick((): void => { void this.load(true); })
         }.width('100%')
-        Text('已选 / CHOICES').fontSize(12).fontColor($r('app.color.random_accent')).accessibilityLevel('no').margin({ top: 8 })
-        Text('选过的好味道').fontSize(28).fontWeight(FontWeight.Bold).fontColor($r('app.color.random_ink')).width('100%')
-        if (this.busy) { LoadingProgress().width(28).height(28).color($r('app.color.random_ink')) }
-        Text(this.message).fontSize(13).fontColor($r('app.color.random_muted')).width('100%')
+        Text('已选 / CHOICES').fontSize(12).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'action') : $r('app.color.random_accent'))).accessibilityLevel('no').margin({ top: 8 })
+        Text('选过的好味道').fontSize(28).fontWeight(FontWeight.Bold).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'ink') : $r('app.color.random_ink'))).width('100%')
+        if (this.busy) { LoadingProgress().width(28).height(28).color((this.palette === 'PERSONAL' ? pageColor(this.palette, 'ink') : $r('app.color.random_ink'))) }
+        Text(this.message).fontSize(13).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'muted') : $r('app.color.random_muted'))).width('100%')
         if (AccountRequestGuard.owner().length === 0) {
-          Button('登录查看记录').attributeModifier(new RandomPrimaryStyle()).width('100%').onClick((): void => this.onLogin())
+          Button('登录查看记录').attributeModifier(new RandomPrimaryStyle(this.palette)).width('100%').onClick((): void => this.onLogin())
         }
         if (this.loaded && this.items.length === 0 && !this.busy && AccountRequestGuard.owner().length > 0) {
           Column({ space: 16 }) {
             Image($r('app.media.ic_random_food_back')).width(96).height(96).accessibilityLevel('no')
-            Text('下一餐，值得期待。').fontSize(20).fontWeight(FontWeight.Medium).fontColor($r('app.color.random_ink'))
-            Text('选定以后，再把好味道留在这里。').fontSize(14).fontColor($r('app.color.random_muted')).textAlign(TextAlign.Center)
+            Text('下一餐，值得期待。').fontSize(20).fontWeight(FontWeight.Medium).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'ink') : $r('app.color.random_ink')))
+            Text('选定以后，再把好味道留在这里。').fontSize(14).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'muted') : $r('app.color.random_muted'))).textAlign(TextAlign.Center)
           }.width('100%').padding({ top: 36, bottom: 36 })
             .transition(randomFoodTransition(this.motionAllowed(), 'RECORD'))
         }
@@ -201,19 +203,19 @@ export struct FoodChoiceHistoryPage {
           Column({ space: 0 }) {
             ForEach(this.items, (item: FoodChoiceItem, index: number): void => {
               if (this.groupStarts(item, index)) {
-                Text(this.day(item.selectedAt)).fontSize(20).fontWeight(FontWeight.Medium).fontColor($r('app.color.random_ink'))
+                Text(this.day(item.selectedAt)).fontSize(20).fontWeight(FontWeight.Medium).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'ink') : $r('app.color.random_ink')))
                   .width('100%').margin({ top: 20, bottom: 4 })
               }
               this.row(item)
               if (this.deletingId === item.historyId) { this.deletePrompt() }
-              Divider().strokeWidth(1).color($r('app.color.random_line')).margin({ top: this.deletingId === item.historyId ? 12 : 0 })
+              Divider().strokeWidth(1).color((this.palette === 'PERSONAL' ? pageColor(this.palette, 'line') : $r('app.color.random_line'))).margin({ top: this.deletingId === item.historyId ? 12 : 0 })
             }, (item: FoodChoiceItem, index: number): string => this.rowKey(item, index))
           }.width('100%').alignItems(HorizontalAlign.Start).transition(randomFoodTransition(this.motionAllowed(), 'RECORD'))
         }
         if (this.nextCursor.length > 0) {
-          Button('加载更多记录').attributeModifier(new RandomSecondaryStyle()).width('100%').enabled(!this.busy).onClick((): void => { void this.load(false); })
+          Button('加载更多记录').attributeModifier(new RandomSecondaryStyle(this.palette)).width('100%').enabled(!this.busy).onClick((): void => { void this.load(false); })
         }
       }.width('100%').constraintSize({ maxWidth: 560 }).padding({ left: 20, right: 20, top: 8, bottom: 28 }).alignItems(HorizontalAlign.Start)
-    }.width('100%').height('100%').backgroundColor($r('app.color.random_canvas'))
+    }.width('100%').height('100%').backgroundColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'canvas') : $r('app.color.random_canvas')))
   }
 }

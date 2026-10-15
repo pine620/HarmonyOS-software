@@ -1,3 +1,6 @@
+import { PagePaletteName, pageColor } from '../common/PagePaletteUi';
+import { NoteInputStyle, WarmNoteBackdrop } from '../common/WarmNoteUi';
+import { AppDestinationStyle } from '../common/AppPageUi';
 import { SecondaryActionStyle } from '../common/Stage47Ui';
 import { PersonalCollectionRepository } from '../repository/PersonalCollectionRepository';
 import { PersonalCollectionPage } from '../model/PersonalCollectionModels';
@@ -13,7 +16,7 @@ import { FriendRepository } from '../repository/FriendRepository';
 import { CardRepository } from '../repository/CardRepository';
 import { AuthService } from '../service/AuthService';
 import { SocialAvatar } from '../components/social/SocialDisplay';
-import { foodCardCategoryLabel, coverFor } from '../components/FoodCover';
+import { coverFor } from '../components/FoodCover';
 import { ErrorDetail, errorText } from '../common/ErrorKit';
 
 const GROUP_MESSAGE_PAGE_SIZE = 50;
@@ -28,6 +31,9 @@ function messageTime(timestamp: number): string {
 
 @Component
 export struct GroupChatPage {
+  @Prop palette: PagePaletteName = 'SOCIAL';
+  @State contentWidth: number = 320;
+  private messageWidth(): number { return Math.max(120, Math.min(286, this.contentWidth - 76)); }
   @StorageLink('stage47AppActive') @Watch('onAppActiveChanged') appActive: boolean = true;
   private destinationVisible: boolean = true;
   private onAppActiveChanged(): void { if (!this.appActive) this.aboutToDisappear(); else if (this.destinationVisible) this.aboutToAppear(); }
@@ -232,65 +238,54 @@ export struct GroupChatPage {
   @Builder
   private header(): void {
     Row({ space: 10 }) {
-      Text('群').fontSize(16).fontWeight(FontWeight.Bold).fontColor($r('app.color.on_accent_action'))
+      Text('群').fontSize(16).fontWeight(FontWeight.Bold).fontColor(pageColor(this.palette, 'on_gold'))
         .width(48).height(48).textAlign(TextAlign.Center).padding({ top: 13 })
-        .backgroundColor($r('app.color.leaf')).borderRadius(16).accessibilityLevel('no');
+        .backgroundColor(pageColor(this.palette, 'gold')).borderRadius(16).accessibilityLevel('no');
       Column({ space: 3 }) {
-        Text(this.group.name).fontSize(19).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'))
+        Text(this.group.name).fontSize(19).fontWeight(FontWeight.Bold).fontColor(pageColor(this.palette, 'ink'))
           .width('100%').maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis });
         Text(`${this.memberCount()} 人 · 自动更新`).fontSize(12)
-          .fontColor($r('app.color.muted')).width('100%');
+          .fontColor(pageColor(this.palette, 'muted')).width('100%');
       }.layoutWeight(1).alignItems(HorizontalAlign.Start);
-      Button('成员').height(44).fontSize(12).backgroundColor($r('app.color.accent_soft'))
-        .fontColor($r('app.color.accent_action')).onClick((): void => {
+      Button('成员').height(48).fontSize(12).backgroundColor(pageColor(this.palette, 'soft'))
+        .fontColor(pageColor(this.palette, 'action')).onClick((): void => {
           this.membersVisible = true;
         });
     }
-    .width('100%').padding(10).backgroundColor($r('app.color.surface')).borderRadius(18)
-    .border({ width: 1, color: $r('app.color.line') });
+    .width('100%').padding(10).backgroundColor(pageColor(this.palette, 'surface')).borderRadius(18)
+    .border({ width: 1, color: pageColor(this.palette, 'line') });
   }
 
   @Builder
   private sharedCard(card: FoodCard): void {
-    Row({ space: 10 }) {
-      if (card.photoUrl.length > 0) {
-        Image(card.photoUrl).width(70).height(70).objectFit(ImageFit.Cover).borderRadius(12)
-          .accessibilityText(`${card.productName}的实拍图`);
-      } else {
-        Image(coverFor(card.category)).width(70).height(70).objectFit(ImageFit.Cover).borderRadius(12)
-          .accessibilityLevel('no');
-      }
-      Column({ space: 4 }) {
-        Text(card.productName || '食刻卡片').fontSize(14).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'))
-          .width('100%').maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis });
-        Text(`${foodCardCategoryLabel(card)} · ${this.priceText(card)}`).fontSize(11)
-          .fontColor($r('app.color.muted')).width('100%').maxLines(1);
-        Button('查看卡片').height(36).fontSize(12).backgroundColor($r('app.color.accent_soft'))
-          .fontColor($r('app.color.accent_action')).onClick((): void => {
-            this.onOpenCard(card);
-          });
-      }.layoutWeight(1).alignItems(HorizontalAlign.Start);
-    }
-    .width(230).padding(10).backgroundColor($r('app.color.surface')).borderRadius(16)
-    .border({ width: 1, color: $r('app.color.line') });
+    Column({ space: 0 }) {
+      Image(card.photoUrl.length > 0 ? card.photoUrl : coverFor(card.category)).width('100%').aspectRatio(1.5)
+        .objectFit(ImageFit.Cover).borderRadius({ topLeft: 18, topRight: 18 }).accessibilityText(card.productName + '的实拍图');
+      Column({ space: 8 }) {
+        Text(card.productName || '食刻卡片').fontSize(16).fontWeight(FontWeight.Bold).fontColor(pageColor(this.palette, 'ink')).width('100%').maxLines(2);
+        Text(this.priceText(card)).fontSize(15).fontWeight(FontWeight.Medium).fontColor(pageColor(this.palette, 'action')).width('100%');
+        Button('查看卡片').width('100%').height(48).fontSize(13).backgroundColor(pageColor(this.palette, 'soft'))
+          .fontColor(pageColor(this.palette, 'action')).borderRadius(12).onClick((): void => this.onOpenCard(card));
+      }.width('100%').padding(12).alignItems(HorizontalAlign.Start);
+    }.width(this.messageWidth()).backgroundColor(pageColor(this.palette, 'surface')).borderRadius(18);
   }
 
   @Builder
   private messageContent(message: GroupMessage): void {
     if (message.kind === 'MEAL_POLL') {
-      Button('选餐投票 · 打开查看').height(48).onClick((): void => { this.selectedPollId = message.referenceId === undefined ? '' : message.referenceId; this.showMealPoll = true; }).attributeModifier(new SecondaryActionStyle());
+      Button('选餐投票 · 打开查看').height(48).onClick((): void => { this.selectedPollId = message.referenceId === undefined ? '' : message.referenceId; this.showMealPoll = true; }).attributeModifier(new SecondaryActionStyle(this.palette));
     } else if (message.kind === 'CARD') {
       if (message.sharedCard !== undefined) this.sharedCard(message.sharedCard);
       else {
-        Text('卡片暂不可查看').fontSize(13).fontColor($r('app.color.muted')).padding(12)
-          .backgroundColor($r('app.color.surface')).borderRadius(16);
+        Text('卡片暂不可查看').fontSize(13).fontColor(pageColor(this.palette, 'muted')).padding(12)
+          .backgroundColor(pageColor(this.palette, 'surface')).borderRadius(16);
       }
     } else {
       Text(message.text).fontSize(15).lineHeight(22)
-        .fontColor(message.mine ? $r('app.color.on_accent_action') : $r('app.color.ink'))
+        .fontColor(pageColor(this.palette, 'ink'))
         .padding({ left: 14, right: 14, top: 11, bottom: 11 })
-        .backgroundColor(message.mine ? $r('app.color.accent_action') : $r('app.color.surface'))
-        .borderRadius(18).constraintSize({ maxWidth: 270 });
+        .backgroundColor(message.mine ? pageColor(this.palette, 'soft') : pageColor(this.palette, 'surface'))
+        .borderRadius(18).constraintSize({ maxWidth: this.messageWidth() });
     }
   }
 
@@ -298,7 +293,7 @@ export struct GroupChatPage {
   private messageRow(message: GroupMessage): void {
     Column({ space: 4 }) {
       if (!message.mine) {
-        Text(message.sender.nickname).fontSize(11).fontColor($r('app.color.muted')).width('100%').padding({ left: 40 });
+        Text(message.sender.nickname).fontSize(12).fontColor(pageColor(this.palette, 'muted')).width('100%').padding({ left: 40 });
       }
       Row() {
         if (message.mine) {
@@ -310,7 +305,7 @@ export struct GroupChatPage {
         this.messageContent(message);
         if (!message.mine) Blank();
       }.width('100%').alignItems(VerticalAlign.Bottom);
-      Text(messageTime(message.createdAt)).fontSize(10).fontColor($r('app.color.muted')).width('100%')
+      Text(messageTime(message.createdAt)).fontSize(12).fontColor(pageColor(this.palette, 'muted')).width('100%')
         .textAlign(message.mine ? TextAlign.End : TextAlign.Start)
         .padding({ left: message.mine ? 0 : 40, right: message.mine ? 2 : 0 });
     }.width('100%');
@@ -327,18 +322,18 @@ export struct GroupChatPage {
           .accessibilityLevel('no');
       }
       Column({ space: 4 }) {
-        Text(card.productName || '食刻卡片').fontSize(13).fontWeight(FontWeight.Medium).fontColor($r('app.color.ink'))
+        Text(card.productName || '食刻卡片').fontSize(13).fontWeight(FontWeight.Medium).fontColor(pageColor(this.palette, 'ink'))
           .width(118).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis });
-        Text(this.priceText(card)).fontSize(12).fontColor($r('app.color.accent_action'));
+        Text(this.priceText(card)).fontSize(12).fontColor(pageColor(this.palette, 'action'));
       }.alignItems(HorizontalAlign.Start);
-      Button(this.sending ? '发送中' : '发送').height(40).fontSize(12).enabled(!this.sending)
-        .backgroundColor($r('app.color.accent_action')).fontColor($r('app.color.on_accent_action'))
+      Button(this.sending ? '发送中' : '发送').height(48).fontSize(12).enabled(!this.sending)
+        .backgroundColor(pageColor(this.palette, 'gold')).fontColor(pageColor(this.palette, 'on_gold'))
         .onClick((): void => {
           this.sendCard(card);
         });
     }
-    .padding(8).backgroundColor($r('app.color.surface')).borderRadius(14)
-    .border({ width: 1, color: $r('app.color.line') });
+    .padding(8).backgroundColor(pageColor(this.palette, 'surface')).borderRadius(14)
+    .border({ width: 1, color: pageColor(this.palette, 'line') });
   }
 
   @Builder
@@ -346,26 +341,26 @@ export struct GroupChatPage {
     Column({ space: 8 }) {
       Row({ space: 8 }) {
         TextInput({ text: this.textDraft, placeholder: '输入群消息' }).layoutWeight(1).height(48).fontSize(15)
-          .backgroundColor($r('app.color.canvas')).borderRadius(14).onChange((value: string): void => {
+          .backgroundColor(pageColor(this.palette, 'canvas')).borderRadius(14).attributeModifier(new NoteInputStyle(this.palette)).onChange((value: string): void => {
             this.textDraft = value;
           });
-        Button('卡片').height(48).fontSize(12).backgroundColor($r('app.color.accent_soft'))
-          .fontColor($r('app.color.accent_action')).enabled(!this.sending).onClick((): void => {
+        Button('卡片').height(48).fontSize(12).backgroundColor(pageColor(this.palette, 'soft'))
+          .fontColor(pageColor(this.palette, 'action')).enabled(!this.sending).onClick((): void => {
             this.cardPickerVisible = !this.cardPickerVisible;
             if (this.cardPickerVisible && this.cardCandidates.length === 0) this.loadCardCandidates();
           });
-        Button('发送').height(48).fontSize(12).enabled(!this.sending).backgroundColor($r('app.color.accent_action'))
-          .fontColor($r('app.color.on_accent_action')).onClick((): void => {
+        Button('发送').height(48).fontSize(12).enabled(!this.sending).backgroundColor(pageColor(this.palette, 'gold'))
+          .fontColor(pageColor(this.palette, 'on_gold')).onClick((): void => {
             this.sendText();
           });
       }.width('100%').alignItems(VerticalAlign.Center);
       if (this.cardPickerVisible && this.cardsLoading) {
         Row({ space: 8 }) {
-          LoadingProgress().width(22).height(22).color($r('app.color.accent_action'));
-          Text('正在读取可分享卡片').fontSize(13).fontColor($r('app.color.muted'));
+          LoadingProgress().width(22).height(22).color(pageColor(this.palette, 'action'));
+          Text('正在读取可分享卡片').fontSize(13).fontColor(pageColor(this.palette, 'muted'));
         }.width('100%').height(56).justifyContent(FlexAlign.Center);
       } else if (this.cardPickerVisible && this.cardCandidates.length === 0 && this.favoriteCursor.length === 0) {
-        Text('暂无可发送卡片，先收藏或发布一张公开卡片。').fontSize(12).fontColor($r('app.color.muted'))
+        Text('暂无可发送卡片，先收藏或发布一张公开卡片。').fontSize(12).fontColor(pageColor(this.palette, 'muted'))
           .width('100%').padding(8);
       } else if (this.cardPickerVisible) {
         List({ space: 10 }) {
@@ -374,20 +369,20 @@ export struct GroupChatPage {
           }, (card: FoodCard): string => card.id);
         }.width('100%').height(96).listDirection(Axis.Horizontal).scrollBar(BarState.Off).edgeEffect(EdgeEffect.Spring);
       }
-      if (this.cardPickerVisible && this.favoriteCursor.length > 0) { Button('加载更多收藏').height(48).enabled(!this.cardsLoading).onClick((): void => { void this.loadCardCandidates(true); }).attributeModifier(new SecondaryActionStyle()); }
+      if (this.cardPickerVisible && this.favoriteCursor.length > 0) { Button('加载更多收藏').height(48).enabled(!this.cardsLoading).onClick((): void => { void this.loadCardCandidates(true); }).attributeModifier(new SecondaryActionStyle(this.palette)); }
     }
-    .width('100%').padding(10).backgroundColor($r('app.color.surface')).borderRadius(18)
-    .border({ width: 1, color: $r('app.color.line') });
+    .width('100%').padding(10).backgroundColor(pageColor(this.palette, 'surface')).borderRadius(18)
+    .border({ width: 1, color: pageColor(this.palette, 'line') });
   }
 
   @Builder
   private membersSheet(): void {
     Column({ space: 12 }) {
-      Text('群成员').fontSize(20).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink')).width('100%');
+      Text('群成员').fontSize(20).fontWeight(FontWeight.Bold).fontColor(pageColor(this.palette, 'ink')).width('100%');
       if (this.detail === undefined || this.detailLoading) {
         Row({ space: 8 }) {
-          LoadingProgress().width(22).height(22).color($r('app.color.accent_action'));
-          Text('正在读取成员').fontSize(13).fontColor($r('app.color.muted'));
+          LoadingProgress().width(22).height(22).color(pageColor(this.palette, 'action'));
+          Text('正在读取成员').fontSize(13).fontColor(pageColor(this.palette, 'muted'));
         }.width('100%').height(120).justifyContent(FlexAlign.Center);
       } else {
         List({ space: 8 }) {
@@ -396,14 +391,14 @@ export struct GroupChatPage {
               Row({ space: 10 }) {
                 SocialAvatar({ user: member.user, avatarSize: 40 });
                 Column({ space: 2 }) {
-                  Text(member.user.nickname).fontSize(15).fontWeight(FontWeight.Medium).fontColor($r('app.color.ink'));
-                  Text(member.role === 'OWNER' ? '群主' : member.user.friendCode).fontSize(11)
-                    .fontColor($r('app.color.muted')).width('100%').maxLines(1);
+                  Text(member.user.nickname).fontSize(15).fontWeight(FontWeight.Medium).fontColor(pageColor(this.palette, 'ink'));
+                  Text(member.role === 'OWNER' ? '群主' : member.user.friendCode).fontSize(12)
+                    .fontColor(pageColor(this.palette, 'muted')).width('100%').maxLines(1);
                 }.layoutWeight(1).alignItems(HorizontalAlign.Start);
                 if (this.isOwner() && member.role !== 'OWNER') {
-                  Button(this.memberActionUid === member.user.uid ? '处理中' : '移除').height(40).fontSize(12)
-                    .enabled(this.memberActionUid.length === 0).backgroundColor($r('app.color.surface'))
-                    .fontColor($r('app.color.danger')).border({ width: 1, color: $r('app.color.line') })
+                  Button(this.memberActionUid === member.user.uid ? '处理中' : '移除').height(48).fontSize(12)
+                    .enabled(this.memberActionUid.length === 0).backgroundColor(pageColor(this.palette, 'surface'))
+                    .fontColor($r('app.color.danger')).border({ width: 1, color: pageColor(this.palette, 'line') })
                     .onClick((): void => {
                       this.removeMember(member);
                     });
@@ -421,43 +416,44 @@ export struct GroupChatPage {
         }
       }
       Button('关闭').width('100%').height(48).enabled(!this.leaving)
-        .backgroundColor($r('app.color.surface')).fontColor($r('app.color.ink'))
-        .border({ width: 1, color: $r('app.color.line') }).onClick((): void => {
+        .backgroundColor(pageColor(this.palette, 'surface')).fontColor(pageColor(this.palette, 'ink'))
+        .border({ width: 1, color: pageColor(this.palette, 'line') }).onClick((): void => {
           this.membersVisible = false;
         });
     }
-    .width('100%').padding({ left: 20, right: 20, top: 18, bottom: 20 }).backgroundColor($r('app.color.surface'))
-    .borderRadius(24).border({ width: 1, color: $r('app.color.line') }).alignItems(HorizontalAlign.Start);
+    .width('100%').padding({ left: 20, right: 20, top: 18, bottom: 20 }).backgroundColor(pageColor(this.palette, 'surface'))
+    .borderRadius(24).border({ width: 1, color: pageColor(this.palette, 'line') }).alignItems(HorizontalAlign.Start);
   }
 
   build() {
     NavDestination() {
       if (this.showMealPoll) { MealPollPage({ groupId: this.group.id, pollId: this.selectedPollId, onDone: (): void => { this.showMealPoll = false; void this.loadMessages(true); }, onOpenCard: (card: FoodCard): void => this.onOpenCard(card) }) } else {
       Stack({ alignContent: Alignment.Bottom }) {
+        WarmNoteBackdrop({ palette: this.palette });
         Column({ space: 10 }) {
           this.header();
-          Button('发起群选餐投票').height(48).onClick((): void => { this.selectedPollId = ''; this.showMealPoll = true; }).attributeModifier(new SecondaryActionStyle());
+          Button('发起群选餐投票').height(48).onClick((): void => { this.selectedPollId = ''; this.showMealPoll = true; }).attributeModifier(new SecondaryActionStyle(this.palette));
           if (this.status.length > 0) {
             Text(this.status).fontSize(12).lineHeight(18).fontColor($r('app.color.warning')).width('100%')
-              .padding(9).backgroundColor($r('app.color.accent_soft')).borderRadius(12);
+              .padding(9).backgroundColor(pageColor(this.palette, 'soft')).borderRadius(12);
           }
           if (this.loading && this.messages.length === 0) {
             Column({ space: 10 }) {
-              LoadingProgress().width(34).height(34).color($r('app.color.accent_action'));
-              Text('正在加载群消息').fontSize(13).fontColor($r('app.color.muted'));
+              LoadingProgress().width(34).height(34).color(pageColor(this.palette, 'action'));
+              Text('正在加载群消息').fontSize(13).fontColor(pageColor(this.palette, 'muted'));
             }.width('100%').layoutWeight(1).justifyContent(FlexAlign.Center);
           } else if (this.messages.length === 0) {
             Column({ space: 10 }) {
               Image($r('app.media.ic_message')).width(54).height(54).objectFit(ImageFit.Contain).accessibilityLevel('no');
-              Text('从一条群消息开始').fontSize(18).fontWeight(FontWeight.Bold).fontColor($r('app.color.ink'));
-              Text('可发送文字或分享一张公开食刻卡片。').fontSize(13).fontColor($r('app.color.muted'));
+              Text('从一条群消息开始').fontSize(18).fontWeight(FontWeight.Bold).fontColor(pageColor(this.palette, 'ink'));
+              Text('可发送文字或分享一张公开食刻卡片。').fontSize(13).fontColor(pageColor(this.palette, 'muted'));
             }.width('100%').layoutWeight(1).justifyContent(FlexAlign.Center);
           } else {
             List({ space: 12 }) {
               if (this.nextBeforeToken.length > 0) {
                 ListItem() {
                   Button(this.loadingOlder ? '加载中…' : '查看更早消息').width('100%').height(48).enabled(!this.loadingOlder)
-                    .backgroundColor($r('app.color.accent_soft')).fontColor($r('app.color.accent_action'))
+                    .backgroundColor(pageColor(this.palette, 'soft')).fontColor(pageColor(this.palette, 'action'))
                     .onClick((): void => {
                       this.loadMessages(false);
                     });
@@ -473,7 +469,8 @@ export struct GroupChatPage {
           this.composer();
         }
         .width('100%').height('100%').padding({ left: 14, right: 14, top: 10, bottom: 10 })
-        .backgroundColor($r('app.color.canvas'));
+        .onAreaChange((_oldArea: Area, newArea: Area): void => { const width: number = Number(newArea.width); if (Number.isFinite(width) && width > 0) this.contentWidth = width; })
+        .backgroundColor(Color.Transparent);
         if (this.membersVisible) {
           Column() {}.width('100%').height('100%').backgroundColor($r('app.color.scrim'))
             .onClick((): void => {
@@ -481,8 +478,8 @@ export struct GroupChatPage {
             });
           this.membersSheet();
         }
-      }.width('100%').height('100%').backgroundColor($r('app.color.canvas'));
+      }.width('100%').height('100%').backgroundColor(pageColor(this.palette, 'canvas'));
       }
-    }.title(this.group.name).onShown((): void => { this.destinationVisible = true; this.aboutToAppear(); }).onHidden((): void => { this.destinationVisible = false; this.aboutToDisappear(); });
+    }.attributeModifier(new AppDestinationStyle(this.group.name, pageColor(this.palette, 'canvas'), pageColor(this.palette, 'header'), this.palette)).onShown((): void => { this.destinationVisible = true; this.aboutToAppear(); }).onHidden((): void => { this.destinationVisible = false; this.aboutToDisappear(); });
   }
 }

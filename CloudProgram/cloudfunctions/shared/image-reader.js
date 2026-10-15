@@ -1,6 +1,7 @@
 'use strict';
 const crypto = require('node:crypto');
-const { createContentPolicy, policyModels, accessError, cardContentRevision } = require('./content-policy');
+const { createContentPolicy, policyModels, accessError, cardContentRevision, readableCardState } = require('./content-policy');
+const { isCardReviewer } = require('./card-review-access');
 const { CardMedia } = require('./image-models');
 const { mediaVariant, sameMediaSource, verifyMediaBytes } = require('./media-descriptor');
 const { errorCode, shouldReadMetrics } = require('./read-errors');
@@ -21,9 +22,10 @@ function normalize(input) {
     throw accessError('图片批次格式无效。', 'VALIDATION_ERROR');
   const keys = new Set();
   return input.items.map(item => {
-    if (!item || !UUID.test(String(item.mediaId)) || !['PUBLIC', 'REVIEW', 'REVISION'].includes(item.mode) || !['ORIGINAL', 'COVER_480'].includes(item.variant))
+    if (!item || !UUID.test(String(item.mediaId)) || !['PUBLIC', 'REVIEW', 'REVISION', 'REPORT'].includes(item.mode) || !['ORIGINAL', 'COVER_480'].includes(item.variant))
       throw accessError('图片项格式无效。', 'VALIDATION_ERROR');
     const revisionId = String(item.revisionId || '');
+    if (item.mode === 'REPORT' && !SHA.test(revisionId)) throw accessError('举报标识无效。', 'VALIDATION_ERROR');
     if (revisionId.length > 128) throw accessError('修订标识无效。', 'VALIDATION_ERROR');
     const key = [item.mediaId, item.mode, revisionId, item.variant].join(':');
     if (keys.has(key)) throw accessError('图片项重复。', 'VALIDATION_ERROR');
@@ -74,6 +76,7 @@ function createImageReader(deps) {
     const media = await batchRows('CardMedia', 'id', items.map(item => item.mediaId), metrics);
     const cardIds = media.map(row => row.cardId).filter(id => id && !id.startsWith('profile:') && !id.startsWith('profile-cover:') && !id.startsWith('revision:'));
     const cards = await batchRows('FoodCard', 'id', cardIds, metrics);
+    const reports = await batchRows('Report', 'id', items.filter(item => item.mode === 'REPORT').map(item => item.revisionId), metrics);
     const revisions = await batchRows('FoodCardRevision', 'revisionId', items.filter(item => item.mode === 'REVISION').map(item => item.revisionId), metrics);
     const missingCards = revisions.map(row => row.cardId).filter(id => !cards.some(card => card.id === id));
     if (missingCards.length) cards.push(...await batchRows('FoodCard', 'id', missingCards, metrics));
@@ -96,10 +99,17 @@ function createImageReader(deps) {
     const policy = createContentPolicy(collection, async query => (await query.limit(1).get())[0] || null, { cards, revisions, cardIds: [...cardIds, ...missingCards], revisionIds: items.filter(item => item.mode === 'REVISION').map(item => item.revisionId) });
 
     if (viewerUid && items.some(item => item.mode !== 'PUBLIC')) await policy.assertAccountActive(viewerUid, true);
-    return { media: new Map(media.map(row => [String(row.id), row])), cards: new Map(cards.map(row => [String(row.id), row])), policy };
+    return { reports: new Map(reports.map(row => [String(row.id), row])), media: new Map(media.map(row => [String(row.id), row])), cards: new Map(cards.map(row => [String(row.id), row])), policy };
   }
   async function allowed(state, viewerUid, item, media) {
     if (!media) return false;
+    if (item.mode === 'REPORT') {
+      if (!viewerUid || !deps.isCardReviewer || !deps.isCardReviewer(viewerUid)) return false;
+      await state.policy.assertAccountActive(viewerUid);
+      const report = state.reports.get(item.revisionId), card = state.cards.get(media.cardId);
+      if (!report || !(report.targetType === 'CARD' || !report.targetType && report.cardId) || String(report.cardId || report.targetId) !== String(media.cardId) || media.status !== 'APPROVED' || !card || card.ownerUid !== media.ownerUid || card.deletedAt != null || card.purgeAt != null || !(readableCardState(card) || card.reviewState === 'TAKEN_DOWN')) return false;
+      await state.policy.assertAccountActive(card.ownerUid); return true;
+    }
     if (item.mode === 'REVIEW') return state.policy.canReadCorrectionMedia(viewerUid, media);
     if (item.mode === 'REVISION') return state.policy.canReadRevisionMedia(viewerUid, media, item.revisionId);
     return state.policy.canReadMedia(viewerUid, media);
@@ -196,6 +206,7 @@ function reader(env) {
     const { AGCCloudStorage } = require('@agconnect/cloudstorage-server');
     const models = { ...policyModels, CardMedia }; let storageReady = false;
     defaultReader = createImageReader({
+      isCardReviewer: uid => isCardReviewer(uid, env),
       // Keep existing full metrics by default; explicit flags enable sampling or silence success.
       shouldLogMetrics: id => shouldReadMetrics({ ...env,
         SHIKE_READ_METRICS_ENABLED: env.SHIKE_READ_METRICS_ENABLED === undefined ? 'true' : env.SHIKE_READ_METRICS_ENABLED }, id),
