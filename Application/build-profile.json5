@@ -1,9 +1,37 @@
 {
   "app": {
-    "signingConfigs": [],
+    "signingConfigs": [
+      {
+        "name": "default",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "/Users/wyq/.ohos/config/default_Application_5wxZvdVBDhkgutLySE7sYoMxqMdArB5cckPbVLaZKxw=.cer",
+          "keyAlias": "debugKey",
+          "keyPassword": "0000001AC43DFDF93E0C214983DC8316BDAC6B7475EA709F8A2735CCAFEBCE45ABC0C655088804201738",
+          "profile": "/Users/wyq/.ohos/config/default_Application_5wxZvdVBDhkgutLySE7sYoMxqMdArB5cckPbVLaZKxw=.p7b",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "/Users/wyq/.ohos/config/default_Application_5wxZvdVBDhkgutLySE7sYoMxqMdArB5cckPbVLaZKxw=.p12",
+          "storePassword": "0000001A62F1B8EDBEAB005877887B3DE19E254B48D9DE2DEF46D013EDFAEDF718F81A495D05E6E254EC"
+        }
+      },
+      {
+        "name": "release",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "/Users/wyq/Downloads/shike-release-20260905.cer",
+          "keyAlias": "shikeReleaseKey",
+          "keyPassword": "0000001B99C0F50ED205EF46069BFBF5D58B3913324D22FD214DE427A12FC9F965752A7F1B2898D40F0F7F",
+          "profile": "/Users/wyq/Downloads/sktestRelease-2.p7b",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "/Users/wyq/shike-release-20260905.p12",
+          "storePassword": "0000001B677F2C6CE9D9ED7F65F53C782D599F6519442D277ECF96350558D936BB121D30D7C6D70D136363"
+        }
+      }
+    ],
     "products": [
       {
         "name": "default",
+        "signingConfig": "default",
         "compatibleSdkVersion": "6.1.1(24)",
         "targetSdkVersion": "26.0.0",
         "runtimeOS": "HarmonyOS",

@@ -19,4 +19,8 @@ local.properties
 .env.*
 clouddev/secrets.local.json
 
-# Shared build profiles must remain free of local signing paths and credentials.
+# Other signing material remains excluded; exact configuration exceptions are listed below.
+
+# Owner-approved shared project configuration (only these exact paths).
+!/build-profile.json5
+!/AppScope/resources/rawfile/agconnect-services.json

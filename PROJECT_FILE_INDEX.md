@@ -2,7 +2,7 @@
 
 按 2026-10-16 的现有发布文件结构整理，重点覆盖 `Application` 与 `CloudProgram`。先看下面的职责说明，完整文件清单在文末。首次运行见 [README](README.md)，后端操作见 [云端指南](CloudProgram/README.md)。
 
-路径从项目根目录起算。GitHub 仓库包含 Application 与 CloudProgram 的源码；三个不含签名的 build profile 随源码共享；本地签名、SDK 和云工程关联配置另列，不提交配置值。
+路径从项目根目录起算。GitHub 仓库包含 Application 与 CloudProgram 的源码；三个 build profile 随源码共享；负责人此次明确要求根 build profile 和 AGC SDK 配置保留原值提交。独立签名证书/私钥和云工程关联配置继续忽略。
 
 ## 整体框架
 
@@ -43,9 +43,9 @@ CloudProgram/
 | `cloud_objects/Index.ets` | 四个云对象代理、importObject、CloudEnvelope 公共导出 |
 | `cloud_objects/BuildProfile.ets` | 构建生成的 HAR 版本/模式常量，不是业务配置源 |
 | `.idea/.gitignore` | 保留工程目录，供 DevEco 26.0 打开对话框识别；不共享 workspace、缓存或个人设置 |
-| `.gitignore` | 忽略签名文件、SDK 配置、依赖和产物；共享 build profile 中不提交个人签名信息 |
+| `.gitignore` | 忽略独立签名文件、依赖和产物；根 build profile 与指定 AGC SDK 配置为负责人要求的精确例外 |
 
-以上路径相对于 `Application/`。三个 build-profile.json5 是共享的工程/模块构建配置，默认不带签名；首次需要下载的 rawfile/agconnect-services.json 单独说明于 README。
+以上路径相对于 `Application/`。三个 build-profile.json5 是共享的工程/模块构建配置；根配置按负责人要求保留当前签名字段，AGC SDK 配置随仓库提供。协作者仍须核对目标项目并配置本机签名，详见 README。
 
 ## Application：页面与生命周期
 
@@ -258,10 +258,10 @@ auth、media、service 目录有 `runtime.js`（实际 JS 实现）；每个目�
 
 ## 完整文件清单
 
-以下按当前源码重新生成，排除依赖、构建产物、缓存、日志和本地配置。克隆 GitHub 仓库可获得下列文件；首次需补齐的两个 AGC 配置路径单独列在末尾。
+以下按当前源码重新生成，排除依赖、构建产物、缓存、日志和其他本地配置。克隆 GitHub 仓库可获得下列文件；需核对的 AGC 配置单独列在末尾。
 
 <details>
-<summary>Application：255 个文件</summary>
+<summary>Application：256 个文件</summary>
 
 ```text
 Application/.gitignore
@@ -269,6 +269,7 @@ Application/.idea/.gitignore
 Application/AppScope/app.json5
 Application/AppScope/resources/base/element/string.json
 Application/AppScope/resources/base/media/app_icon.png
+Application/AppScope/resources/rawfile/agconnect-services.json
 Application/build-profile.json5
 Application/cloud_objects/BuildProfile.ets
 Application/cloud_objects/Index.ets
@@ -676,8 +677,8 @@ CloudProgram/tests/repair-contracts.test.cjs
 
 </details>
 
-### 首次搭建的本地配置（不在 GitHub 中）
+### 首次搭建需核对的配置
 
 | 路径 | 获取方式 |
 | --- | --- |
-| `Application/AppScope/resources/rawfile/agconnect-services.json` | 从目标 AGC 应用下载；当前 AGC SDK 默认从应用级 rawfile 读取 |
+| `Application/AppScope/resources/rawfile/agconnect-services.json` | 仓库已包含当前值；切换目标 AGC 应用时重新下载并替换 |

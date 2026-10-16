@@ -11,7 +11,7 @@
 | 云端运行时 | Node.js 20.x，数据处理位置：中国 |
 | 文档更新 | 2026-10-16（按当前源码核对；官方教程链接核对于 2026-10-04） |
 
-> 本仓库只包含源码。签名、`agconnect-services.json`、云端秘密和构建产物都不在 Git 中；**Git 推送不会部署 AGC**，云端更新需由部署负责人按 [云端指南](CloudProgram/README.md) 操作。
+> 本仓库共享源码及负责人明确指定的 `Application/build-profile.json5`、`Application/AppScope/resources/rawfile/agconnect-services.json`。这两个配置按负责人要求保留原值；独立签名证书/私钥文件、其他云端秘密及构建产物仍不在 Git 中；**Git 推送不会部署 AGC**，云端更新需由部署负责人按 [云端指南](CloudProgram/README.md) 操作。
 
 ---
 
@@ -187,11 +187,11 @@ git clone https://github.com/pine620/HarmonyOS-software.git shikeclouddev
 
 | 文件 / 设置 | 获取方式 |
 | --- | --- |
-| `Application/AppScope/resources/rawfile/agconnect-services.json` | AGC → 开发与服务 → 约定项目 → 项目设置 → 下载。每次新克隆都要放入；缺失时发送验证码会报 `9001005 / GetRawFileContent failed` |
+| `Application/AppScope/resources/rawfile/agconnect-services.json` | 仓库已按负责人要求提供当前配置。切换 AGC 项目/应用时重新从目标应用下载替换；缺失时发送验证码可能报 `9001005 / GetRawFileContent failed` |
 | 调试签名 | `Project Structure > Signing Configs` 勾选 **Associate with registered application**，登录后 `Team` 选约定团队、包名 `com.wyq.shike`。云调用要求关联注册应用的签名 |
 | `CloudProgram/cloud-config.json` | 仅云端开发 / 部署成员需要，由管理员安全提供或通过 CloudDev 向导生成；核对 `teamId`、`projectId`、`appId` |
 
-三者必须指向同一 AGC 项目与应用。提交前检查 `build-profile.json5` 差异，不提交证书路径、口令或本机签名信息。
+三者必须指向同一 AGC 项目与应用。仓库根 build-profile 按负责人要求保留当前签名配置；其中本机路径不适用于其他电脑，协作者仍须配置自己的签名，独立证书/私钥文件继续忽略。
 
 ### 4.4 运行并注册模拟器调试凭据
 
@@ -312,7 +312,7 @@ Cloud Storage 规则只开放生成的公开封面和精确的首页快照路径
 ## 9. 协作约定
 
 - 从约定开发分支创建功能分支，通过 Pull Request 合并。
-- 不提交：签名材料、`agconnect-services.json`、`cloud-config.json`、环境变量值、`node_modules` / `oh_modules`、`build` 产物、函数内生成副本。
+- 不提交：独立签名证书/私钥文件、`cloud-config.json`、其他环境变量值、`node_modules` / `oh_modules`、`build` 产物、函数内生成副本。
 - 新增、移动或删除源码文件后同步更新 [PROJECT_FILE_INDEX.md](PROJECT_FILE_INDEX.md)。
 - 新增业务操作：runtime → `shikeService.ts` 与对应领域函数 → `CloudRoutes.ets` → Repository / DTO → 页面；各处方法表保持一致。
 - 部署后记录函数名、云版本、Git 提交与部署人，并通知共用同一后端的成员。

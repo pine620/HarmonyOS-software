@@ -55,3 +55,7 @@ CloudProgram/cloudfunctions/shike-account/service/
 CloudProgram/cloudfunctions/shike-account/shikeAccount.js*
 CloudProgram/cloudfunctions/shike-governance/service/
 CloudProgram/cloudfunctions/shike-governance/shikeGovernance.js*
+
+# Owner-approved shared project configuration (only these exact paths).
+!/Application/build-profile.json5
+!/Application/AppScope/resources/rawfile/agconnect-services.json
