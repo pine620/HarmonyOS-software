@@ -1,20 +1,16 @@
 import { common } from '@kit.AbilityKit';
+import { util } from '@kit.ArkTS';
 import agconnect from '@hw-agconnect/api-ohos';
 import '@hw-agconnect/core-ohos';
-import '@hw-agconnect/auth-ohos';
-import {
-  AGConnectAuth,
-  AGConnectAuthCredential,
-  AGConnectUser,
-  EmailAuthProvider,
-  EmailUser,
-  EmailUserBuilder,
-  TokenResult,
-  VerifyCodeSettings,
-  VerifyCodeAction,
-  VerifyCodeSettingBuilder
-} from '@hw-agconnect/auth-ohos';
+import auth, {
+  AuthUser, EmailCredentialInfo, EmailVerifyCode, SignInParam, TokenResult, VerifyCodeAction, VerifyCodeParam
+} from '@hw-agconnect/auth';
 
+// Pack 3.1 (2026-10-15): native email sessions now use @hw-agconnect/auth (the maintained AGC Auth SDK for
+// HarmonyOS NEXT) instead of the deprecated @hw-agconnect/auth-ohos. The public surface of this store is
+// unchanged. The new SDK keeps its own session storage, so an email user signed in with the old SDK is asked
+// to sign in once more (AuthService.restore shows the notice). Huawei / nickname sessions are unaffected:
+// they never used the SDK and still carry the server-issued token below (legacyAccessToken).
 /**
  * The only client-side source of an AGC business credential.
  *
@@ -35,7 +31,6 @@ export class AuthSessionStore {
     if (uid !== AuthSessionStore.businessOwner) { AuthSessionStore.businessOwner = uid; AuthSessionStore.sessionGeneration++; AppStorage.setOrCreate('authSessionRevision', AuthSessionStore.sessionGeneration); }
   }
 
-  private static auth: AGConnectAuth | undefined = undefined;
   private static initialized: boolean = false;
   private static nativeEmailSession: boolean = false;
   private static cachedAccessToken: string = '';
@@ -46,8 +41,11 @@ export class AuthSessionStore {
   static initialize(context: common.Context): void {
     if (AuthSessionStore.initialized) return;
     // AGC initialization is intentionally called only after privacy consent.
+    // api-ohos stays initialised for Remote Config (delivery platforms); auth uses the new SDK.
     agconnect.instance().init(context);
-    AuthSessionStore.auth = agconnect.auth();
+    const raw: Uint8Array = context.resourceManager.getRawFileContentSync('agconnect-services.json');
+    const json: string = util.TextDecoder.create('utf-8').decodeToString(raw);
+    auth.init(context, json);
     AuthSessionStore.initialized = true;
   }
 
@@ -62,14 +60,16 @@ export class AuthSessionStore {
   }
 
   static async requestEmailVerifyCode(rawEmail: string, resetPassword: boolean = false): Promise<void> {
-    const auth: AGConnectAuth = AuthSessionStore.requireAuth();
+    AuthSessionStore.requireAuth();
     const email: string = AuthSessionStore.normalizeEmail(rawEmail);
-    const settings: VerifyCodeSettings = new VerifyCodeSettingBuilder()
-      .setAction(resetPassword ? VerifyCodeAction.RESET_PASSWORD : VerifyCodeAction.REGISTER_LOGIN)
-      .setLang('zh_CN')
-      .setSendInterval(60)
-      .build();
-    await auth.requestEmailVerifyCode(email, settings);
+    const codeType: EmailVerifyCode = { kind: 'email', email: email };
+    const param: VerifyCodeParam = {
+      action: resetPassword ? VerifyCodeAction.RESET_PASSWORD : VerifyCodeAction.REGISTER_LOGIN,
+      lang: 'zh_CN',
+      sendInterval: 60,
+      verifyCodeType: codeType
+    };
+    await auth.requestVerifyCode(param);
   }
 
   static validateNewPassword(password: string): void {
@@ -83,44 +83,42 @@ export class AuthSessionStore {
   }
 
   static async registerEmail(rawEmail: string, verifyCode: string): Promise<void> {
-    const auth: AGConnectAuth = AuthSessionStore.requireAuth();
+    AuthSessionStore.requireAuth();
     const email: string = AuthSessionStore.normalizeEmail(rawEmail);
     const code: string = verifyCode.trim();
     if (code.length === 0) {
       throw new Error('请输入邮箱验证码。');
     }
     await AuthSessionStore.signOut();
-    const emailUser: EmailUser = new EmailUserBuilder()
-      .setEmail(email)
-      .setVerifyCode(code)
-      .build();
-    await auth.createEmailUser(emailUser);
+    // createUser signs the new user in, like createEmailUser did in the old SDK.
+    const credential: EmailCredentialInfo = { kind: 'email', email: email, verifyCode: code };
+    await auth.createUser(credential);
     AuthSessionStore.nativeEmailSession = true;
     AuthSessionStore.clearLegacyAccessToken();
     AuthSessionStore.invalidateCachedToken();
   }
 
   static async signInWithEmail(rawEmail: string, verifyCode: string): Promise<void> {
-    const auth: AGConnectAuth = AuthSessionStore.requireAuth();
+    AuthSessionStore.requireAuth();
     const email: string = AuthSessionStore.normalizeEmail(rawEmail);
     const code: string = verifyCode.trim();
     if (code.length === 0) {
       throw new Error('请输入邮箱验证码。');
     }
     await AuthSessionStore.signOut();
-    const credential: AGConnectAuthCredential =
-      EmailAuthProvider.credentialWithVerifyCode(email, code);
-    await auth.signIn(credential);
+    const credential: EmailCredentialInfo = { kind: 'email', email: email, verifyCode: code };
+    const param: SignInParam = { autoCreateUser: false, credentialInfo: credential };
+    await auth.signIn(param);
     AuthSessionStore.nativeEmailSession = true;
     AuthSessionStore.clearLegacyAccessToken();
     AuthSessionStore.invalidateCachedToken();
   }
 
-  static async getCurrentUser(): Promise<AGConnectUser | null> {
-    if (!AuthSessionStore.initialized || AuthSessionStore.auth === undefined) {
+  static async getCurrentUser(): Promise<AuthUser | null> {
+    if (!AuthSessionStore.initialized) {
       return null;
     }
-    return AuthSessionStore.auth.getCurrentUser();
+    return auth.getCurrentUser();
   }
 
   static async getAccessToken(forceRefresh: boolean = false): Promise<string> {
@@ -164,8 +162,8 @@ export class AuthSessionStore {
   }
 
   private static async fetchNativeAccessToken(forceRefresh: boolean, generation: number): Promise<string> {
-    if (AuthSessionStore.initialized && AuthSessionStore.auth !== undefined) {
-      const user: AGConnectUser | null = await AuthSessionStore.auth.getCurrentUser();
+    if (AuthSessionStore.initialized) {
+      const user: AuthUser | null = await auth.getCurrentUser();
       if (generation !== AuthSessionStore.sessionGeneration) throw new Error('账号已变化，请重新获取登录凭证。');
       if (user !== null) {
         AuthSessionStore.nativeEmailSession = true;
@@ -199,8 +197,8 @@ export class AuthSessionStore {
   }
 
   static async reauthenticateEmail(rawEmail: string, verifyCode: string): Promise<void> {
-    const auth: AGConnectAuth = AuthSessionStore.requireAuth();
-    const user: AGConnectUser | null = await auth.getCurrentUser();
+    AuthSessionStore.requireAuth();
+    const user: AuthUser | null = await auth.getCurrentUser();
     if (user === null) {
       throw new Error('当前没有可重新认证的邮箱会话。');
     }
@@ -209,19 +207,19 @@ export class AuthSessionStore {
     if (code.length === 0) {
       throw new Error('请输入邮箱验证码后再注销。');
     }
-    const credential: AGConnectAuthCredential =
-      EmailAuthProvider.credentialWithVerifyCode(email, code);
-    await user.userReauthenticate(credential);
+    const credential: EmailCredentialInfo = { kind: 'email', email: email, verifyCode: code };
+    const param: SignInParam = { credentialInfo: credential };
+    await user.userReauthenticate(param);
     AuthSessionStore.invalidateCachedToken();
   }
 
   static async signOut(): Promise<void> {
     AuthSessionStore.sessionGeneration++; AppStorage.setOrCreate('authSessionRevision', AuthSessionStore.sessionGeneration);
     try {
-      if (AuthSessionStore.auth !== undefined) {
-        const user: AGConnectUser | null = await AuthSessionStore.auth.getCurrentUser();
+      if (AuthSessionStore.initialized) {
+        const user: AuthUser | null = await auth.getCurrentUser();
         if (user !== null) {
-          await AuthSessionStore.auth.signOut();
+          await auth.signOut();
         }
       }
     } finally {
@@ -236,8 +234,8 @@ export class AuthSessionStore {
 
   static async deleteUser(): Promise<void> {
     AuthSessionStore.sessionGeneration++; AppStorage.setOrCreate('authSessionRevision', AuthSessionStore.sessionGeneration);
-    const auth: AGConnectAuth = AuthSessionStore.requireAuth();
-    const user: AGConnectUser | null = await auth.getCurrentUser();
+    AuthSessionStore.requireAuth();
+    const user: AuthUser | null = await auth.getCurrentUser();
     if (user === null) {
       throw new Error('当前没有可注销的 AGC 认证用户。');
     }
@@ -265,11 +263,10 @@ export class AuthSessionStore {
     AuthSessionStore.cachedExpiresAt = 0;
   }
 
-  private static requireAuth(): AGConnectAuth {
-    if (!AuthSessionStore.initialized || AuthSessionStore.auth === undefined) {
+  private static requireAuth(): void {
+    if (!AuthSessionStore.initialized) {
       throw new Error('认证服务尚未初始化，请先同意隐私协议。');
     }
-    return AuthSessionStore.auth;
   }
 
   private static normalizeExpiry(expiresAt: number): number {

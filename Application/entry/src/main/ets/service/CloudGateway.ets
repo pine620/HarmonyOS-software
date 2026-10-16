@@ -4,29 +4,25 @@ import { ImageDescriptors } from './ImageDescriptors';
 import { ImageReadItem, ImageReadRequest } from '../model/ImageModels';
 import { CardDetailRequest, CardRevisionResponse } from '../model/CloudContracts';
 import { cloudCommon, cloudFunction } from '@kit.CloudFoundationKit';
-import { importObject, ShikeAuth, ShikeLocation, ShikeMedia, ShikeService } from '@shike/cloud-objects';
+import { importObject, ShikeAuth, ShikeLocation, ShikeMedia } from '@shike/cloud-objects';
 import type { CloudEnvelope } from '@shike/cloud-objects';
+import { CLOUD_FUNCTION_VERSION } from './CloudFunctionVersion';
+import { CLIENT_DIRECT_UPLOAD_ENABLED } from './ImageReadConfig';
+import { CLOUD_SERVICE_SPLIT_ENABLED, CloudRoute, LEGACY_SERVICE_FUNCTION, cloudRouteFor, isReadOnlyOperation } from './CloudRoutes';
 import { FeaturePerformanceTrace, FeatureTraceName } from './FeaturePerformanceTrace';
 import { AuthSessionStore } from './AuthSessionStore';
+import { registerHomeSnapshotPrefetch } from './HomeSnapshotReader';
 import { CloudBusinessError, ReadCancelledError, cloudReadError } from './CloudReadErrors';
 import { ReadRequestOptions, ReadScheduler } from './ReadScheduler';
 export { CloudBusinessError } from './CloudReadErrors';
 
-type MediaOperation = 'prepare-card-photo' | 'upload-card-photo' | 'get-public-media';
+type MediaOperation = 'prepare-card-photo' | 'upload-card-photo' | 'confirm-card-photo-upload' | 'get-public-media';
 type MediaErrorSource = 'cloud-call' | 'business-response';
 type MediaCloudObjectName = 'shike-media' | 'shike-service';
-type NicknameAuthMethod = 'getPasswordAccount' | 'configurePasswordAccount' | 'changePasswordAccount' | 'loginWithNickname' | 'logoutNickname';
-interface NicknameAuthInvocation {
-  method: NicknameAuthMethod;
+interface ServiceInvocation {
+  method: string;
   params: Array<CloudEnvelope>;
 }
-type Stage47ServiceMethod = 'getCardReportAccess' | 'getCardReportContext' | 'submitCardReport' | 'listMyCardReports' | 'getMyCardReport' | 'listCardReviewReports' | 'getCardReviewReport' | 'resolveCardReport' | 'getRandomFoodPool' | 'getRandomFoodCards' | 'saveFoodChoice' | 'listFoodChoices' | 'deleteFoodChoice' | 'getStage47Capabilities' | 'getMealCandidates' |
-  'getCardInteractionState' | 'setCardInteraction' | 'getCardInteractionReceipt' | 'getCardInteractionCounts' |
-  'createMealPoll' | 'getMealPoll' | 'addMealPollOption' |
-  'voteMealPoll' | 'closeMealPoll' | 'cancelMealPoll' | 'stopMealPollOptions' | 'getUserPage' |
-  'listFoodRankings' | 'setCardReactionV2' |
-  'getCardPreviews' | 'listPersonalCollection' | 'getPersonalCollectionMigration' |
-  'startPersonalCollectionMigration' | 'resumePersonalCollectionMigration' | 'setCardFavorite' | 'listMyReports' | 'reportMerchant' | 'listOwnReviewRequests' | 'listDeletedCards' | 'restoreDeletedCard' | 'getReviewMedia';
 
 interface ReadCloudEnvelope extends CloudEnvelope {
   readRequestId: string;
@@ -41,20 +37,12 @@ interface ImageFunctionEnvelope extends ImageReadRequest {
   readAttempt: number;
 }
 
-interface Stage47ServiceInvocation {
-  method: Stage47ServiceMethod;
-  params: Array<CloudEnvelope>;
-}
-
 interface CloudHandlerErrorDetail {
   code?: number | string;
   message?: string;
 }
 
 const MEDIA_CIRCUIT_BREAK_MS: number = 30 * 1000;
-// Per-call deadlines for the card interaction RPCs (global default stays 70 s).
-const INTERACTION_WRITE_TIMEOUT_MS: number = 12 * 1000;
-const INTERACTION_READ_TIMEOUT_MS: number = 10 * 1000;
 const MEDIA_UNAVAILABLE_MESSAGE: string = '实拍图服务暂时不可用，请稍后重试。';
 
 export class MediaServiceUnavailableError extends Error {
@@ -125,7 +113,6 @@ export class CloudGateway {
   private static authObject: ShikeAuth | undefined = undefined;
   private static locationObject: ShikeLocation | undefined = undefined;
   private static mediaObject: ShikeMedia | undefined = undefined;
-  private static serviceObject: ShikeService | undefined = undefined;
   private static mediaCircuitOpenUntilMs: number = 0;
 
   static isMediaServiceUnavailable(): boolean {
@@ -136,6 +123,7 @@ export class CloudGateway {
     switch (name) {
       case 'prepare-card-photo': return 'prepare-card-photo';
       case 'upload-card-photo': return 'upload-card-photo';
+      case 'confirm-card-photo-upload': return 'confirm-card-photo-upload';
       case 'get-public-media': return 'get-public-media';
       default: return undefined;
     }
@@ -171,7 +159,7 @@ export class CloudGateway {
     else if (message.includes('is not defined')) reason = 'undefined-name';
     else if (message.includes('SyntaxError')) reason = 'syntax-error';
     console.error('[MediaService] diagnostic; source=' + source + '; cloudObject=' + cloudObjectName +
-      '; version=$latest; operation=' + operation + '; code=' + code + '; missingModule=' + missingModule +
+      '; version=' + CLOUD_FUNCTION_VERSION + '; operation=' + operation + '; code=' + code + '; missingModule=' + missingModule +
       '; reason=' + reason);
   }
 
@@ -193,6 +181,7 @@ export class CloudGateway {
       switch (operation) {
         case 'prepare-card-photo': return await (CloudGateway.mediaObject as ShikeMedia).prepareCardPhoto(envelope);
         case 'upload-card-photo': return await (CloudGateway.mediaObject as ShikeMedia).uploadCardPhoto(envelope);
+        case 'confirm-card-photo-upload': return await (CloudGateway.mediaObject as ShikeMedia).confirmCardPhotoUpload(envelope);
         case 'get-public-media': return await (CloudGateway.mediaObject as ShikeMedia).getPublicMedia(envelope);
       }
       throw new Error('当前未开放媒体接口。');
@@ -215,34 +204,73 @@ export class CloudGateway {
     }
   }
 
-  private static async invokeStage47(method: Stage47ServiceMethod,
-    envelope: CloudEnvelope, timeoutMs: number = 0): Promise<CloudObjectResponse> {
-    // Match the generated importObject protocol while its declarations contain only older methods.
-    const invocation: Stage47ServiceInvocation = { method, params: [envelope] };
-    // Interaction calls use a short per-call deadline instead of the global 70 s.
-    // A write timeout is an unknown result; the controller recovers it with the
-    // same request UUID, so the server never applies one tap twice.
-    let parameters: cloudFunction.FunctionParams = {
-      name: 'shike-service',
-      version: '$latest',
-      data: invocation
-    };
-    if (timeoutMs > 0) parameters = { name: 'shike-service', version: '$latest', data: invocation, timeout: timeoutMs };
+  // Domain functions that failed at the transport level are skipped for a while (falls back to shike-service).
+  private static unavailableDomains: Map<string, number> = new Map<string, number>();
+  private static readonly DOMAIN_RETRY_MS: number = 10 * 60 * 1000;
+
+  private static functionFor(route: CloudRoute): string {
+    if (!CLOUD_SERVICE_SPLIT_ENABLED) return LEGACY_SERVICE_FUNCTION;
+    const until: number | undefined = CloudGateway.unavailableDomains.get(route.domainFunction);
+    if (until !== undefined && Date.now() < until) return LEGACY_SERVICE_FUNCTION;
+    return route.domainFunction;
+  }
+
+  private static async callRoute(functionName: string, route: CloudRoute, envelope: CloudEnvelope): Promise<CloudObjectResponse> {
+    // Same wire protocol as the generated importObject proxy: { method, params: [envelope] }.
+    const invocation: ServiceInvocation = { method: route.method, params: [envelope] };
+    let parameters: cloudFunction.FunctionParams = { name: functionName, version: CLOUD_FUNCTION_VERSION, data: invocation };
+    if (route.timeoutMs > 0) {
+      parameters = { name: functionName, version: CLOUD_FUNCTION_VERSION, data: invocation, timeout: route.timeoutMs };
+    }
     const response: cloudFunction.FunctionResult = await cloudFunction.call(parameters);
     return decode<object>(response.result as string | object);
   }
 
-  private static async invokeNicknameAuth(method: NicknameAuthMethod,
+  // Pack 3.4 / 4.4: every shike-service operation goes through the route table. A transport failure of a domain
+  // function marks it unavailable; reads are retried once on shike-service, writes are not (unknown outcome).
+  private static async invokeRoute(route: CloudRoute, envelope: CloudEnvelope): Promise<CloudObjectResponse> {
+    const functionName: string = CloudGateway.functionFor(route);
+    let response: CloudObjectResponse;
+    try {
+      response = await CloudGateway.callRoute(functionName, route, envelope);
+    } catch (error) {
+      if (functionName === LEGACY_SERVICE_FUNCTION) throw error as Error;
+      const message: string = CloudGateway.cloudHandlerMessage(error as Object);
+      CloudGateway.markDomainUnavailable(route, message);
+      // A handler that could not even be loaded never ran the operation, so writes are safe to retry too.
+      if (!isReadOnlyOperation(route.operation) && !CloudGateway.isHandlerLoadError(message)) throw error as Error;
+      return await CloudGateway.callRoute(LEGACY_SERVICE_FUNCTION, route, envelope);
+    }
+    // Fix 2026-10-16: the platform may report a broken deployment (e.g. "Cannot find module './service/runtime'")
+    // as a normal response instead of a thrown error. Treat it exactly like an unavailable domain function.
+    if (functionName !== LEGACY_SERVICE_FUNCTION && response.ok !== true &&
+      CloudGateway.isHandlerLoadError(response.message || '')) {
+      CloudGateway.markDomainUnavailable(route, response.message || '');
+      return await CloudGateway.callRoute(LEGACY_SERVICE_FUNCTION, route, envelope);
+    }
+    return response;
+  }
+
+  private static isHandlerLoadError(message: string): boolean {
+    return message.includes('Call handler error') &&
+      (message.includes('Cannot find module') || message.includes('Cannot find package') ||
+        message.includes('Invalid package config') || message.includes('ERR_INVALID_PACKAGE_CONFIG') ||
+        message.includes('is not a function') || message.includes('SyntaxError'));
+  }
+
+  private static markDomainUnavailable(route: CloudRoute, message: string): void {
+    CloudGateway.unavailableDomains.set(route.domainFunction, Date.now() + CloudGateway.DOMAIN_RETRY_MS);
+    console.warn('[CloudRoute] event=domain-unavailable function=' + route.domainFunction + ' operation=' + route.operation +
+      ' loadError=' + CloudGateway.isHandlerLoadError(message));
+  }
+
+  private static async invokeNicknameAuth(route: CloudRoute,
     envelope: ReadCloudEnvelope): Promise<CloudObjectResponse> {
     const started: number = Date.now();
-    const invocation: NicknameAuthInvocation = { method, params: [envelope] };
-    const parameters: cloudFunction.FunctionParams = {
-      name: 'shike-service', version: '$latest', data: invocation, timeout: 45000
-    };
+    const method: string = route.method;
     console.info('[NicknameAuthClient] requestId=' + envelope.readRequestId + ' method=' + method + ' stage=sent');
     try {
-      const response: cloudFunction.FunctionResult = await cloudFunction.call(parameters);
-      const decoded: CloudObjectResponse = decode<object>(response.result as string | object);
+      const decoded: CloudObjectResponse = await CloudGateway.invokeRoute(route, envelope);
       console.info('[NicknameAuthClient] requestId=' + envelope.readRequestId + ' method=' + method +
         ' stage=response code=' + (decoded.code || (decoded.ok ? 'OK' : 'REQUEST_FAILED')) +
         ' elapsedMs=' + (Date.now() - started));
@@ -267,15 +295,29 @@ export class CloudGateway {
       // platform app signature; application tokens stay in CloudEnvelope for
       // the function to verify. In particular, do not put the server-issued
       // Huawei migration token in this framework-level credential.
+      // Pack 3.3: only a native AGC Auth (email) token is offered, so Cloud Storage rules can recognise the
+      // uploader for direct photo uploads. Huawei / nickname sessions get '' and keep the function upload.
       authProvider: {
-        getAccessToken: async (_isForceRefresh: boolean): Promise<string> => ''
+        getAccessToken: async (isForceRefresh: boolean): Promise<string> => {
+          if (!CLIENT_DIRECT_UPLOAD_ENABLED || !AuthSessionStore.isNativeEmailSession()) return '';
+          try {
+            return await AuthSessionStore.getNativeAccessToken(isForceRefresh);
+          } catch (_error) {
+            return '';
+          }
+        }
       }
     });
-    CloudGateway.authObject = importObject(ShikeAuth);
-    CloudGateway.locationObject = importObject(ShikeLocation);
-    CloudGateway.mediaObject = importObject(ShikeMedia);
-    CloudGateway.serviceObject = importObject(ShikeService);
+    CloudGateway.authObject = importObject(ShikeAuth, CLOUD_FUNCTION_VERSION);
+    CloudGateway.locationObject = importObject(ShikeLocation, CLOUD_FUNCTION_VERSION);
+    CloudGateway.mediaObject = importObject(ShikeMedia, CLOUD_FUNCTION_VERSION);
     CloudGateway.initialized = true;
+    registerHomeSnapshotPrefetch();
+  }
+
+  // Direct Cloud Storage reads (home snapshot) need cloudCommon.init before the first cloud call.
+  static ensureReady(): void {
+    CloudGateway.initialize();
   }
 
   static hasSession(): boolean {
@@ -401,159 +443,20 @@ export class CloudGateway {
     const envelope: ReadCloudEnvelope = { accessToken, payload, readRequestId, readAttempt };
     let raw: CloudObjectResponse | undefined = undefined;
     switch (name) {
-      case 'get-card-interaction-state':
-        raw = await CloudGateway.invokeStage47('getCardInteractionState', envelope, INTERACTION_READ_TIMEOUT_MS); break;
-      case 'set-card-interaction':
-        raw = await CloudGateway.invokeStage47('setCardInteraction', envelope, INTERACTION_WRITE_TIMEOUT_MS); break;
-      case 'get-card-interaction-receipt':
-        raw = await CloudGateway.invokeStage47('getCardInteractionReceipt', envelope, INTERACTION_READ_TIMEOUT_MS); break;
-      case 'get-card-interaction-counts':
-        raw = await CloudGateway.invokeStage47('getCardInteractionCounts', envelope, INTERACTION_READ_TIMEOUT_MS); break;
       case 'image-read-batch': {
         const imageRequest: ImageReadRequest = payload as ImageReadRequest;
         const imageEnvelope: ImageFunctionEnvelope = { protocolVersion: imageRequest.protocolVersion, items: imageRequest.items,
           accessToken, readRequestId, readAttempt };
-        const parameters: cloudFunction.FunctionParams = { name: 'shike-image', version: '$latest', data: imageEnvelope };
+        const parameters: cloudFunction.FunctionParams = { name: 'shike-image', version: CLOUD_FUNCTION_VERSION, data: imageEnvelope };
         const response: cloudFunction.FunctionResult = await cloudFunction.call(parameters);
         raw = decode<object>(response.result as string | object);
         break;
       }
-      case 'get-card-previews':
-        raw = await CloudGateway.invokeStage47('getCardPreviews', envelope); break;
-      case 'list-personal-collection':
-        raw = await CloudGateway.invokeStage47('listPersonalCollection', envelope); break;
-      case 'get-personal-collection-migration':
-        raw = await CloudGateway.invokeStage47('getPersonalCollectionMigration', envelope); break;
-      case 'start-personal-collection-migration':
-        raw = await CloudGateway.invokeStage47('startPersonalCollectionMigration', envelope); break;
-      case 'resume-personal-collection-migration':
-        raw = await CloudGateway.invokeStage47('resumePersonalCollectionMigration', envelope); break;
-      case 'set-card-favorite':
-        raw = await CloudGateway.invokeStage47('setCardFavorite', envelope); break;
-      case 'get-card-report-access':
-        raw = await CloudGateway.invokeStage47('getCardReportAccess', envelope); break;
-      case 'get-card-report-context':
-        raw = await CloudGateway.invokeStage47('getCardReportContext', envelope); break;
-      case 'submit-card-report':
-        raw = await CloudGateway.invokeStage47('submitCardReport', envelope); break;
-      case 'list-my-card-reports':
-        raw = await CloudGateway.invokeStage47('listMyCardReports', envelope); break;
-      case 'get-my-card-report':
-        raw = await CloudGateway.invokeStage47('getMyCardReport', envelope); break;
-      case 'list-card-review-reports':
-        raw = await CloudGateway.invokeStage47('listCardReviewReports', envelope); break;
-      case 'get-card-review-report':
-        raw = await CloudGateway.invokeStage47('getCardReviewReport', envelope); break;
-      case 'resolve-card-report':
-        raw = await CloudGateway.invokeStage47('resolveCardReport', envelope); break;
-      case 'list-my-reports':
-        raw = await CloudGateway.invokeStage47('listMyReports', envelope); break;
-      case 'report-merchant':
-        raw = await CloudGateway.invokeStage47('reportMerchant', envelope); break;
-      case 'list-own-review-requests':
-        raw = await CloudGateway.invokeStage47('listOwnReviewRequests', envelope); break;
-      case 'list-deleted-cards':
-        raw = await CloudGateway.invokeStage47('listDeletedCards', envelope); break;
-      case 'restore-deleted-card':
-        raw = await CloudGateway.invokeStage47('restoreDeletedCard', envelope); break;
-      case 'get-review-media':
-        raw = await CloudGateway.invokeStage47('getReviewMedia', envelope); break;
-      case 'get-stage47-capabilities':
-        raw = await CloudGateway.invokeStage47('getStage47Capabilities', envelope);
-        break;
-      case 'get-random-food-pool':
-        raw = await CloudGateway.invokeStage47('getRandomFoodPool', envelope); break;
-      case 'get-random-food-cards':
-        raw = await CloudGateway.invokeStage47('getRandomFoodCards', envelope); break;
-      case 'save-food-choice':
-        raw = await CloudGateway.invokeStage47('saveFoodChoice', envelope); break;
-      case 'list-food-choices':
-        raw = await CloudGateway.invokeStage47('listFoodChoices', envelope); break;
-      case 'delete-food-choice':
-        raw = await CloudGateway.invokeStage47('deleteFoodChoice', envelope); break;
-      case 'get-meal-candidates':
-        raw = await CloudGateway.invokeStage47('getMealCandidates', envelope);
-        break;
-      case 'create-meal-poll':
-        raw = await CloudGateway.invokeStage47('createMealPoll', envelope);
-        break;
-      case 'get-meal-poll':
-        raw = await CloudGateway.invokeStage47('getMealPoll', envelope);
-        break;
-      case 'add-meal-poll-option':
-        raw = await CloudGateway.invokeStage47('addMealPollOption', envelope);
-        break;
-      case 'vote-meal-poll':
-        raw = await CloudGateway.invokeStage47('voteMealPoll', envelope);
-        break;
-      case 'close-meal-poll':
-        raw = await CloudGateway.invokeStage47('closeMealPoll', envelope);
-        break;
-      case 'cancel-meal-poll':
-        raw = await CloudGateway.invokeStage47('cancelMealPoll', envelope);
-        break;
-      case 'stop-meal-poll-options':
-        raw = await CloudGateway.invokeStage47('stopMealPollOptions', envelope);
-        break;
-      case 'get-user-page':
-        raw = await CloudGateway.invokeStage47('getUserPage', envelope);
-        break;
-      case 'list-food-rankings':
-        raw = await CloudGateway.invokeStage47('listFoodRankings', envelope);
-        break;
-      case 'set-card-reaction-v2':
-        raw = await CloudGateway.invokeStage47('setCardReactionV2', envelope);
-        break;
-      case 'get-discovery-capabilities':
-        raw = await (CloudGateway.serviceObject as ShikeService).getDiscoveryCapabilities(envelope);
-        break;
-      case 'list-map-merchants':
-        raw = await (CloudGateway.serviceObject as ShikeService).listMapMerchants(envelope);
-        break;
-      case 'search-public-cards':
-        raw = await (CloudGateway.serviceObject as ShikeService).searchPublicCards(envelope);
-        break;
-      case 'get-merchant-recommendations':
-        raw = await (CloudGateway.serviceObject as ShikeService).getMerchantRecommendations(envelope);
-        break;
-      case 'get-password-account':
-        raw = await CloudGateway.invokeNicknameAuth('getPasswordAccount', envelope);
-        break;
-      case 'configure-password-account':
-        raw = await CloudGateway.invokeNicknameAuth('configurePasswordAccount', envelope);
-        break;
-      case 'change-password-account':
-        raw = await CloudGateway.invokeNicknameAuth('changePasswordAccount', envelope);
-        break;
-      case 'login-with-nickname':
-        raw = await CloudGateway.invokeNicknameAuth('loginWithNickname', envelope);
-        break;
-      case 'logout-nickname':
-        raw = await CloudGateway.invokeNicknameAuth('logoutNickname', envelope);
-        break;
       case 'exchange-huawei-account':
         raw = await (CloudGateway.authObject as ShikeAuth).exchangeHuaweiAccount(envelope);
         break;
-      case 'complete-legacy-login':
-        raw = await (CloudGateway.serviceObject as ShikeService).completeLegacyLogin(envelope);
-        break;
-      case 'start-email-binding':
-        raw = await (CloudGateway.serviceObject as ShikeService).startEmailBinding(envelope);
-        break;
-      case 'complete-email-binding':
-        raw = await (CloudGateway.serviceObject as ShikeService).completeEmailBinding(envelope);
-        break;
       case 'check-location':
         raw = await (CloudGateway.locationObject as ShikeLocation).checkLocation(envelope);
-        break;
-      case 'list-nearby-cards':
-        raw = await (CloudGateway.serviceObject as ShikeService).listNearbyCards(envelope);
-        break;
-      case 'get-friend-profile':
-        raw = await (CloudGateway.serviceObject as ShikeService).getFriendProfile(envelope);
-        break;
-      case 'upsert-profile':
-        raw = await (CloudGateway.serviceObject as ShikeService).upsertProfile(envelope);
         break;
       case 'prepare-card-photo':
         raw = await CloudGateway.invokeMedia('prepare-card-photo', envelope);
@@ -561,144 +464,21 @@ export class CloudGateway {
       case 'upload-card-photo':
         raw = await CloudGateway.invokeMedia('upload-card-photo', envelope);
         break;
-      case 'get-public-media':
-        raw = authenticated
-          ? await CloudGateway.invokeMedia('get-public-media', envelope)
-          : await (CloudGateway.serviceObject as ShikeService).getPublicMedia(envelope);
+      case 'confirm-card-photo-upload':
+        raw = await CloudGateway.invokeMedia('confirm-card-photo-upload', envelope);
         break;
-      case 'publish-card':
-      case 'publish-cards':
-        // Keep both spellings during rollout for older installed packages.
-        raw = await (CloudGateway.serviceObject as ShikeService).publishCard(envelope);
-        break;
-      case 'get-stage2-capabilities':
-        raw = await (CloudGateway.serviceObject as ShikeService).getStage2Capabilities(envelope);
-        break;
-      case 'resolve-merchant':
-        raw = await (CloudGateway.serviceObject as ShikeService).resolveMerchant(envelope);
-        break;
-      case 'create-user-merchant':
-        raw = await (CloudGateway.serviceObject as ShikeService).createUserMerchant(envelope);
-        break;
-      case 'update-user-merchant':
-        raw = await (CloudGateway.serviceObject as ShikeService).updateUserMerchant(envelope);
-        break;
-      case 'get-merchant':
-        raw = await (CloudGateway.serviceObject as ShikeService).getMerchant(envelope);
-        break;
-      case 'get-card-edit-context':
-        raw = await (CloudGateway.serviceObject as ShikeService).getCardEditContext(envelope);
-        break;
-      case 'get-card-detail':
-        raw = await (CloudGateway.serviceObject as ShikeService).getCardDetail(envelope);
-        break;
-      case 'list-my-cards':
-        raw = await (CloudGateway.serviceObject as ShikeService).listMyCards(envelope);
-        break;
-      case 'list-my-favorite-cards':
-        raw = await (CloudGateway.serviceObject as ShikeService).listMyFavoriteCards(envelope);
-        break;
-      case 'search-users':
-        raw = await (CloudGateway.serviceObject as ShikeService).searchUsers(envelope);
-        break;
-      case 'list-friends':
-        raw = await (CloudGateway.serviceObject as ShikeService).listFriends(envelope);
-        break;
-      case 'send-friend-request':
-        raw = await (CloudGateway.serviceObject as ShikeService).sendFriendRequest(envelope);
-        break;
-      case 'respond-friend-request':
-        raw = await (CloudGateway.serviceObject as ShikeService).respondFriendRequest(envelope);
-        break;
-      case 'cancel-friend-request':
-        raw = await (CloudGateway.serviceObject as ShikeService).cancelFriendRequest(envelope);
-        break;
-      case 'block-user':
-        raw = await (CloudGateway.serviceObject as ShikeService).blockUser(envelope);
-        break;
-      case 'unblock-user':
-        raw = await (CloudGateway.serviceObject as ShikeService).unblockUser(envelope);
-        break;
-      case 'report-user':
-        raw = await (CloudGateway.serviceObject as ShikeService).reportUser(envelope);
-        break;
-      case 'remove-friend':
-        raw = await (CloudGateway.serviceObject as ShikeService).removeFriend(envelope);
-        break;
-      case 'list-conversations':
-        raw = await (CloudGateway.serviceObject as ShikeService).listConversations(envelope);
-        break;
-      case 'list-messages':
-        raw = await (CloudGateway.serviceObject as ShikeService).listMessages(envelope);
-        break;
-      case 'send-message':
-        raw = await (CloudGateway.serviceObject as ShikeService).sendMessage(envelope);
-        break;
-      case 'create-group-chat':
-        raw = await (CloudGateway.serviceObject as ShikeService).createGroupChat(envelope);
-        break;
-      case 'list-group-conversations':
-        raw = await (CloudGateway.serviceObject as ShikeService).listGroupConversations(envelope);
-        break;
-      case 'get-group-chat':
-        raw = await (CloudGateway.serviceObject as ShikeService).getGroupChat(envelope);
-        break;
-      case 'list-group-messages':
-        raw = await (CloudGateway.serviceObject as ShikeService).listGroupMessages(envelope);
-        break;
-      case 'send-group-message':
-        raw = await (CloudGateway.serviceObject as ShikeService).sendGroupMessage(envelope);
-        break;
-      case 'leave-group-chat':
-        raw = await (CloudGateway.serviceObject as ShikeService).leaveGroupChat(envelope);
-        break;
-      case 'remove-group-member':
-        raw = await (CloudGateway.serviceObject as ShikeService).removeGroupMember(envelope);
-        break;
-      case 'register-push-device':
-        raw = await (CloudGateway.serviceObject as ShikeService).registerPushDevice(envelope);
-        break;
-      case 'unregister-push-device':
-        raw = await (CloudGateway.serviceObject as ShikeService).unregisterPushDevice(envelope);
-        break;
-      case 'sync-service-card-forms':
-        raw = await (CloudGateway.serviceObject as ShikeService).syncServiceCardForms(envelope);
-        break;
-      case 'unregister-service-card-forms':
-        raw = await (CloudGateway.serviceObject as ShikeService).unregisterServiceCardForms(envelope);
-        break;
-      case 'push-service-card-update':
-        raw = await (CloudGateway.serviceObject as ShikeService).pushServiceCardUpdate(envelope);
-        break;
-      case 'report-card':
-        raw = await (CloudGateway.serviceObject as ShikeService).reportCard(envelope);
-        break;
-      case 'toggle-card-action':
-        raw = await (CloudGateway.serviceObject as ShikeService).toggleCardAction(envelope);
-        break;
-      case 'set-card-reaction':
-        raw = await (CloudGateway.serviceObject as ShikeService).setCardReaction(envelope);
-        break;
-      case 'submit-card-revision':
-        raw = await (CloudGateway.serviceObject as ShikeService).submitCardRevision(envelope);
-        break;
-      case 'get-card-revision':
-        raw = await (CloudGateway.serviceObject as ShikeService).getCardRevision(envelope);
-        break;
-      case 'withdraw-card-revision':
-        raw = await (CloudGateway.serviceObject as ShikeService).withdrawCardRevision(envelope);
-        break;
-      case 'get-revision-media':
-        raw = await (CloudGateway.serviceObject as ShikeService).getRevisionMedia(envelope);
-        break;
-      case 'delete-own-card':
-        raw = await (CloudGateway.serviceObject as ShikeService).deleteOwnCard(envelope);
-        break;
-      case 'delete-account-data':
-        raw = await (CloudGateway.serviceObject as ShikeService).deleteAccountData(envelope);
-        break;
-    default:
-      throw new Error(`当前未开放接口：${name}`);
+      default: {
+        if (name === 'get-public-media' && authenticated) {
+          raw = await CloudGateway.invokeMedia('get-public-media', envelope);
+          break;
+        }
+        const route: CloudRoute | undefined = cloudRouteFor(name);
+        if (route === undefined) throw new Error(`当前未开放接口：${name}`);
+        raw = ['get-password-account', 'configure-password-account', 'change-password-account', 'login-with-nickname',
+          'logout-nickname'].includes(route.operation)
+          ? await CloudGateway.invokeNicknameAuth(route, envelope)
+          : await CloudGateway.invokeRoute(route, envelope);
+      }
     }
     if (raw === undefined) {
       throw new Error('云对象未返回结果。');

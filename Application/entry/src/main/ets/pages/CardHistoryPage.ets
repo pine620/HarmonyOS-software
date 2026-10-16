@@ -9,6 +9,7 @@ import { PersonalPreviewLoader, PersonalPreviewRow, PersonalPreviewSource } from
 import { PersonalPreviewTile } from '../components/PersonalPreviewTile';
 import { ErrorDetail, errorText } from '../common/ErrorKit';
 import { ReadRequestOptions } from '../service/ReadScheduler';
+import { StateView } from '../common/StateViewUi';
 
 @Component
 export struct CardHistoryPage {
@@ -82,7 +83,10 @@ export struct CardHistoryPage {
         if (this.message.length > 0) { Text(this.message).fontSize(13).fontColor($r('app.color.personal_muted')).width('100%'); }
         Button('重新读取预览').constraintSize({ minHeight: 48 }).fontSize(13).enabled(!this.opening)
           .fontColor($r('app.color.personal_action')).backgroundColor(Color.Transparent).onClick((): void => this.refresh());
-        if (this.count === 0) { Text('还没有本机浏览记录').fontSize(16).fontColor($r('app.color.personal_muted')).width('100%').padding(20); }
+        if (this.count === 0) {
+          StateView({ kind: 'EMPTY', palette: 'PERSONAL', icon: 'list', title: '还没有浏览记录',
+            hint: '看过的卡片会保存在本机，方便下次找回。' });
+        }
         List({ space: 10 }) {
           LazyForEach(this.source, (row: PersonalPreviewRow): void => {
             ListItem() { PersonalPreviewTile({ row, busy: this.opening,

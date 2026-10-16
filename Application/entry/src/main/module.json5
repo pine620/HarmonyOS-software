@@ -48,6 +48,9 @@
             "entities": ["entity.system.browsable"],
             "actions": ["ohos.want.action.viewData"],
             "uris": [{ "scheme": "shike", "host": "card", "linkFeature": "Share" }]
+          },
+          {
+            "actions": ["action.ohos.push.listener"]
           }
         ]
       }
@@ -63,6 +66,19 @@
           {
             "name": "ohos.extension.form",
             "resource": "$profile:form_config"
+          }
+        ]
+      },
+      {
+        "name": "RandomFoodFormAbility",
+        "srcEntry": "./ets/randomfoodcard/RandomFoodFormAbility.ets",
+        "label": "$string:random_food_card_ability_label",
+        "description": "$string:random_food_card_desc",
+        "type": "form",
+        "metadata": [
+          {
+            "name": "ohos.extension.form",
+            "resource": "$profile:random_food_form_config"
           }
         ]
       }

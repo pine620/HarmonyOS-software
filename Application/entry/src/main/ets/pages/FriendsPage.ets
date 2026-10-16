@@ -11,6 +11,7 @@ import { ErrorDetail, errorText } from '../common/ErrorKit';
 import { ReadRequestOptions, ReadScheduler } from '../service/ReadScheduler';
 import { ImageRepository } from '../service/ImageRepository';
 import { SECONDARY_DATA_REUSE_MS } from '../service/ImageReadConfig';
+import { DiffDataSource } from '../service/PagedDataSource';
 
 type FriendActionKind = 'REMOVE' | 'BLOCK';
 interface NoteConversationEntry {
@@ -59,12 +60,21 @@ export struct FriendsPage {
   @StorageLink('socialForegroundRevision') @Watch('onSocialForegroundChanged') socialForegroundRevision: number = 0;
   @StorageLink('requestedFriendSection') @Watch('onRequestedFriendSectionChanged') requestedFriendSection: number = 0;
   @State selectedSection: number = 0;
-  @State friends: Array<SocialUser> = [];
+  // Pack 4.3: friends and conversations render through LazyForEach. Render keys include the row data, so a
+  // changed unread count / last message / nickname rebuilds just that row.
+  @State @Watch('syncFriendSource') friends: Array<SocialUser> = [];
+  private friendSource: DiffDataSource<SocialUser> = new DiffDataSource<SocialUser>(
+    (user: SocialUser): string => user.uid, (user: SocialUser): string => user.uid + ':' + JSON.stringify(user));
+  private conversationSource: DiffDataSource<NoteConversationEntry> = new DiffDataSource<NoteConversationEntry>(
+    (entry: NoteConversationEntry): string => entry.id,
+    (entry: NoteConversationEntry): string => entry.id + ':' + JSON.stringify(entry));
+  private syncFriendSource(): void { this.friendSource.update(this.friends); }
+  private syncConversationSource(): void { this.conversationSource.update(this.orderedConversations()); }
   @State blockedUsers: Array<SocialUser> = [];
   @State incomingRequests: Array<FriendRequestItem> = [];
   @State outgoingRequests: Array<FriendRequestItem> = [];
-  @State conversations: Array<ConversationSummary> = [];
-  @State groupConversations: Array<GroupConversationSummary> = [];
+  @State @Watch('syncConversationSource') conversations: Array<ConversationSummary> = [];
+  @State @Watch('syncConversationSource') groupConversations: Array<GroupConversationSummary> = [];
   @State unreadCount: number = 0;
   @State groupUnreadCount: number = 0;
   @State friendsNextPageToken: string = '';
@@ -510,7 +520,7 @@ export struct FriendsPage {
       this.emptyPanel('还没有消息', '添加好友，分享一张真实的美食卡片。', '添加好友', 1, true);
     } else {
       List({ space: 0 }) {
-        ForEach(this.orderedConversations(), (entry: NoteConversationEntry): void => {
+        LazyForEach(this.conversationSource, (entry: NoteConversationEntry): void => {
           ListItem() {
             Column() {
               if (entry.conversation !== undefined) { this.conversationRow(entry.conversation); }
@@ -519,7 +529,7 @@ export struct FriendsPage {
                 .border({ width: { top: 1 }, color: pageColor(this.palette, 'line'), style: BorderStyle.Dashed }).accessibilityLevel('no');
             }.width('100%');
           }
-        }, (entry: NoteConversationEntry): string => entry.id);
+        }, (_entry: NoteConversationEntry, index: number): string => this.conversationSource.keyAt(index));
         if (this.conversationsNextPageToken.length > 0) { ListItem() {
           Button(this.conversationsLoading ? '正在加载…' : '更多私信').width('100%').enabled(!this.conversationsLoading)
             .attributeModifier(new NoteActionStyle(false, this.palette)).onClick((): void => { void this.loadConversations(false); });
@@ -656,7 +666,7 @@ export struct FriendsPage {
             .border({ width: 1, color: pageColor(this.palette, 'line') });
         }
       } else {
-        ForEach(this.friends, (user: SocialUser): void => {
+        LazyForEach(this.friendSource, (user: SocialUser): void => {
           ListItem() {
             Column() {
               this.friendRow(user);
@@ -675,7 +685,7 @@ export struct FriendsPage {
               }
             }
           })
-        }, (user: SocialUser): string => user.uid);
+        }, (_user: SocialUser, index: number): string => this.friendSource.keyAt(index));
       }
       if (this.friendsNextPageToken.length > 0) {
         ListItem() {

@@ -1,7 +1,5 @@
 import { FoodCategoryV2 } from '../model/CloudContracts';
 
-// Enable only after the user's device comparison. Loading feedback is independent.
-export const DISCOVERY_IDLE_MOTION_ENABLED: boolean = false;
 export type DiscoveryCategoryKey = FoodCategoryV2 | 'ALL' | 'MORE';
 export interface DiscoveryShortcut { key: DiscoveryCategoryKey; label: string; }
 export const DISCOVERY_SHORTCUTS: Array<DiscoveryShortcut> = [
@@ -65,33 +63,7 @@ export class DiscoveryChoiceStyle implements AttributeModifier<ButtonAttribute> 
 }
 
 @Component
-struct DiscoveryIdleGlow {
-  @Prop @Watch('syncMotion') motionEnabled: boolean = false;
-  @State phase: number = 0;
-  private mounted: boolean = false;
-  private syncMotion(): void {
-    if (!this.mounted) return;
-    const options: AnimateParam = this.motionEnabled
-      ? { duration: 12000, curve: Curve.EaseInOut, iterations: -1, playMode: PlayMode.Alternate }
-      : { duration: 0, iterations: 1 };
-    this.getUIContext().animateTo(options, (): void => { this.phase = this.motionEnabled ? 1 : 0; });
-  }
-  build() {
-    Row() {}.width(260).height(260).borderRadius(130).backgroundColor($r('app.color.discovery_glow'))
-      .translate({ x: 82 - this.phase * 8, y: -104 + this.phase * 5 })
-      .opacity(0.55).hitTestBehavior(HitTestMode.None).accessibilityLevel('no')
-      .onAppear((): void => { this.mounted = true; this.syncMotion(); })
-      .onDisAppear((): void => {
-        const options: AnimateParam = { duration: 0 };
-        this.getUIContext().animateTo(options, (): void => { this.phase = 0; });
-        this.mounted = false;
-      })
-  }
-}
-
-@Component
 export struct DiscoveryBackdrop {
-  @Prop idleMotion: boolean = false;
   private gradient(): LinearGradient {
     const colors: Array<[ResourceColor, number]> = [
       [$r('app.color.discovery_header'), 0], [$r('app.color.discovery_header_fade'), 0.72],

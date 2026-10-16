@@ -11,6 +11,8 @@ import { AuthService } from '../service/AuthService';
 import { CloudGateway, MediaServiceUnavailableError } from '../service/CloudGateway';
 import { NearbyPerformanceTrace } from '../service/NearbyPerformanceTrace';
 import { MediaPriority, MediaRequestGuard, ImageRepository } from '../service/ImageRepository';
+import { HomeSnapshotReader } from '../service/HomeSnapshotReader';
+import { ImageDescriptors } from '../service/ImageDescriptors';
 
 export class CardRepository {
   async listRecommendationsMetadata(request: PublicCardsRequest,
@@ -18,6 +20,15 @@ export class CardRepository {
     if (!mayContinue()) throw new Error('推荐请求已失效。');
     const traceTaskId: number = NearbyPerformanceTrace.start('shike.nearby.cloud_list');
     try {
+      // Pack 4.1: guests' first page comes from the published 5-minute snapshot when it is available and fresh.
+      if (HomeSnapshotReader.matches(request) && !CloudGateway.hasSession()) {
+        CloudGateway.ensureReady();
+        const snapshot: NearbyCardsResponse | undefined = await HomeSnapshotReader.read();
+        if (snapshot !== undefined && mayContinue() && !CloudGateway.hasSession()) {
+          ImageDescriptors.accept(snapshot as Object);
+          return snapshot;
+        }
+      }
       // Reuse the generated method; scope=all selects the public feed server-side.
       const response: NearbyCardsResponse = await CloudGateway.callPublic<NearbyCardsResponse>('list-nearby-cards', request, options);
       if (!mayContinue()) throw new Error('推荐请求已失效。');

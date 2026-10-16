@@ -1,6 +1,6 @@
 # 云端搭建与部署
 
-本目录包含 4 个 AGC 云对象、2 个独立云函数（图片读取 / 定时维护）、36 个 Cloud DB 对象定义及环境变量配置说明。客户端第一次运行见 [项目 README](../README.md)，各文件职责见 [索引](../PROJECT_FILE_INDEX.md)。源码状态更新日期为 2026-10-15，官方操作资料核对日期仍为 2026-10-02。
+本目录包含 8 个 AGC 云对象、3 个独立云函数（图片读取 / 首页预取 / 定时维护）、36 个 Cloud DB 对象定义及环境变量配置说明。客户端第一次运行见 [项目 README](../README.md)，各文件职责见 [索引](../PROJECT_FILE_INDEX.md)。源码状态更新日期为 2026-10-16，官方操作资料核对日期仍为 2026-10-02。
 
 ## 0. 先确定团队、项目与分工
 
@@ -11,7 +11,7 @@
 | 成员工作 | 需要确认的访问范围 | 首次应看到的结果 |
 | --- | --- | --- |
 | 客户端联调 | 测试项目与 com.wyq.shike 应用、配置下载、调试证书/Profile；模拟器凭据可由管理员登记 | 应用可见、SDK 配置可下载、关联应用签名能完成 |
-| 云对象开发/部署 | 云开发对应角色及目标项目权限、函数配置/部署/日志权限 | CloudDev 指向正确项目，四个对象可见，承担部署的成员能执行相应操作 |
+| 云对象开发/部署 | 云开发对应角色及目标项目权限、函数配置/部署/日志权限 | CloudDev 指向正确项目，当前八个云对象可见，承担部署的成员能执行相应操作 |
 | 数据/存储维护 | Cloud DB/Storage 资源管理权限及管理员约定的操作范围 | 可核对 shike 存储区、对象定义、存储实例与规则 |
 | 团队/协议管理 | 管理用户及访问权限；云开发协议签署由持有者/法务负责 | 成员授权与服务协议已完成 |
 
@@ -35,7 +35,7 @@
 2. 在 DevEco 欢迎页 `Create Project`或 `File > New > Create Project`选择 **Application > [CloudDev]Empty Ability**。若需为现有源码补生成关联配置，使用单独的临时工程目录，不覆盖本项目。
 3. 在工程信息页填相同 Bundle name，点击 Next；登录自己的开发者账号，`Team`选约定团队。向导按包名查询应用，核对其 APP ID、所属项目和中国数据处理位置，再选择 Finish。查询不到时排查包名、团队、应用授权；游离应用需先由管理员关联项目。
 4. 团队尚未签署云开发协议时，请持有者/法务签署。等待初始化、OHPM/npm 同步；在 Notifications 检查云函数/DB/Storage 开通状态。失败从 CloudDev 控制台入口处理；欠费/服务协议问题交负责人。
-5. 用向导生成的 `CloudProgram/cloud-config.json`作为这套后端的关联配置。临时模板中的 Post、示例数据和 id-generator 不是食刻资源；保留本项目的 Application 源码、四个云对象及二十五个对象定义，不整体用模板替换。
+5. 用向导生成的 `CloudProgram/cloud-config.json`作为这套后端的关联配置。临时模板中的 Post、示例数据和 id-generator 不是食刻资源；保留本项目的 Application 源码、八个云对象及当前 36 个对象定义，不整体用模板替换。
 6. AGC 项目认证服务开启**邮箱认证**。从正确应用下载 agconnect-services.json，按根 README 放入 `Application/AppScope/resources/rawfile`；当前 AGC SDK 默认初始化读取应用级资源。客户端生成自己的关联应用调试签名。华为兼容登录、Push 和缓存按后文另配置。
 
 官方资料：[创建/关联 HarmonyOS 云开发工程](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/agc-harmonyos-create-appproject)、[已有端工程迁移](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/agc-harmonyos-project-migration)。客户端接手无需重新迁移；需要 IDE 内云端开发时，先满足第 0 节的端云工程识别条件，并复用团队已有 AGC 资源。
@@ -45,7 +45,7 @@
 1. 建立中国区 Cloud DB 存储区 **`shike`**，与 `clouddb/db-config.json` 及服务端默认值一致。
 2. DevEco 右击 **clouddb > Deploy Cloud DB**，等待 `Deploy successfully`；从 `Tools > CloudDev > Serverless > Cloud DB > Go to console`检查“对象类型”“存储区”“数据”页签，确认 `objecttype/`下 36 个对象与目标 shike 存储区。部署前核对项目，不覆盖结构不同的已有对象。
 3. 所有对象仅给 **Administrator：Read/Upsert/Delete**，World/Authenticated/Creator 不开放权限。
-4. 创建一个中国区 AGC Cloud Storage 实例，把完整实例名用于 `SHIKE_STORAGE_BUCKET`。不使用 OBS，不开放客户端或匿名直接读写/列举 `public/approved/` 图片目录。
+4. 创建一个中国区 AGC Cloud Storage 实例，把完整实例名用于 `SHIKE_STORAGE_BUCKET`。不使用 OBS，原图和私有对象保持受限。当前新增受控封面/首页快照读取及本人暂存区上传链路，须按下文限定路径配置规则，不能开放整个 bucket 或 public/approved 目录。
 5. 图片由 shike-media 使用平台项目凭证处理；设备只通过鉴权媒体接口访问。`PROJECT_CREDENTIAL` 由 AGC 注入，不自行创建或复制。
 
 | 对象组 | 对象与职责 |
@@ -100,7 +100,7 @@ String 字段有 200 字符上限，正文/长链接采用 Text。UserProfile.ni
 
 通知与桌面卡片同步由用户分别开启，Token 密文存储。每设备最多登记 16 张、每账号最多 100 张卡片。远程摘要重新从当前 APPROVED 卡片生成，客户端不提交任意商品文本或模块/Ability 名称。关闭/退出前须确认云端登记删除，Push 失败不回滚业务消息或站内事件。
 
-## 4. 编译并部署四个云对象
+## 4. 编译并部署八个云对象
 
 | 目录 | handler | 用途 |
 | --- | --- | --- |
@@ -108,6 +108,10 @@ String 字段有 200 字符上限，正文/长链接采用 Text。UserProfile.ni
 | cloudfunctions/shike-media | shikeMedia.ShikeMedia | 图片准备、Base64 上传/读取，内部委托提升/删除 |
 | cloudfunctions/shike-service | shikeService.ShikeService | 卡片、资料、好友/群聊、通知、绑定及清理 |
 | cloudfunctions/shike-location | shikeLocation.ShikeLocation | 保留的定位/旧附近接口 |
+| cloudfunctions/shike-content | shikeContent.ShikeContent | 内容、互动、榜单与轮盘领域 |
+| cloudfunctions/shike-social | shikeSocial.ShikeSocial | 好友、私信与群聊领域 |
+| cloudfunctions/shike-account | shikeAccount.ShikeAccount | 登录与账号领域 |
+| cloudfunctions/shike-governance | shikeGovernance.ShikeGovernance | 举报与治理领域 |
 
 每个对象选择 **Node.js 20.x**，保留 `function-config.json` 的 **functionType=1**、`HDA-SYSTEM / apigw-client` 平台鉴权。不要额外开放免认证公网 HTTP API。
 
@@ -124,7 +128,7 @@ String 字段有 200 字符上限，正文/长链接采用 Text。UserProfile.ni
 
 管理接口从 `SHIKE_ADMIN_UIDS` 读取受控管理员 canonical UID；迁移还需 `SHIKE_MIGRATION_ANCHOR_UID` 指定存在且活跃的共享管理员锚点。`SHIKE_INDEXED_QUERY_VERIFIED` 仅在历史迁移覆盖完成、实际索引查询验收后启用。秘密和项目身份仍通过团队安全渠道配置。
 
-本版标签为 **gpt最终版**。本次榜单、轮盘与精简后的功能运行验收由负责人完成；本次 Git 发布未执行构建、运行验证或 AGC 部署。源码已包含 30 天软删除恢复、持久生命周期任务和独立维护 Worker，实际开启仍受服务端开关与平台定时配置控制。服务卡片继续同步公开摘要与图片身份，应用前台准备封面缓存。
+本版标签为 **cc版**。本次榜单、轮盘与精简后的功能运行验收由负责人完成；本次 Git 发布未执行构建、运行验证或 AGC 部署。源码已包含 30 天软删除恢复、持久生命周期任务和独立维护 Worker，实际开启仍受服务端开关与平台定时配置控制。服务卡片继续同步公开摘要与图片身份，应用前台准备封面缓存。
 
 地图／搜索门槛继续保留：`SHIKE_STAGE3_SEARCH_VERIFIED`、`SHIKE_STAGE3_MAP_VERIFIED` 分别控制开放，且仍须历史覆盖与索引条件就绪。地图首发要求 `SHIKE_STAGE3_MAP_COORDINATE_SYSTEM=GCJ02`；可靠可见商家混入 WGS84 时不开放地图。好友发布、选点坐标与官方 POI 仍按 `SHIKE_FRIENDS_PUBLISH_VERIFIED`、`SHIKE_MAP_PICKER_COORDINATE_SYSTEM`、`SHIKE_HUAWEI_POI_VERIFIED`、`SHIKE_HUAWEI_POI_COORDINATE_SYSTEM` 核对；官方查询密钥 `SHIKE_HUAWEI_SITE_API_KEY` 使用秘密变量。部署成员逐项确认环境资格，不能仅凭这次发布替生产环境开放门槛。
 
@@ -142,6 +146,18 @@ String 字段有 200 字符上限，正文/长链接采用 Text。UserProfile.ni
 </details>
 
 部署后 `Cannot find module './runtime'` 优先检查文件同级、大小写、包层级及生效版本；`Cannot find package` 检查生产依赖。记录云版本、函数名和首条脱敏错误，不回传凭证或 Base64 图片。
+
+### 分域路由、首页快照与发布别名
+
+`CloudRoutes.ets` 当前启用分域：内容、社交、账号、治理分别调用 `shike-content`、`shike-social`、`shike-account`、`shike-governance`，保留 `shike-service` 兼容路径。四个领域函数复用原 service runtime，维护源码仍在 shike-service；函数内 `service/` 与 `shared/` 都是生成副本。部署成员在 `CloudProgram/` 使用 `npm run package:cloud:all` 准备八个云对象的 ZIP，或按函数名单独打包；图片、预取、维护函数另用统一 `package-functions.mjs` 准备。DevEco 右键部署前重新执行 `prepare:deveco` / `check:deveco`。不要仅部署四个新入口而漏掉依赖、相应数据库配置和领域所需的秘密变量。
+
+`CloudFunctionVersion.ets` 按构建模式选择版本：debug 使用 `$latest`，release 使用 `prod`。发布构建前，负责人必须为客户端实际调用的每个函数创建并核对 `prod` 别名及目标版本；本次 Git 推送不创建别名。回退别名后仍须验证端云接口兼容。
+
+`HomeSnapshotReader.ets` 使用预取结果或 `public/snapshot/home-v1.json`，失败回常规列表；`shike-prefetch` 是保留平台鉴权的 type 0 入口。maintenance 的 `timer-contract.json` 新增 `action=home-snapshot` 独立定时约定，建议每 5 分钟生成；该 JSON 不会自动创建定时器。端侧 `HOME_SNAPSHOT_BUCKET` 要与目标环境实例一致。
+
+当前 `ImageReadConfig.ets` 开启公开封面直读、首页快照与客户端直传。配置 Storage 时只开放确需公开的生成封面对象和精确首页快照路径；原图、私有文件及目录列举保持受限。直传只允许已认证用户向本人 `private/pending/{uid}/` 路径按业务规则上传，并由 media 验证/提升，不授予跨账号或匿名写权限。规则、封面回填、快照生成和真实读取/回退均需负责人先在测试环境验证；未就绪时不能据此承诺首页或图片性能。
+
+轮盘桌面卡片位于 `randomfoodcard/`，由 `RandomFoodWidgetStore.ets` 管理候选与本机封面，并在 `random_food_form_config.json` 注册。个人四个子页已拆分为独立文件；聊天前台轮询使用 `PollBackoff.ets`。这些入口均需用户验证生命周期与换号行为。
 
 ### 图片读取与统一打包
 

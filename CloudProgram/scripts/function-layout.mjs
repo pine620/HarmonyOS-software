@@ -7,8 +7,18 @@ export const functionDefinitions = {
   'shike-location': { entry: 'shikeLocation', className: 'ShikeLocation' },
   'shike-media': { entry: 'shikeMedia', className: 'ShikeMedia', extra: ['cover-worker.js'] },
   'shike-image': { entry: 'shikeImage' },
-  'shike-maintenance': { entry: 'shikeMaintenance', extraMedia: true }
+  'shike-maintenance': { entry: 'shikeMaintenance', extraMedia: true },
+  // Pack 4.4: domain split of shike-service. Each runs a derived copy of the shike-service runtime under ./service.
+  'shike-content': { entry: 'shikeContent', className: 'ShikeContent' },
+  'shike-social': { entry: 'shikeSocial', className: 'ShikeSocial' },
+  'shike-account': { entry: 'shikeAccount', className: 'ShikeAccount' },
+  'shike-governance': { entry: 'shikeGovernance', className: 'ShikeGovernance' },
+  // Pack 4.1: Cloud Foundation Kit prefetch target; returns the stored home snapshot only.
+  'shike-prefetch': { entry: 'shikePrefetch' }
 };
+
+// Functions that embed the shike-service runtime as a derived ./service subtree.
+const serviceConsumers = new Set(['shike-maintenance', 'shike-content', 'shike-social', 'shike-account', 'shike-governance']);
 
 // Resolve function-owned deployment paths against the single maintained source.
 // Never use an older generated copy as input to a new deployment.
@@ -17,7 +27,7 @@ export function localDependency(functions, source, request) {
   let base = resolve(dirname(source), request);
   if (folder !== 'shared' && request.startsWith('./shared/')) {
     base = resolve(functions, 'shared', request.slice('./shared/'.length));
-  } else if (folder === 'shike-maintenance' && request.startsWith('./service/')) {
+  } else if (serviceConsumers.has(folder) && request.startsWith('./service/')) {
     base = resolve(functions, 'shike-service', request.slice('./service/'.length));
   } else if (folder === 'shike-maintenance' && request.startsWith('./media/')) {
     base = resolve(functions, 'shike-media', request.slice('./media/'.length));
@@ -37,6 +47,6 @@ export function moduleDestination(functions, name, source) {
 }
 
 export function generatedDirectories(name) {
-  return ['shared', ...(name === 'shike-maintenance' ? ['service'] : []),
+  return ['shared', ...(serviceConsumers.has(name) ? ['service'] : []),
     ...(name === 'shike-maintenance' ? ['media'] : [])];
 }

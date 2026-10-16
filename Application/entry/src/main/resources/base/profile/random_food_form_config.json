@@ -1,0 +1,17 @@
+{
+  "forms": [
+    {
+      "name": "RandomFoodCard",
+      "displayName": "$string:random_food_card_display_name",
+      "description": "$string:random_food_card_desc",
+      "src": "./ets/randomfoodcard/pages/RandomFoodCard.ets",
+      "uiSyntax": "arkts",
+      "colorMode": "auto",
+      "isDynamic": true,
+      "isDefault": true,
+      "updateEnabled": false,
+      "defaultDimension": "2*2",
+      "supportDimensions": ["2*2"]
+    }
+  ]
+}

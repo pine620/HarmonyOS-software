@@ -491,6 +491,13 @@ export class AuthService {
         await SessionRestoreStore.save(context, 'EMAIL');
         return profile;
       }
+      if (hint === 'EMAIL') {
+        // Pack 3.1: the new AGC Auth SDK cannot see sessions saved by the old SDK. Ask once, then forget the hint.
+        AuthService.clearLocalSession();
+        AppStorage.setOrCreate('sessionRestoreMessage', '登录服务已升级，请用邮箱验证码重新登录一次。');
+        await SessionRestoreStore.save(context, 'SIGNED_OUT');
+        return undefined;
+      }
       if (allowHuaweiRestore && hint === 'HUAWEI') {
         const profile: UserProfile = await AuthService.login(context, false);
         const status: PasswordAccountStatus = await AuthService.passwordAccountStatus();

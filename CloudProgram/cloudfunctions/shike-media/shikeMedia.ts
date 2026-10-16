@@ -15,11 +15,12 @@ type RuntimeModule = {
   execute(input: object, env?: NodeJS.ProcessEnv): Promise<object>;
   prepareCardPhoto(input: object, env?: NodeJS.ProcessEnv): Promise<object>;
   uploadCardPhoto(input: object, env?: NodeJS.ProcessEnv): Promise<object>;
+  confirmCardPhotoUpload(input: object, env?: NodeJS.ProcessEnv): Promise<object>;
   getPublicMedia(input: object, env?: NodeJS.ProcessEnv): Promise<object>;
   safeLogError(error: unknown): string;
 };
 
-type MediaOperation = 'execute' | 'prepareCardPhoto' | 'uploadCardPhoto' | 'getPublicMedia';
+type MediaOperation = 'execute' | 'prepareCardPhoto' | 'uploadCardPhoto' | 'confirmCardPhotoUpload' | 'getPublicMedia';
 
 const runtime = require('./runtime') as RuntimeModule;
 interface ReadErrorsModule {
@@ -61,6 +62,10 @@ export class ShikeMedia {
 
   async uploadCardPhoto(input: object): Promise<CloudResponse> {
     return executeMediaOperation('uploadCardPhoto', input);
+  }
+
+  async confirmCardPhotoUpload(input: object): Promise<CloudResponse> {
+    return executeMediaOperation('confirmCardPhotoUpload', input);
   }
 
   async getPublicMedia(input: object): Promise<CloudResponse> {

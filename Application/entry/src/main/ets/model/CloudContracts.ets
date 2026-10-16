@@ -415,6 +415,12 @@ export interface PrepareCardPhotoResponse {
 }
 
 /** JPEG bytes are sent only to the authenticated business cloud object. */
+/** Pack 3.3: confirms a photo the client already uploaded to private/pending/. */
+export interface ConfirmPhotoUploadRequest {
+  mediaId: string;
+  sha256: string;
+}
+
 export interface UploadPreparedPhotoRequest {
   mediaId: string;
   dataBase64: string;

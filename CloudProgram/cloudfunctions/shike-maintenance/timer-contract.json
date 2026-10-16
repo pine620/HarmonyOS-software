@@ -44,6 +44,17 @@
     "automaticTimerCreated": false,
     "lifecycleDeletionRequired": false
   },
+  "homeSnapshot": {
+    "separateTimerRequired": true,
+    "recommendedIntervalMinutes": 5,
+    "handlerPayload": {
+      "workerToken": "COPY_SECRET_FROM_DEPLOYED_TIMER_CONFIGURATION",
+      "action": "home-snapshot"
+    },
+    "storageKey": "public/snapshot/home-v1.json",
+    "requiredEnvironment": ["PROJECT_CREDENTIAL", "SHIKE_STORAGE_BUCKET"],
+    "storageRule": "anonymous read of exactly public/snapshot/home-v1.json"
+  },
   "mediaCoverBackfill": {
     "separateTimerRequired": true,
     "recommendedIntervalMinutes": 1,

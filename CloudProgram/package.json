@@ -16,6 +16,7 @@
     "test:admin-notification-removal": "node --test tests/admin-notification-removal.test.cjs",
     "test:author-direct-edit": "node --test tests/author-direct-edit.test.cjs",
     "package:image": "node scripts/package-functions.mjs shike-image",
+    "package:prefetch": "node scripts/package-functions.mjs shike-prefetch",
     "test:home-prefetch": "node --test tests/home-detail-prefetch.test.cjs",
     "test:image": "node --test tests/image-read-contracts.test.cjs tests/image-handler-contracts.test.cjs",
     "check:artifact": "node scripts/check-artifact.mjs",

@@ -14,6 +14,41 @@ export class AppPageSurface {
   private static entrySurfaceVisible: boolean = false;
   // True while the visible home tab draws its own image under the status bar (profile cover).
   private static immersiveTop: boolean = false;
+  // A destination (card detail) may extend its hero image under the status bar: Index paints the top slice
+  // of the same image (same width, height = top inset + edgeImageHeight, Cover), the page paints the rest.
+  static edgeImageUrl: string = '';
+  static edgeImageHeight: number = 0;
+  private static edgeImageOwner: number = 0;
+  private static nextEdgeOwner: number = 0;
+
+  static newEdgeImageOwner(): number {
+    AppPageSurface.nextEdgeOwner++;
+    return AppPageSurface.nextEdgeOwner;
+  }
+
+  static setEdgeImage(owner: number, url: string, heightVp: number): void {
+    const immersive: boolean = url.length > 0;
+    if (AppPageSurface.edgeImageOwner === owner && AppPageSurface.edgeImageUrl === url &&
+      AppPageSurface.edgeImageHeight === heightVp && AppPageSurface.immersiveTop === immersive) return;
+    AppPageSurface.edgeImageOwner = immersive ? owner : 0;
+    AppPageSurface.edgeImageUrl = url;
+    AppPageSurface.edgeImageHeight = immersive ? heightVp : 0;
+    AppPageSurface.immersiveTop = immersive;
+    AppPageSurface.changed();
+  }
+
+  // Only the page that set the image may clear it; a newer page's image is left alone.
+  static clearEdgeImage(owner: number): void {
+    if (AppPageSurface.edgeImageOwner !== owner || AppPageSurface.edgeImageUrl.length === 0) return;
+    AppPageSurface.setEdgeImage(owner, '', 0);
+  }
+
+  private static changed(): void {
+    const revision: number = AppStorage.get<number>('pageSurfaceRevision') || 0;
+    AppStorage.setOrCreate('pageSurfaceRevision', revision + 1);
+    const onChange: (() => void) | undefined = AppPageSurface.onChange;
+    if (onChange !== undefined) onChange();
+  }
 
   static windowHeader(): Resource {
     return AppPageSurface.entrySurfaceVisible ? $r('app.color.canvas') : AppPageSurface.header;
@@ -40,6 +75,9 @@ export class AppPageSurface {
     AppPageSurface.header = header;
     AppPageSurface.palette = palette;
     AppPageSurface.immersiveTop = immersiveTop;
+    AppPageSurface.edgeImageUrl = '';
+    AppPageSurface.edgeImageHeight = 0;
+    AppPageSurface.edgeImageOwner = 0;
     const revision: number = AppStorage.get<number>('pageSurfaceRevision') || 0;
     AppStorage.setOrCreate('pageSurfaceRevision', revision + 1);
     const onChange: (() => void) | undefined = AppPageSurface.onChange;

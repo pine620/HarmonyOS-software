@@ -22,6 +22,9 @@ export class ShikeMedia implements CloudObjectLikely {
     public async uploadCardPhoto(input: object): Promise<CloudResponse> {
         return Promise.reject(new Error('Method not implemented.'));
     }
+    public async confirmCardPhotoUpload(input: object): Promise<CloudResponse> {
+        return Promise.reject(new Error('Method not implemented.'));
+    }
     public async getPublicMedia(input: object): Promise<CloudResponse> {
         return Promise.reject(new Error('Method not implemented.'));
     }

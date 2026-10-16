@@ -8,14 +8,16 @@ import { ImageRepository } from './ImageRepository';
 const MAX_COVER_EDGE: number = 480;
 const MAX_COVER_BYTES: number = 512 * 1024;
 const COVER_FILE_PATTERN: RegExp = /^cover-[0-9a-f-]{36}\.jpg$/;
+// Each surface keeps its own folder so pruning one never deletes another's covers.
+export const SERVICE_CARD_COVER_FOLDER: string = 'shike-service-card-covers';
 
 export class ServiceCardCoverCache {
-  private static directory(context: common.Context): string {
-    return `${context.filesDir}/shike-service-card-covers`;
+  private static directory(context: common.Context, folder: string): string {
+    return `${context.filesDir}/${folder}`;
   }
 
-  static isUsable(context: common.Context, path: string): boolean {
-    const prefix: string = `${ServiceCardCoverCache.directory(context)}/`;
+  static isUsable(context: common.Context, path: string, folder: string = SERVICE_CARD_COVER_FOLDER): boolean {
+    const prefix: string = `${ServiceCardCoverCache.directory(context, folder)}/`;
     if (!path.startsWith(prefix) || !COVER_FILE_PATTERN.test(path.slice(prefix.length))) return false;
     try {
       const stat: fileIo.Stat = fileIo.statSync(path);
@@ -27,7 +29,7 @@ export class ServiceCardCoverCache {
 
   // Foreground only: the form lifecycle reads this prepared file without network requests.
   static async prepare(context: common.Context, card: FoodCard,
-    mayContinue: () => boolean): Promise<string> {
+    mayContinue: () => boolean, folder: string = SERVICE_CARD_COVER_FOLDER): Promise<string> {
     if (!card.photoPath.startsWith('public/approved/') || card.photoBucket.trim().length === 0) return '';
     const url: string = await ImageRepository.getDownloadUrl(context, card.photoBucket, card.photoPath,
       'low', async (): Promise<boolean> => mayContinue(), card.photos?.[0], true);
@@ -53,7 +55,7 @@ export class ServiceCardCoverCache {
       const packing: image.PackingOption = { format: 'image/jpeg', quality: 80 };
       const bytes: ArrayBuffer = await packer.packing(pixels, packing);
       if (!mayContinue() || bytes.byteLength <= 3 || bytes.byteLength > MAX_COVER_BYTES) return '';
-      const directory: string = ServiceCardCoverCache.directory(context);
+      const directory: string = ServiceCardCoverCache.directory(context, folder);
       if (!fileIo.accessSync(directory)) fileIo.mkdirSync(directory);
       path = `${directory}/cover-${util.generateRandomUUID()}.jpg`;
       file = fileIo.openSync(path, fileIo.OpenMode.CREATE | fileIo.OpenMode.READ_WRITE);
@@ -66,7 +68,7 @@ export class ServiceCardCoverCache {
       if (file !== undefined) {
         try { fileIo.closeSync(file); } catch (_error) { }
       }
-      if (!completed && path.length > 0) ServiceCardCoverCache.remove(context, path);
+      if (!completed && path.length > 0) ServiceCardCoverCache.remove(context, path, folder);
       if (packer !== undefined) {
         try { await packer.release(); } catch (_error) { }
       }
@@ -77,18 +79,22 @@ export class ServiceCardCoverCache {
     }
   }
 
-  static remove(context: common.Context, path: string): void {
-    const prefix: string = `${ServiceCardCoverCache.directory(context)}/`;
+  static remove(context: common.Context, path: string, folder: string = SERVICE_CARD_COVER_FOLDER): void {
+    const prefix: string = `${ServiceCardCoverCache.directory(context, folder)}/`;
     if (!path.startsWith(prefix) || !COVER_FILE_PATTERN.test(path.slice(prefix.length))) return;
     try { fileIo.unlinkSync(path); } catch (_error) { }
   }
 
   static prune(context: common.Context, keepPath: string): void {
-    const directory: string = ServiceCardCoverCache.directory(context);
+    ServiceCardCoverCache.pruneExcept(context, [keepPath], SERVICE_CARD_COVER_FOLDER);
+  }
+
+  static pruneExcept(context: common.Context, keepPaths: Array<string>, folder: string): void {
+    const directory: string = ServiceCardCoverCache.directory(context, folder);
     try {
       for (const name of fileIo.listFileSync(directory)) {
         const path: string = `${directory}/${name}`;
-        if (COVER_FILE_PATTERN.test(name) && path !== keepPath) ServiceCardCoverCache.remove(context, path);
+        if (COVER_FILE_PATTERN.test(name) && !keepPaths.includes(path)) ServiceCardCoverCache.remove(context, path, folder);
       }
     } catch (_error) { }
   }

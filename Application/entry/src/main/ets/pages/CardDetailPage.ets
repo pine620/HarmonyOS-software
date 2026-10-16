@@ -2,7 +2,8 @@ import { PagePaletteName, pageColor } from '../common/PagePaletteUi';
 import { NoteActionStyle, WarmNoteBackdrop, notePanelTransition } from '../common/WarmNoteUi';
 import { RandomFoodMotionObserver } from '../common/RandomFoodUi';
 import { ReportRoute } from '../model/ContentStatusModels';
-import { AppDestinationStyle } from '../common/AppPageUi';
+import { AppDestinationStyle, AppPageSurface } from '../common/AppPageUi';
+import { StateView } from '../common/StateViewUi';
 import { SecondaryActionStyle } from '../common/Stage47Ui';
 import { pasteboard } from '@kit.BasicServicesKit';
 import { MerchantRepository } from '../repository/MerchantRepository';
@@ -28,7 +29,7 @@ import { CloudGateway, MediaServiceUnavailableError } from '../service/CloudGate
 import { MediaPriority, ImageRepository } from '../service/ImageRepository';
 import { NearbyPerformanceTrace, PreloadMetricState } from '../service/NearbyPerformanceTrace';
 import { cardDeepLink } from '../service/CardDeepLink';
-import { tasteScoreText as formatTasteScore } from '../model/TasteScore';
+import { tasteScoreLabel, tasteScoreText as formatTasteScore } from '../model/TasteScore';
 import { ErrorDetail, errorText } from '../common/ErrorKit';
 import { BreakpointSystem } from '../common/BreakpointSystem';
 import { CreateCardPage } from './CreateCardPage';
@@ -39,6 +40,8 @@ import { InteractionView } from '../model/CardInteractionModels';
 import { CardInteractionButton } from '../components/CardInteractionButton';
 
 const DETAIL_MEDIA_MAX_HEIGHT: number = 420;
+
+interface DetailInfoItem { kind: string; label: string; value: string; }
 
 function emptyCard(): FoodCard {
   return {
@@ -74,7 +77,10 @@ export struct CardDetailPage {
   private detailVisible: boolean = false;
   private onAppActiveChanged(): void { if (!this.appActive) { this.detailGeneration++; this.clearDetailView(); } else if (this.detailVisible) void this.loadDetail(); }
 
-  @State detailWidthVp: number = 0;
+  @State @Watch('syncEdgeImage') detailWidthVp: number = 0;
+  @State @Watch('syncEdgeImage') heroAtTop: boolean = true;
+  @StorageProp('appSystemTopPx') systemTopPx: number = 0;
+  private edgeOwner: number = AppPageSurface.newEdgeImageOwner();
   @State detailHeightVp: number = 0;
   @State collectionReady: boolean = false;
   @State collectionKnown: boolean = false;
@@ -84,23 +90,23 @@ export struct CardDetailPage {
   private restoreTimer: number = -1;
   @StorageLink('accountContentRevision') @Watch('onSessionChanged') accountContentRevision: number = 0;
   @State navigationAddress: string = '';
-  @State detailReady: boolean = false;
+  @State @Watch('syncEdgeImage') detailReady: boolean = false;
   @State dislikeCount: number = 0;
   @State myReaction: CardReactionType | '' = '';
-  @State editingVisible: boolean = false;
+  @State @Watch('syncEdgeImage') editingVisible: boolean = false;
   @Prop card: FoodCard = emptyCard();
   @Prop @Watch('onSessionChanged') loggedIn: boolean = false;
   onRequireLogin: (message: string) => void = (_message: string): void => {};
   onOpenAuthor: (uid: string) => void = (_uid: string): void => {};
   onShareToFriend: (card: FoodCard) => void = (_card: FoodCard): void => {};
-  @State detailPhotos: Array<CardPhoto> = [];
+  @State @Watch('syncEdgeImage') detailPhotos: Array<CardPhoto> = [];
   @State entryCoverUrl: string = '';
-  @State coverUrls: Array<string> = [];
-  @State decodedPhotoUrls: Array<string> = [];
+  @State @Watch('syncEdgeImage') coverUrls: Array<string> = [];
+  @State @Watch('syncEdgeImage') decodedPhotoUrls: Array<string> = [];
   @State photoFailures: Array<number> = [];
   @State mediaServiceUnavailable: boolean = false;
-  @State photoIndex: number = 0;
-  @State photoPreviewVisible: boolean = false;
+  @State @Watch('syncEdgeImage') photoIndex: number = 0;
+  @State @Watch('syncEdgeImage') photoPreviewVisible: boolean = false;
   @State previewPhotoIndex: number = 0;
   @State detailAuthorNickname: string = '';
   @State detailAuthorAvatarUrl: string = '';
@@ -148,6 +154,7 @@ export struct CardDetailPage {
   }
 
   aboutToDisappear(): void {
+    AppPageSurface.clearEdgeImage(this.edgeOwner);
     this.motionObserver.stop();
     if (this.restoreTimer !== -1) { clearTimeout(this.restoreTimer); this.restoreTimer = -1; }
     this.clearDetailView();
@@ -164,7 +171,7 @@ export struct CardDetailPage {
   private requireAccount(): boolean {
     if (this.loggedIn && AuthService.profile() !== undefined && CloudGateway.hasSession()) return true;
     this.closeActionMenu();
-    this.onRequireLogin('登录后可赞踩、收藏和与好友分享。');
+    this.onRequireLogin('登录后可点赞、收藏和与好友分享。');
     return false;
   }
 
@@ -690,77 +697,92 @@ export struct CardDetailPage {
 
   @Builder
   private authorHeader() {
-    Row({ space: 12 }) {
+    Row({ space: 10 }) {
       Button() {
         if (this.authorAvatarUrl().length > 0) {
-          Image(this.authorAvatarUrl()).width(42).height(42).borderRadius(21).objectFit(ImageFit.Cover).accessibilityLevel('no');
-        } else { Image($r('app.media.app_icon')).width(42).height(42).borderRadius(21).accessibilityLevel('no'); }
-      }.type(ButtonType.Normal).width(48).height(48).padding(3).backgroundColor(Color.Transparent).borderRadius(24)
+          Image(this.authorAvatarUrl()).width(36).height(36).borderRadius(18).objectFit(ImageFit.Cover).accessibilityLevel('no');
+        } else { Image($r('app.media.app_icon')).width(36).height(36).borderRadius(18).accessibilityLevel('no'); }
+      }.type(ButtonType.Normal).width(44).height(44).padding(4).backgroundColor(Color.Transparent).borderRadius(22)
         .enabled(this.card.authorUid !== undefined && this.card.authorUid.length > 0)
         .accessibilityText(`查看${this.authorName()}的主页`)
         .onClick((): void => { if (this.card.authorUid !== undefined) this.onOpenAuthor(this.card.authorUid); });
-      Column({ space: 4 }) {
-        Text(this.authorName()).fontSize(16).fontWeight(FontWeight.Medium)
+      Column({ space: 2 }) {
+        Text(this.authorName()).fontSize(15).fontWeight(FontWeight.Bold)
           .fontColor(pageColor(this.palette, 'ink')).width('100%').maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis });
-        Row({ space: 6 }) {
-          Text('实拍分享者').fontSize(11).fontColor($r('app.color.leaf'))
-            .padding({ left: 7, right: 7, top: 3, bottom: 3 })
-            .backgroundColor(pageColor(this.palette, 'soft')).borderRadius(8);
-          Text(`${this.card.merchantNameSnapshot || (this.card.consumptionMode === 'DELIVERY' || this.card.consumptionMode === 'DINE_IN' ? '店铺未关联' : this.card.district || '历史发布位置')} · ${this.createdLabel(this.card.publishedAt === undefined ? this.card.createdAt : this.card.publishedAt)}`).fontSize(12)
-            .fontColor(pageColor(this.palette, 'muted')).maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis });
-        }
+        Text(`${this.authorPlace()} · ${this.createdLabel(this.card.publishedAt === undefined ? this.card.createdAt : this.card.publishedAt)}`)
+          .fontSize(12).fontColor(pageColor(this.palette, 'muted')).width('100%').maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis });
       }.layoutWeight(1).alignItems(HorizontalAlign.Start);
-      Button() {
-        Image($r('app.media.ic_more')).width(24).height(24).objectFit(ImageFit.Contain)
-          .accessibilityLevel('no');
+      Text('实拍分享').fontSize(11).fontWeight(FontWeight.Bold).fontColor(pageColor(this.palette, 'action'))
+        .padding({ left: 9, right: 9, top: 4, bottom: 4 }).borderRadius(12)
+        .border({ width: 1.2, color: pageColor(this.palette, 'action'), style: BorderStyle.Dashed });
+      if (this.isWideDetail()) {
+        Button() {
+          Image($r('app.media.ic_more')).width(24).height(24).objectFit(ImageFit.Contain)
+            .fillColor(pageColor(this.palette, 'ink')).accessibilityLevel('no');
+        }
+        .width(48).height(48).padding(12).backgroundColor(pageColor(this.palette, 'surface')).borderRadius(24)
+        .accessibilityText('更多帖子操作')
+        .onClick(() => {
+          this.actionMenuVisible = !this.actionMenuVisible;
+        });
       }
-      .width(48).height(48).padding(12).backgroundColor(pageColor(this.palette, 'surface')).borderRadius(24)
-      .accessibilityText('更多帖子操作')
-      .onClick(() => {
-        this.actionMenuVisible = !this.actionMenuVisible;
-      });
-    }.width('100%').padding({ left: 2, right: 2, top: 4, bottom: 4 });
+    }.width('100%');
+  }
+
+  private authorPlace(): string {
+    return this.card.merchantNameSnapshot || (this.card.consumptionMode === 'DELIVERY' || this.card.consumptionMode === 'DINE_IN'
+      ? '店铺未关联' : this.card.district || '历史发布位置');
+  }
+
+  @Builder
+  private menuRow(label: string, icon: Resource, danger: boolean, onTap: () => void) {
+    Button({ type: ButtonType.Normal, stateEffect: true }) {
+      Row({ space: 12 }) {
+        Stack() {
+          SymbolGlyph(icon).fontSize(18)
+            .fontColor([danger ? $r('app.color.danger') : pageColor(this.palette, 'action')]).accessibilityLevel('no');
+        }
+        .width(32).height(32).borderRadius(10)
+        .backgroundColor(danger ? $r('app.color.danger_soft') : pageColor(this.palette, 'soft'));
+        Text(label).fontSize(15).fontColor(danger ? $r('app.color.danger') : pageColor(this.palette, 'ink')).layoutWeight(1);
+      }.width('100%');
+    }
+    .width('100%').height(52).padding({ left: 4, right: 4 }).backgroundColor(Color.Transparent).borderRadius(12)
+    .accessibilityText(label).onClick(onTap);
   }
 
   @Builder
   private actionMenu() {
-    Column({ space: 10 }) {
-      Row() {
-        Text('更多操作').fontSize(18).fontWeight(FontWeight.Bold).fontColor(pageColor(this.palette, 'ink'));
-        Blank();
-        Button('关闭').height(44).fontSize(13).backgroundColor(pageColor(this.palette, 'surface'))
-          .fontColor(pageColor(this.palette, 'muted')).border({ width: 1, color: pageColor(this.palette, 'line') })
-          .onClick(() => this.closeActionMenu());
-      }.width('100%');
-      Button('发送给食刻好友').width('100%').height(48).backgroundColor(pageColor(this.palette, 'soft'))
-        .fontColor(pageColor(this.palette, 'action')).onClick((): void => {
-          this.shareToFriend();
-        });
-      Button(this.knockShareEnabled ? '结束碰一碰分享' : '碰一碰分享').width('100%').height(48)
-        .backgroundColor(pageColor(this.palette, 'gold')).fontColor(pageColor(this.palette, 'on_gold'))
-        .enabled(!this.knockShareBusy).accessibilityText(this.knockShareEnabled ? '结束碰一碰分享' : '开启碰一碰分享')
-        .onClick((): void => {
-          this.toggleKnockShare();
-        });
-      if (this.viewerIsOwner && this.loggedIn) { Button('编辑推荐').width('100%').onClick((): void => { this.closeActionMenu(); this.editingVisible = true; }).attributeModifier(new NoteActionStyle(false, this.palette)); }
-      if (this.card.consumptionMode === 'DINE_IN' && this.card.merchantId !== undefined && this.card.merchantId.length > 0) { Button('去这里 · 商家导航').height(48).width('100%').onClick((): void => { void this.navigateMerchant(); this.closeActionMenu(); }).attributeModifier(new SecondaryActionStyle(this.palette)); }
-      if (isSafeHttpsSourceLink(this.card.sourceLink)) {
-        Button('打开来源页面').width('100%').height(48).backgroundColor(pageColor(this.palette, 'canvas'))
-          .fontColor(pageColor(this.palette, 'ink')).onClick(() => this.openSource());
+    Column({ space: 2 }) {
+      Column().width(36).height(4).borderRadius(2).backgroundColor(pageColor(this.palette, 'line')).margin({ bottom: 8 });
+      Text('更多操作').fontSize(16).fontWeight(FontWeight.Bold).fontColor(pageColor(this.palette, 'ink'))
+        .width('100%').margin({ bottom: 4 });
+      this.menuRow('发送给食刻好友', $r('sys.symbol.paperplane'), false, (): void => { this.shareToFriend(); });
+      this.menuRow(this.knockShareEnabled ? '结束碰一碰分享' : '碰一碰分享', $r('sys.symbol.phone'), false,
+        (): void => { if (!this.knockShareBusy) this.toggleKnockShare(); });
+      if (this.viewerIsOwner && this.loggedIn) {
+        this.menuRow('编辑推荐', $r('sys.symbol.square_and_pencil'), false,
+          (): void => { this.closeActionMenu(); this.editingVisible = true; });
       }
-      Button('举报卡片').width('100%').height(48)
-        .backgroundColor($r('app.color.danger_soft')).fontColor($r('app.color.danger'))
-        .onClick((): void => this.openReport());
-      Button('取消').width('100%').height(48).backgroundColor(pageColor(this.palette, 'surface'))
-        .fontColor(pageColor(this.palette, 'ink')).border({ width: 1, color: pageColor(this.palette, 'line') })
+      if (this.card.consumptionMode === 'DINE_IN' && this.card.merchantId !== undefined && this.card.merchantId.length > 0) {
+        this.menuRow('去这里 · 商家导航', $r('sys.symbol.location_north_up_right'), false,
+          (): void => { void this.navigateMerchant(); this.closeActionMenu(); });
+      }
+      if (isSafeHttpsSourceLink(this.card.sourceLink)) {
+        this.menuRow('打开来源页面', $r('sys.symbol.link'), false, (): void => { void this.openSource(); });
+      }
+      Column().width('100%').height(1).margin({ top: 4, bottom: 4 })
+        .border({ width: { top: 1.2 }, color: pageColor(this.palette, 'line'), style: BorderStyle.Dashed });
+      this.menuRow('举报卡片', $r('sys.symbol.flag'), true, (): void => this.openReport());
+      Button('取消').width('100%').height(46).margin({ top: 8 }).fontSize(15)
+        .backgroundColor(pageColor(this.palette, 'canvas')).fontColor(pageColor(this.palette, 'ink'))
         .onClick(() => this.closeActionMenu());
     }
-    .width('100%').constraintSize({ maxWidth: 560 }).padding({ left: 20, right: 20, top: 18, bottom: 20 })
+    .width('100%').constraintSize({ maxWidth: 560 }).padding({ left: 16, right: 16, top: 10, bottom: 20 })
     .transition(notePanelTransition(this.reducedMotion))
-    .backgroundColor(pageColor(this.palette, 'surface')).borderRadius(24)
-    .border({ width: 1, color: pageColor(this.palette, 'line') });
+    .backgroundColor(pageColor(this.palette, 'surface')).borderRadius({ topLeft: 24, topRight: 24 });
   }
 
   @Builder
@@ -922,21 +944,158 @@ export struct CardDetailPage {
     .accessibilityText(`实拍图预览，共 ${this.detailPhotos.length} 张`);
   }
 
-  @Builder
-  private actionButton(icon: Resource, label: string, selected: boolean, ready: boolean, action: () => void): void {
-    Button() {
-      Column({ space: 6 }) {
-        Image(icon).width(25).height(25).objectFit(ImageFit.Contain).accessibilityLevel('no');
-        Text(label).fontSize(13).fontWeight(selected ? FontWeight.Bold : FontWeight.Medium)
-          .fontColor(selected ? pageColor(this.palette, 'action') : pageColor(this.palette, 'ink')).maxLines(2)
-          .textAlign(TextAlign.Center).width('100%');
-      }.width('100%').padding({ top: 10, bottom: 10, left: 2, right: 2 });
-    }.type(ButtonType.Normal).layoutWeight(1).constraintSize({ minHeight: 68 }).padding(0).borderRadius(16)
-      .backgroundColor(selected ? pageColor(this.palette, 'soft') : Color.Transparent)
-      .animation({ duration: this.reducedMotion ? 0 : 180, curve: Curve.EaseOut })
-      .enabled(ready).focusable(true).accessibilitySelected(selected)
-      .accessibilityText(label + (selected ? '，已选中，再点可取消' : '')).onClick(action);
+  // ---- Pack 2: immersive hero (phone width) ----
+
+  private topInset(): number {
+    return this.getUIContext().px2vp(this.systemTopPx);
   }
+
+  private heroHeight(): number {
+    const width: number = this.detailWidthVp > 0 ? this.detailWidthVp : 360;
+    const limit: number = this.detailHeightVp > 0 ? this.detailHeightVp * 0.5 : 360;
+    return Math.round(Math.max(220, Math.min(width * 0.82, limit)));
+  }
+
+  private heroUrl(index: number): string {
+    const photo: CardPhoto | undefined = this.detailPhotos[index];
+    if (photo === undefined) return '';
+    if (photo.url.length > 0 && this.decodedPhotoUrls.includes(photo.url)) return photo.url;
+    return this.coverUrls[index] || '';
+  }
+
+  // Index paints the status-bar slice of the current hero photo while the page is scrolled to the top.
+  private syncEdgeImage(): void {
+    const url: string = this.detailVisible && this.detailReady && !this.isWideDetail() && this.heroAtTop &&
+      !this.photoPreviewVisible && !this.editingVisible ? this.heroUrl(this.photoIndex) : '';
+    if (url.length > 0) AppPageSurface.setEdgeImage(this.edgeOwner, url, this.heroHeight());
+    else AppPageSurface.clearEdgeImage(this.edgeOwner);
+  }
+
+  private onHeroScroll(): void {
+    const atTop: boolean = this.detailScroller.currentOffset().yOffset <= 1;
+    if (atTop !== this.heroAtTop) this.heroAtTop = atTop;
+  }
+
+  @Builder
+  private hero() {
+    Stack({ alignContent: Alignment.Top }) {
+      if (this.detailPhotos.length > 0) {
+        Swiper() {
+          ForEach(this.detailPhotos, (photo: CardPhoto, index: number) => {
+            Stack({ alignContent: Alignment.Top }) {
+              Column().width('100%').height('100%').backgroundColor(pageColor(this.palette, 'soft'));
+              if ((this.coverUrls[index] || '').length > 0 && !this.decodedPhotoUrls.includes(photo.url)) {
+                // Same size and fit as the status-bar slice drawn by Index, shifted up by the inset.
+                Image(this.coverUrls[index]).width('100%').height(this.topInset() + this.heroHeight()).objectFit(ImageFit.Cover)
+                  .translate({ y: -this.topInset() })
+                  .onError((): void => {
+                    this.coverUrls = this.coverUrls.map((url: string, position: number): string => position === index ? '' : url);
+                  })
+                  .accessibilityText(`${this.card.productName}的实拍封面，正在加载清晰图片`);
+              }
+              if (photo.url.length > 0) {
+                Image(photo.url).width('100%').height(this.topInset() + this.heroHeight()).objectFit(ImageFit.Cover)
+                  .translate({ y: -this.topInset() })
+                  .onComplete((event): void => {
+                    if (event !== undefined && event.loadingStatus === 1 && this.detailVisible && this.detailPhotos[index]?.url === photo.url) {
+                      if (!this.decodedPhotoUrls.includes(photo.url)) this.decodedPhotoUrls = this.decodedPhotoUrls.concat([photo.url]);
+                      console.info('[DetailImage] event=original-decoded index=' + index);
+                      if (index === 0) this.finishPrimaryImage('decoded');
+                      this.prefetchNextPhoto(index);
+                    }
+                  })
+                  .onError((): void => {
+                    if (this.detailPhotos[index]?.url === photo.url) this.photoDecodeFailed(index);
+                  })
+                  .accessibilityText(`${this.card.productName}的发布者实拍图，轻点查看完整图片`)
+                  .accessibilityDescription('轻点查看完整图片；左右滑动可切换实拍图')
+                  .onClick(() => this.openPhotoPreview(index));
+              }
+              if (photo.url.length === 0 && (this.coverUrls[index] || '').length === 0) {
+                Column({ space: 6 }) {
+                  Text(this.mediaServiceUnavailable && this.photoFailures.includes(index)
+                    ? '实拍图服务暂时不可用' : this.photoFailures.includes(index)
+                      ? '这张实拍图暂不可用' : '正在加载这张实拍图')
+                    .fontSize(15).fontWeight(FontWeight.Medium).fontColor(pageColor(this.palette, 'muted'));
+                  Text(this.photoFailures.includes(index) ? '点评仍可阅读，点下方重试。' : '点评已可阅读。')
+                    .fontSize(12).fontColor(pageColor(this.palette, 'muted'));
+                  if (this.photoFailures.includes(index)) {
+                    Button('重试实拍图').height(44).fontSize(13)
+                      .backgroundColor(pageColor(this.palette, 'surface')).fontColor(pageColor(this.palette, 'action'))
+                      .onClick((): void => this.retryPhoto(index));
+                  }
+                }.width('100%').height('100%').justifyContent(FlexAlign.Center);
+              } else if (this.photoFailures.includes(index)) {
+                Column() {
+                  Button('重试清晰图片').height(44).backgroundColor(pageColor(this.palette, 'surface'))
+                    .fontColor(pageColor(this.palette, 'action')).onClick((): void => this.retryPhoto(index));
+                }.width('100%').height('100%').justifyContent(FlexAlign.Center);
+              }
+            }.width('100%').height(this.heroHeight());
+          }, (photo: CardPhoto): string => `${photo.id.length > 0 ? photo.id : photo.path}:${photo.url}`)
+        }
+        .width('100%').height(this.heroHeight()).index(this.photoIndex).indicator(false)
+        .loop(false).onChange((index: number): void => {
+          this.photoIndex = index;
+          ImageRepository.subscriptionsChanged();
+          void this.showCachedCover(index, this.detailGeneration).catch((): void => {});
+          void this.hydratePhotoAt(index, 'high');
+          if (this.decodedPhotoUrls.includes(this.detailPhotos[index]?.url || '')) this.prefetchNextPhoto(index);
+        });
+        // Continues the 35% scrim Index draws under the status bar, fading out over the photo.
+        Column().width('100%').height(90).hitTestBehavior(HitTestMode.None).accessibilityLevel('no')
+          .linearGradient({ direction: GradientDirection.Bottom, colors: [['#59000000', 0], ['#00000000', 1]] });
+        if (this.detailPhotos.length > 1) {
+          Row() {
+            Blank();
+            Text(`${this.photoIndex + 1} / ${this.detailPhotos.length}`).fontSize(11).fontColor('#FFF8EC')
+              .height(22).padding({ left: 9, right: 9 }).borderRadius(11).backgroundColor('#8C14100A')
+              .accessibilityText(`第 ${this.photoIndex + 1} 张，共 ${this.detailPhotos.length} 张实拍图`);
+          }.width('100%').padding({ right: 14 }).position({ x: 0, y: this.heroHeight() - 58 })
+            .hitTestBehavior(HitTestMode.None);
+        }
+      } else {
+        Column({ space: 6 }) {
+          Text('暂无发布者实拍图').fontSize(15).fontWeight(FontWeight.Medium).fontColor(pageColor(this.palette, 'muted'));
+          Text('卡片仍可查看点评、商品信息与来源。').fontSize(12).fontColor(pageColor(this.palette, 'muted'));
+        }.width('100%').height(this.heroHeight() * 0.6).justifyContent(FlexAlign.Center)
+          .backgroundColor(pageColor(this.palette, 'soft'));
+      }
+    }.width('100%');
+  }
+
+  @Builder
+  private floatingTopBar() {
+    Row() {
+      Button({ type: ButtonType.Circle, stateEffect: true }) {
+        SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(22).fontColor([Color.White]).accessibilityLevel('no');
+      }
+      .width(40).height(40).backgroundColor('#6B14100A').accessibilityText('返回上一页')
+      .onClick((): void => { this.pathStack.pop(); });
+      Blank();
+      Button({ type: ButtonType.Circle, stateEffect: true }) {
+        Image($r('app.media.ic_more')).width(22).height(22).fillColor(Color.White).accessibilityLevel('no');
+      }
+      .width(40).height(40).backgroundColor('#6B14100A').accessibilityText('更多帖子操作')
+      .onClick((): void => { this.actionMenuVisible = !this.actionMenuVisible; });
+    }
+    .width('100%').padding({ left: 12, right: 12, top: 8 }).position({ x: 0, y: 0 })
+    .hitTestBehavior(HitTestMode.Transparent);
+  }
+
+  @Builder
+  private detailSheet() {
+    Column({ space: 14 }) {
+      this.authorHeader();
+      this.productInfo();
+      if (this.knockShareEnabled) { this.knockShareNotice(); }
+      this.reviewSection();
+    }
+    .width('100%').padding({ left: 16, right: 16, top: 16, bottom: 44 })
+    .offset({ y: -24 }).backgroundColor(pageColor(this.palette, 'canvas'))
+    .borderRadius({ topLeft: 24, topRight: 24 });
+  }
+
   @Builder
   private cardActions(): void {
     Column({ space: 6 }) {
@@ -963,24 +1122,32 @@ export struct CardDetailPage {
           .onClick((): void => { void this.prepareFavorite(); });
       }
       Row({ space: 4 }) {
-        CardInteractionButton({ icon: '👍', label: '赞 ' + this.likeCount, selected: this.myReaction === 'LIKE',
+        CardInteractionButton({ icon: 'like', label: '赞 ' + this.likeCount, selected: this.myReaction === 'LIKE',
           ready: !this.reactionBusy && !this.gateChecking && (!this.loggedIn || this.interactionsKnown),
           palette: this.palette, reducedMotion: this.reducedMotion,
           onActivate: (): void => { this.react('LIKE'); } }).layoutWeight(1);
-        CardInteractionButton({ icon: '🖕', label: '踩 ' + this.dislikeCount, selected: this.myReaction === 'DISLIKE',
+        CardInteractionButton({ icon: 'dislike', label: '不推荐 ' + this.dislikeCount, selected: this.myReaction === 'DISLIKE',
           ready: !this.reactionBusy && !this.gateChecking && (!this.loggedIn || this.interactionsKnown),
           palette: this.palette, reducedMotion: this.reducedMotion,
           onActivate: (): void => { this.react('DISLIKE'); } }).layoutWeight(1);
-        CardInteractionButton({ icon: '❤️', label: '收藏 ' + this.favoriteCount, selected: this.viewerFavorited,
+        CardInteractionButton({ icon: 'favorite', label: '收藏 ' + this.favoriteCount, selected: this.viewerFavorited,
           ready: !this.collectionBusy && !this.preparingCollection && (!this.loggedIn || this.interactionsKnown),
           palette: this.palette, reducedMotion: this.reducedMotion,
           onActivate: (): void => { this.favorite(); } }).layoutWeight(1);
-        this.actionButton($r('app.media.ic_note_share'), '发给好友', false, this.detailReady,
-          (): void => { this.shareToFriend(); });
-      }.width('100%');
-    }.width('100%').padding({ left: 12, right: 12, top: 8, bottom: 6 })
+        Button({ type: ButtonType.Capsule, stateEffect: true }) {
+          Row({ space: 6 }) {
+            SymbolGlyph($r('sys.symbol.paperplane')).fontSize(16)
+              .fontColor([pageColor(this.palette, 'canvas')]).accessibilityLevel('no');
+            Text('发给好友').fontSize(14).fontWeight(FontWeight.Bold).fontColor(pageColor(this.palette, 'canvas'));
+          }
+        }
+        .layoutWeight(1.4).height(44).backgroundColor(pageColor(this.palette, 'action'))
+        .enabled(this.detailReady).opacity(this.detailReady ? 1 : 0.6)
+        .accessibilityText('发给好友').onClick((): void => { this.shareToFriend(); });
+      }.width('100%').alignItems(VerticalAlign.Center);
+    }.width('100%').padding({ left: 12, right: 12, top: 8, bottom: 8 })
       .backgroundColor(pageColor(this.palette, 'surface'))
-      .border({ width: { top: 1 }, color: pageColor(this.palette, 'line') })
+      .border({ width: { top: 1.2 }, color: pageColor(this.palette, 'line'), style: BorderStyle.Dashed })
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM]);
   }
   @Builder
@@ -994,55 +1161,143 @@ export struct CardDetailPage {
   }
   @Builder
   private reviewSection() {
-    Column({ space: 8 }) {
-      Row() {
-        Text('发布者点评').fontSize(18).fontWeight(FontWeight.Bold).fontColor(pageColor(this.palette, 'ink'));
-        Blank();
-        if (this.tasteScoreText().length > 0) {
-          Text('口味 ' + this.tasteScoreText()).fontSize(12).fontWeight(FontWeight.Medium)
-            .fontColor(pageColor(this.palette, 'action')).padding({ left: 8, right: 8, top: 5, bottom: 5 })
-            .backgroundColor(pageColor(this.palette, 'soft')).borderRadius(10);
+    Stack({ alignContent: Alignment.TopEnd }) {
+      Column({ space: 6 }) {
+        Text('发布者点评').fontSize(12).fontWeight(FontWeight.Bold).fontColor(pageColor(this.palette, 'muted')).width('100%');
+        Text(this.reviewText()).fontSize(15).lineHeight(24).fontColor(pageColor(this.palette, 'ink')).width('100%');
+      }
+      .width('100%').padding({ left: 14, right: this.scoreStampVisible() ? 60 : 14, top: 14, bottom: 14 })
+      .backgroundColor(pageColor(this.palette, 'surface')).borderRadius(18)
+      .border({ width: 1.2, color: pageColor(this.palette, 'line'), style: BorderStyle.Dashed });
+      if (this.scoreStampVisible()) {
+        Column() {
+          Text(String(this.card.tasteScore)).fontSize(16).fontWeight(FontWeight.Bold).fontColor(pageColor(this.palette, 'action'));
+          Text(tasteScoreLabel(this.card.tasteScore)).fontSize(9).fontColor(pageColor(this.palette, 'action'));
         }
-      }.width('100%');
-      Text(this.reviewText()).fontSize(16).lineHeight(26).fontColor(pageColor(this.palette, 'ink')).width('100%');
+        .width(46).height(46).borderRadius(23).justifyContent(FlexAlign.Center)
+        .backgroundColor(pageColor(this.palette, 'canvas'))
+        .border({ width: 1.6, color: pageColor(this.palette, 'action'), style: BorderStyle.Dashed })
+        .rotate({ angle: -8 }).offset({ x: -12, y: -14 })
+        .accessibilityText('口味 ' + this.tasteScoreText());
+      }
+    }.width('100%').margin({ top: 8 });
+  }
+
+  private scoreStampVisible(): boolean {
+    const score: number = typeof this.card.tasteScore === 'number' ? this.card.tasteScore : 0;
+    return Number.isInteger(score) && score >= 1 && score <= 10;
+  }
+
+  private infoItems(): Array<DetailInfoItem> {
+    const items: Array<DetailInfoItem> = [];
+    const shop: string = this.card.merchantNameSnapshot || this.card.shop;
+    if (shop.trim().length > 0) items.push({ kind: 'store', label: '店铺', value: shop });
+    const place: string = this.card.merchantAddressSnapshot || this.card.district;
+    if (place.trim().length > 0) items.push({ kind: 'place', label: '地点', value: place });
+    if (this.card.consumptionMode === 'DINE_IN' && this.card.itemPriceFen !== undefined) {
+      items.push({ kind: 'price', label: '单品价格', value: '¥' + formatFenInput(this.card.itemPriceFen) });
     }
-    .width('100%').padding(16).backgroundColor(pageColor(this.palette, 'surface')).borderRadius(18)
-    .border({ width: 1, color: pageColor(this.palette, 'line') });
+    if (this.card.deliveryPlatformLabelSnapshot !== undefined && this.card.deliveryPlatformLabelSnapshot.length > 0) {
+      items.push({ kind: 'platform', label: '外卖平台', value: this.card.deliveryPlatformLabelSnapshot });
+    }
+    if (this.card.specification.trim().length > 0) items.push({ kind: 'spec', label: '规格', value: this.card.specification });
+    if (this.card.publicOffers.length > 0) items.push({ kind: 'offer', label: '优惠', value: this.card.publicOffers.join('；') });
+    if (this.card.edited === true) items.push({ kind: 'edited', label: '内容状态', value: '已编辑' });
+    return items;
+  }
+
+  private infoBorder(last: boolean): BorderOptions {
+    if (last) {
+      const none: BorderOptions = { width: 0 };
+      return none;
+    }
+    const dashed: BorderOptions = { width: { bottom: 1.2 }, color: pageColor(this.palette, 'line'), style: BorderStyle.Dashed };
+    return dashed;
   }
 
   @Builder
-  private infoRow(label: string, value: string) {
-    Row({ space: 12 }) {
-      Text(label).fontSize(13).fontColor(pageColor(this.palette, 'muted')).width(64);
-      Text(value.length > 0 ? value : '待补充').fontSize(14).fontColor(pageColor(this.palette, 'ink'))
+  private infoIcon(kind: string) {
+    if (kind === 'store') {
+      SymbolGlyph($r('sys.symbol.house')).fontSize(16).fontColor([pageColor(this.palette, 'action')]).accessibilityLevel('no');
+    } else if (kind === 'place') {
+      SymbolGlyph($r('sys.symbol.map')).fontSize(16).fontColor([pageColor(this.palette, 'action')]).accessibilityLevel('no');
+    } else if (kind === 'price') {
+      SymbolGlyph($r('sys.symbol.bag')).fontSize(16).fontColor([pageColor(this.palette, 'action')]).accessibilityLevel('no');
+    } else if (kind === 'platform') {
+      SymbolGlyph($r('sys.symbol.phone')).fontSize(16).fontColor([pageColor(this.palette, 'action')]).accessibilityLevel('no');
+    } else if (kind === 'spec') {
+      SymbolGlyph($r('sys.symbol.list_bullet')).fontSize(16).fontColor([pageColor(this.palette, 'action')]).accessibilityLevel('no');
+    } else if (kind === 'offer') {
+      SymbolGlyph($r('sys.symbol.info_circle')).fontSize(16).fontColor([pageColor(this.palette, 'action')]).accessibilityLevel('no');
+    } else {
+      SymbolGlyph($r('sys.symbol.square_and_pencil')).fontSize(16).fontColor([pageColor(this.palette, 'action')]).accessibilityLevel('no');
+    }
+  }
+
+  @Builder
+  private infoRow(item: DetailInfoItem, last: boolean) {
+    Row({ space: 10 }) {
+      Stack() { this.infoIcon(item.kind); }
+        .width(28).height(28).borderRadius(9).backgroundColor(pageColor(this.palette, 'soft'));
+      Text(item.label).fontSize(13).fontColor(pageColor(this.palette, 'muted')).width(56);
+      Text(item.value.length > 0 ? item.value : '待补充').fontSize(14).fontColor(pageColor(this.palette, 'ink'))
         .layoutWeight(1).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis });
-    }.width('100%').alignItems(VerticalAlign.Top);
+    }.width('100%').padding({ top: 10, bottom: 10 }).alignItems(VerticalAlign.Center).border(this.infoBorder(last));
+  }
+
+  @Builder
+  private pillAction(label: string, icon: Resource, onTap: () => void) {
+    Button({ type: ButtonType.Capsule, stateEffect: true }) {
+      Row({ space: 4 }) {
+        SymbolGlyph(icon).fontSize(14).fontColor([pageColor(this.palette, 'action')]).accessibilityLevel('no');
+        Text(label).fontSize(12.5).fontWeight(FontWeight.Bold).fontColor(pageColor(this.palette, 'action'));
+      }
+    }
+    .height(36).padding({ left: 12, right: 12 }).margin({ right: 8, bottom: 8 }).backgroundColor(Color.Transparent)
+    .border({ width: 1.2, color: pageColor(this.palette, 'action'), style: BorderStyle.Dashed })
+    .accessibilityText(label).onClick(onTap);
   }
 
   @Builder
   private productInfo(): void {
-    Column({ space: 14 }) {
-      Text(this.card.productName).fontSize(26).fontWeight(FontWeight.Bold).fontColor(pageColor(this.palette, 'ink')).width('100%').maxLines(3);
-      Text(this.priceText()).fontSize(25).fontWeight(FontWeight.Bold).fontColor(pageColor(this.palette, 'action')).width('100%');
-      Row({ space: 8 }) {
+    Column({ space: 12 }) {
+      Row({ space: 10 }) {
+        Text(this.card.productName).fontSize(23).fontWeight(FontWeight.Bold).fontColor(pageColor(this.palette, 'ink'))
+          .layoutWeight(1).maxLines(3);
+        Text(this.priceText()).fontSize(21).fontWeight(FontWeight.Bold).fontColor(pageColor(this.palette, 'action'));
+      }.width('100%').alignItems(VerticalAlign.Bottom);
+      Row({ space: 6 }) {
         Text(this.card.categoryV2 === undefined ? categoryLabel(this.card.category) : categoryV2Label(this.card.categoryV2))
-          .fontSize(13).fontColor(pageColor(this.palette, 'action')).padding(8).backgroundColor(pageColor(this.palette, 'soft')).borderRadius(10);
+          .fontSize(12).fontColor(pageColor(this.palette, 'action')).height(26).padding({ left: 10, right: 10 })
+          .backgroundColor(pageColor(this.palette, 'soft')).borderRadius(13);
         Text(this.card.consumptionMode === 'DELIVERY' ? '外卖' : this.card.consumptionMode === 'DINE_IN' ? '到店' : '美食推荐')
-          .fontSize(13).fontColor(pageColor(this.palette, 'muted')).padding(8).backgroundColor(pageColor(this.palette, 'canvas')).borderRadius(10);
+          .fontSize(12).fontColor(pageColor(this.palette, 'muted')).height(26).padding({ left: 10, right: 10 })
+          .borderRadius(13).border({ width: 1, color: pageColor(this.palette, 'line') });
       }.width('100%');
-      if ((this.card.merchantNameSnapshot || this.card.shop).trim().length > 0) { this.infoRow('店铺', this.card.merchantNameSnapshot || this.card.shop); }
-      if ((this.card.merchantAddressSnapshot || this.card.district).trim().length > 0) { this.infoRow('地点', this.card.merchantAddressSnapshot || this.card.district); }
-      if (this.card.consumptionMode === 'DINE_IN' && this.card.merchantId !== undefined && this.card.merchantId.length > 0) {
-        Button('去这里 · 商家导航').width('100%').onClick((): void => { void this.navigateMerchant(); }).attributeModifier(new NoteActionStyle(false, this.palette));
+      if (this.infoItems().length > 0) {
+        Column() {
+          ForEach(this.infoItems(), (item: DetailInfoItem, index: number): void => {
+            this.infoRow(item, index === this.infoItems().length - 1);
+          }, (item: DetailInfoItem): string => item.kind + ':' + item.value);
+        }
+        .width('100%').padding({ left: 14, right: 14, top: 2, bottom: 2 }).borderRadius(18)
+        .backgroundColor(pageColor(this.palette, 'surface')).border({ width: 1, color: pageColor(this.palette, 'line') });
       }
-      if (this.navigationAddress.length > 0) { Button('复制商家地址').width('100%').onClick((): void => { void this.copyNavigationAddress(); }).attributeModifier(new NoteActionStyle(false, this.palette)); }
-      if (this.card.consumptionMode === 'DINE_IN' && this.card.itemPriceFen !== undefined) { this.infoRow('单品价格', '¥' + formatFenInput(this.card.itemPriceFen)); }
-      if (this.card.deliveryPlatformLabelSnapshot !== undefined && this.card.deliveryPlatformLabelSnapshot.length > 0) { this.infoRow('外卖平台', this.card.deliveryPlatformLabelSnapshot); }
-      if (this.card.specification.trim().length > 0) { this.infoRow('规格', this.card.specification); }
-      if (this.card.publicOffers.length > 0) { this.infoRow('优惠', this.card.publicOffers.join('；')); }
-      if (this.card.edited === true) { this.infoRow('内容状态', '已编辑'); }
-      if (isSafeHttpsSourceLink(this.card.sourceLink)) { Button('打开来源页面').width('100%').onClick((): void => { void this.openSource(); }).attributeModifier(new NoteActionStyle(false, this.palette)); }
-    }.width('100%').padding(18).backgroundColor(pageColor(this.palette, 'surface')).borderRadius(22);
+      if ((this.card.consumptionMode === 'DINE_IN' && this.card.merchantId !== undefined && this.card.merchantId.length > 0) ||
+        this.navigationAddress.length > 0 || isSafeHttpsSourceLink(this.card.sourceLink)) {
+        Flex({ wrap: FlexWrap.Wrap }) {
+          if (this.card.consumptionMode === 'DINE_IN' && this.card.merchantId !== undefined && this.card.merchantId.length > 0) {
+            this.pillAction('去这里 · 导航', $r('sys.symbol.location_north_up_right'), (): void => { void this.navigateMerchant(); });
+          }
+          if (this.navigationAddress.length > 0) {
+            this.pillAction('复制地址', $r('sys.symbol.list_bullet'), (): void => { void this.copyNavigationAddress(); });
+          }
+          if (isSafeHttpsSourceLink(this.card.sourceLink)) {
+            this.pillAction('来源页面', $r('sys.symbol.link'), (): void => { void this.openSource(); });
+          }
+        }.width('100%');
+      }
+    }.width('100%');
   }
 
   private editorUid(): string { const profile = AuthService.profile(); return profile === undefined ? '' : profile.uid; }
@@ -1057,32 +1312,48 @@ export struct CardDetailPage {
         Stack({ alignContent: Alignment.Bottom }) {
           WarmNoteBackdrop({ palette: this.palette });
           Column() {
-            this.detailHeading();
             if (!this.detailReady) {
+              this.detailHeading();
               Column({ space: 16 }) {
                 if (this.entryCoverUrl.length > 0) { Image(this.entryCoverUrl).width('100%').height(this.imageHeight()).objectFit(ImageFit.Contain).borderRadius(22).accessibilityText('商品实拍封面'); }
-                if (this.status.length === 0) { LoadingProgress().width(32).height(32).color(pageColor(this.palette, 'action')); }
-                Text(this.status.length > 0 ? this.status : '正在打开美食笔记…').fontSize(15).fontColor(pageColor(this.palette, 'muted'));
-                Button('重新读取').onClick((): void => { void this.loadDetail(); }).attributeModifier(new NoteActionStyle(false, this.palette));
+                if (this.status.length === 0) {
+                  StateView({ kind: 'LOADING', palette: this.palette, title: '正在打开美食笔记…',
+                    skeletonRows: this.entryCoverUrl.length > 0 ? 0 : 2 });
+                  Button('重新读取').fontSize(13).backgroundColor(Color.Transparent).fontColor(pageColor(this.palette, 'action'))
+                    .onClick((): void => { void this.loadDetail(); });
+                } else {
+                  StateView({ kind: 'ERROR', palette: this.palette, icon: 'offline', title: '暂时打不开这篇笔记',
+                    hint: this.status, actionLabel: '重新读取', onAction: (): void => { void this.loadDetail(); } });
+                }
               }.width('100%').layoutWeight(1).padding(20).justifyContent(FlexAlign.Center);
-            } else {
+            } else if (this.isWideDetail()) {
+              this.detailHeading();
               Scroll(this.detailScroller) {
                 Column({ space: 16 }) {
                   this.authorHeader();
-                  Flex({ direction: this.isWideDetail() ? FlexDirection.Row : FlexDirection.Column, alignItems: ItemAlign.Start }) {
+                  Flex({ direction: FlexDirection.Row, alignItems: ItemAlign.Start }) {
                     Column({ space: 10 }) {
                       this.photoCarousel();
                       if (this.knockShareEnabled) { this.knockShareNotice(); }
-                    }.width(this.detailColumnWidth()).flexShrink(0)
-                      .margin({ right: this.isWideDetail() ? 24 : 0, bottom: this.isWideDetail() ? 0 : 16 });
+                    }.width(this.detailColumnWidth()).flexShrink(0).margin({ right: 24 });
                     Column({ space: 16 }) { this.productInfo(); this.reviewSection(); }
                       .width(this.detailColumnWidth()).flexShrink(0).alignItems(HorizontalAlign.Start);
                   }.width('100%');
                 }.width('100%').padding({ left: this.detailPadding(), right: this.detailPadding(), top: 4, bottom: 20 });
               }.width('100%').layoutWeight(1).scrollBar(BarState.Off);
               this.cardActions();
+            } else {
+              Scroll(this.detailScroller) {
+                Column() {
+                  this.hero();
+                  this.detailSheet();
+                }.width('100%');
+              }.width('100%').layoutWeight(1).scrollBar(BarState.Off)
+                .onDidScroll((): void => this.onHeroScroll());
+              this.cardActions();
             }
           }.width('100%').height('100%');
+          if (this.detailReady && !this.isWideDetail()) { this.floatingTopBar(); }
           if (this.photoPreviewVisible) { this.photoPreview(); }
           else if (this.actionMenuVisible) {
             Column() {}.width('100%').height('100%').backgroundColor($r('app.color.scrim')).onClick((): void => this.dismissOverlay());
@@ -1099,8 +1370,10 @@ export struct CardDetailPage {
       .onShown((): void => {
         this.reducedMotion = this.motionObserver.start();
         if (!this.detailVisible) { this.detailVisible = true; if (this.appActive) void this.loadDetail(); }
+        this.syncEdgeImage();
       })
       .onHidden((): void => {
+        AppPageSurface.clearEdgeImage(this.edgeOwner);
         this.motionObserver.stop(); this.reducedMotion = true;
         this.savedScrollY = this.detailScroller.currentOffset().yOffset;
         if (this.restoreTimer !== -1) { clearTimeout(this.restoreTimer); this.restoreTimer = -1; }

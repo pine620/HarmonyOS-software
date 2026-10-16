@@ -16,6 +16,7 @@ import { AuthSessionStore } from '../service/AuthSessionStore';
 import { AccountRequestGuard } from '../service/AccountRequestGuard';
 import { CloudBusinessError } from '../service/CloudReadErrors';
 import { ReadRequestOptions } from '../service/ReadScheduler';
+import { RandomFoodWidgetStore } from '../service/RandomFoodWidgetStore';
 
 @Component
 export struct RandomFoodPage {
@@ -101,7 +102,11 @@ export struct RandomFoodPage {
   private switchSource(source: RandomFoodSource): void {
     if (this.busy || source === this.source) return;
     if (this.owner === 'guest' && source !== 'PUBLIC') { this.onLogin(); return; }
-    try { RandomFoodRoundStore.selectSource(this.context(), this.owner, source); this.source = source; this.loadSource(); }
+    try {
+      RandomFoodRoundStore.selectSource(this.context(), this.owner, source); this.source = source; this.loadSource();
+      // The desktop card follows this source; it refreshes its own pool in the background.
+      void RandomFoodWidgetStore.sync(this.context()).catch((): void => {});
+    }
     catch (error) { this.message = stage47ErrorText(error as Object, '来源切换暂未保存。'); }
   }
   private commit(round: RandomFoodRound): void {

@@ -15,6 +15,7 @@ import { LocalDraft } from '../model/DraftModels';
 import { common } from '@kit.AbilityKit';
 import { FoodCard, UserProfile } from '../model/CloudContracts';
 import { AuthService } from '../service/AuthService';
+import { RandomFoodWidgetStore } from '../service/RandomFoodWidgetStore';
 import { AuthSessionStore } from '../service/AuthSessionStore';
 import { PrivacyStore } from '../service/PrivacyStore';
 import { DiscoveryFeedState } from '../service/DiscoveryFeedState';
@@ -34,7 +35,10 @@ import { CreateCardPage } from './CreateCardPage';
 import { ProfilePage } from './ProfilePage';
 import { FavoriteCardsPage } from './FavoriteCardsPage';
 import { CardHistoryPage } from './CardHistoryPage';
-import { MyPublishedPage, PermissionsPrivacyPage, ProfileEditPage, ProfileSettingsPage } from './ProfileSubPages';
+import { MyPublishedPage } from './MyPublishedPage';
+import { PermissionsPrivacyPage } from './PermissionsPrivacyPage';
+import { ProfileEditPage } from './ProfileEditPage';
+import { ProfileSettingsPage } from './ProfileSettingsPage';
 import { CardDetailPage } from './CardDetailPage';
 import { FriendsPage } from './FriendsPage';
 import { FriendProfilePage } from './FriendProfilePage';
@@ -84,6 +88,8 @@ struct Index {
   @StorageLink('appSystemBarInk') systemBarInk: string = '#3D2A22';
   @StorageLink('appSystemTopPx') systemTopPx: number = 0;
   @StorageLink('profileCoverUrl') @Watch('onEntryAppearanceChanged') profileCoverUrl: string = '';
+  @StorageLink('socialForegroundRevision') @Watch('syncRandomFoodWidget') widgetForegroundRevision: number = 0;
+  private widgetScope: string = '';
   @StorageLink('appSystemBottomPx') systemBottomPx: number = 0;
   @StorageLink('appSystemLeftPx') systemLeftPx: number = 0;
   @StorageLink('appSystemRightPx') systemRightPx: number = 0;
@@ -911,7 +917,17 @@ struct Index {
     return pageColor(this.homePalette(), 'header');
   }
 
+  // 「今日吃什么」桌面卡片: refresh its local pool in the foreground (returns at once when no card is placed
+  // or the pool is still current; clears it immediately when the account changes).
+  private syncRandomFoodWidget(): void {
+    if (!this.ready || !this.privacyAccepted) return;
+    const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    void RandomFoodWidgetStore.sync(context).catch((): void => {});
+  }
+
   private onEntryAppearanceChanged(): void {
+    const widgetScope: string = `${this.ready}|${this.privacyAccepted}|${this.loggedIn}`;
+    if (widgetScope !== this.widgetScope) { this.widgetScope = widgetScope; this.syncRandomFoodWidget(); }
     AppPageSurface.setEntrySurfaceVisible(!this.ready || !this.privacyAccepted || this.loginRequested);
     if (!this.navigationHomeVisible) return;
     if (!this.ready || !this.privacyAccepted || this.loginRequested) {
@@ -927,6 +943,11 @@ struct Index {
       this.navigationHomeVisible && this.selectedTab === 4 && this.profileCoverUrl.length > 0;
   }
 
+  private destinationEdgeImage(): string {
+    const revision: number = this.pageSurfaceRevision;
+    return !this.navigationHomeVisible && revision >= 0 ? AppPageSurface.edgeImageUrl : '';
+  }
+
   @Builder
   private topEdge(): void {
     Stack({ alignContent: Alignment.TopStart }) {
@@ -936,6 +957,12 @@ struct Index {
           .height(this.getUIContext().px2vp(this.systemTopPx) + 360).objectFit(ImageFit.Cover)
           .accessibilityLevel('no');
         Column() {}.width('100%').height('100%').backgroundColor('#33000000');
+      } else if (this.destinationEdgeImage().length > 0) {
+        // Card detail hero: same image, same size and fit as the page's hero, so the two slices line up.
+        Image(this.destinationEdgeImage()).width('100%')
+          .height(this.getUIContext().px2vp(this.systemTopPx) + AppPageSurface.edgeImageHeight).objectFit(ImageFit.Cover)
+          .accessibilityLevel('no');
+        Column() {}.width('100%').height('100%').backgroundColor('#59000000');
       }
     }.width('100%').height(this.getUIContext().px2vp(this.systemTopPx))
       .backgroundColor(this.edgeCanvas()).clip(true).position({ x: 0, y: 0 })

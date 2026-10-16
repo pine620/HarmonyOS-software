@@ -1,5 +1,6 @@
 import { packageFunction } from './package-functions.mjs';
-const names = ['shike-auth', 'shike-media', 'shike-service', 'shike-location'];
+const names = ['shike-auth', 'shike-media', 'shike-service', 'shike-location',
+  'shike-content', 'shike-social', 'shike-account', 'shike-governance'];
 try {
   const name = process.argv[2];
   if (process.argv.length !== 3 || name !== '--all' && !names.includes(name)) throw new Error('Usage: npm run package:cloud:all, or npm run package:cloud -- <cloud-object-name>');

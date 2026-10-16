@@ -47,3 +47,13 @@ CloudProgram/cloudfunctions/*/shared/
 CloudProgram/cloudfunctions/shike-maintenance/service/
 CloudProgram/cloudfunctions/shike-maintenance/media/
 CloudProgram/cloudfunctions/shike-share/service/
+
+# Generated domain-function dependency copies and compiled entries
+CloudProgram/cloudfunctions/shike-content/service/
+CloudProgram/cloudfunctions/shike-content/shikeContent.js*
+CloudProgram/cloudfunctions/shike-social/service/
+CloudProgram/cloudfunctions/shike-social/shikeSocial.js*
+CloudProgram/cloudfunctions/shike-account/service/
+CloudProgram/cloudfunctions/shike-account/shikeAccount.js*
+CloudProgram/cloudfunctions/shike-governance/service/
+CloudProgram/cloudfunctions/shike-governance/shikeGovernance.js*

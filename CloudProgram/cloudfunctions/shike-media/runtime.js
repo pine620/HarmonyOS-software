@@ -414,6 +414,37 @@ async function uploadCardPhoto(input, env) {
   return { success: true };
 }
 
+// Pack 3.3 (2026-10-15): the client uploaded the prepared JPEG itself to private/pending/{storageUid}/{mediaId}.jpg
+// (Cloud Storage rules allow that only for the signed-in AGC user). This reads it back, checks owner, size and
+// sha256 against the prepare record, then writes the public object exactly like uploadCardPhoto does.
+// Any failure leaves the prepare record untouched, so the client can still fall back to upload-card-photo.
+async function confirmCardPhotoUpload(input, env) {
+  const identity = await verifiedIdentity(input && input.accessToken, env);
+  const payload = input && input.payload || {};
+  const mediaId = String(payload.mediaId || '').trim();
+  const sha256 = String(payload.sha256 || '').trim().toLowerCase();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(mediaId)) throw new Error('图片上传标识无效。');
+  if (!/^[a-f0-9]{64}$/.test(sha256)) throw new Error('图片摘要无效。');
+  const media = await one(collection(env, 'CardMedia').query().equalTo('id', mediaId));
+  if (!media || String(media.ownerUid || '') !== identity.canonicalUid || String(media.cardId || '')) {
+    throw new Error('图片不存在、不属于当前用户或已被使用。');
+  }
+  if (String(media.status || '') !== 'PENDING_UPLOAD') throw new Error('图片已上传或状态无效，请重新选择。');
+  const storageUid = String(media.storageUid || identity.providerUid);
+  if (storageUid !== identity.providerUid) throw accessError('上传账号与准备记录不一致。', 'UPLOAD_OWNER_MISMATCH');
+  const preparedSha256 = String(media.preparedSha256 || '').toLowerCase();
+  if (sha256 !== preparedSha256) throw new Error('图片内容与准备记录不一致，请重新选择。');
+  const pending = storageBucket(env).file(validKey(`private/pending/${storageUid}/${mediaId}.jpg`));
+  if (!(await measuredCall('storage', 'exists', () => pending.exists()))) throw accessError('实拍图尚未上传完成。', 'UPLOAD_MISSING');
+  const bytes = await readFileBytes(pending);
+  if (bytes.length !== Number(media.byteSize || 0)) throw new Error('图片大小与准备记录不一致，请重新选择。');
+  const objectKey = approvedObjectKey(storageUid, mediaId);
+  await writeApproved({ key: objectKey, dataBase64: bytes.toString('base64'), sha256 }, env);
+  await buildCover(media, env, bytes);
+  try { await measuredCall('storage', 'delete', () => pending.delete()); } catch (_error) { }
+  return { success: true };
+}
+
 async function getPublicMedia(input, env) {
   const payload = input && input.payload || {};
   if (String(payload.bucketName || '').trim() !== required(env, 'SHIKE_STORAGE_BUCKET')) throw new Error('图片所属存储实例无效。');
@@ -473,6 +504,7 @@ module.exports = {
   execute: (input, env) => withReadMetrics('execute', env, () => execute(input, env), requestId(input)),
   prepareCardPhoto: (input, env) => withReadMetrics('prepare-card-photo', env, () => prepareCardPhoto(input, env), requestId(input)),
   uploadCardPhoto: (input, env) => withReadMetrics('upload-card-photo', env, () => uploadCardPhoto(input, env), requestId(input)),
+  confirmCardPhotoUpload: (input, env) => withReadMetrics('confirm-card-photo-upload', env, () => confirmCardPhotoUpload(input, env), requestId(input)),
   getPublicMedia: (input, env) => withReadMetrics('get-public-media', env, () => getPublicMedia(input, env), requestId(input)),
   runCoverBackfill,
   safeLogError

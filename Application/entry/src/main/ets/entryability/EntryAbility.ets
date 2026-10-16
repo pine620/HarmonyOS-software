@@ -5,7 +5,7 @@ import { AbilityConstant, Configuration, ConfigurationConstant, UIAbility, Want 
 import { resourceManager } from '@kit.LocalizationKit';
 import { window } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { pushService } from '@kit.PushKit';
+import { pushCommon, pushService } from '@kit.PushKit';
 import { initializeSharedCardEntry, storePendingSharedCard } from '../service/CardDeepLink';
 import {
   ContinuationSnapshot, ContinuationState, ENTRY_CARD_ID_PARAMETER, ENTRY_FRIEND_UID_PARAMETER,
@@ -45,6 +45,17 @@ export default class EntryAbility extends UIAbility {
     this.captureSystemEntry(want);
     if (PushNotificationService.isSupported()) {
       pushService.on('tokenUpdate', this, this.tokenUpdateCallback);
+      // Pack 4 (2026-10-15): while the app is in front, a private / group message push (category IM) is handed
+      // to the app instead of a banner. Bumping the social revision makes open chats and lists refresh at once;
+      // foreground polling remains only as a fallback.
+      try {
+        pushService.receiveMessage('IM', this, (_payload: pushCommon.PushPayload): void => {
+          const revision: number = AppStorage.get<number>('socialForegroundRevision') || 0;
+          AppStorage.setOrCreate('socialForegroundRevision', revision + 1);
+        });
+      } catch (_error) {
+        console.warn('[Push] foreground message listener unavailable');
+      }
     }
   }
 

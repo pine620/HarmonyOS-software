@@ -8,6 +8,7 @@ import { ImageDescriptors } from './ImageDescriptors';
 import { IMAGE_TRANSPORT, IMAGE_ALLOW_LEGACY_ON_UNSUPPORTED, ImageTransport } from './ImageReadConfig';
 import { ReadPriority, ReadRequestOptions, ReadScheduler } from './ReadScheduler';
 import { ImageDiskCache } from './ImageDiskCache';
+import { PublicCoverDirectReader } from './PublicCoverDirectReader';
 export { MediaPriority, MediaRequestGuard } from '../model/ImageModels';
 
 type ImageTaskError = Error | ReadCancelledError | CloudBusinessError;
@@ -237,9 +238,35 @@ export class ImageRepository {
     for (const task of rest) if (!task.settled) await ImageRepository.fetch(context, [task]);
     for (const task of batch) if (!task.settled) task.fail(new CloudBusinessError('图片暂未就绪，请单张重试。', 'MEDIA_DEFERRED'));
   }
+  // Pack 3.2: published covers with a known descriptor are fetched from Cloud Storage directly.
+  private static async readDirectCovers(context: common.Context, tasks: Array<ImageTask>): Promise<void> {
+    if (!PublicCoverDirectReader.available()) return;
+    await Promise.all(tasks.map(async (task: ImageTask): Promise<void> => {
+      if (task.mode !== 'PUBLIC' || task.variant !== 'COVER_480' || task.revisionId.length > 0 || task.path.length === 0) return;
+      const descriptor: ImageDescriptor | undefined = ImageDescriptors.read(task.mediaId, 'PUBLIC', 'COVER_480');
+      if (descriptor === undefined || descriptor.variant !== 'COVER_480' || !/^[a-f0-9]{64}$/.test(descriptor.sha256)) return;
+      const cloudPath: string = PublicCoverDirectReader.coverPath(task.path, task.mediaId);
+      if (cloudPath.length === 0) return;
+      try {
+        const base64: string = await PublicCoverDirectReader.readBase64(task.bucket, cloudPath, descriptor);
+        if (!await task.needed()) { task.fail(new ReadCancelledError()); return; }
+        task.cached = await ImageDiskCache.put(context, task.mediaId, 'PUBLIC', 'COVER_480', '', descriptor, base64);
+        if (!await task.needed()) { task.fail(new ReadCancelledError()); return; }
+        ImageDescriptors.record(task.mediaId, 'PUBLIC', 'COVER_480', descriptor, '');
+        task.descriptor = descriptor;
+        task.finish(ImageDiskCache.url(context, task.cached));
+        console.info('[ImageRead] event=direct-cover');
+      } catch (_error) {
+        PublicCoverDirectReader.recordFailure();
+      }
+    }));
+  }
   private static async fetch(context: common.Context, tasks: Array<ImageTask>): Promise<void> {
-    const active: Array<ImageTask> = [];
-    for (const task of tasks) if (await task.needed()) active.push(task); else task.fail(new ReadCancelledError());
+    const candidates: Array<ImageTask> = [];
+    for (const task of tasks) if (await task.needed()) candidates.push(task); else task.fail(new ReadCancelledError());
+    if (candidates.length === 0) return;
+    await ImageRepository.readDirectCovers(context, candidates);
+    const active: Array<ImageTask> = candidates.filter((task: ImageTask): boolean => !task.settled);
     if (active.length === 0) return;
     const items: Array<ImageReadItem> = active.map((task: ImageTask): ImageReadItem => {
       const item: ImageReadItem = { mediaId: task.mediaId, mode: task.mode, variant: task.variant, revisionId: task.revisionId,

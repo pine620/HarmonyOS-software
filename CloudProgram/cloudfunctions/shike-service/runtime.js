@@ -15,6 +15,84 @@ const readMetricsScope = new AsyncLocalStorage();
 const readRequestScope = new AsyncLocalStorage();
 const readPhaseScope = new AsyncLocalStorage();
 const cardReadScope = new AsyncLocalStorage();
+const operationScope = new AsyncLocalStorage();
+
+// Pack 1 (2026-10-15): per-instance caches. Each function instance keeps its own copy; nothing is shared
+// across instances, so every entry is bounded by a short TTL instead of cross-instance invalidation.
+const IDENTITY_CACHE_TTL_MS = 90 * 1000;
+const IDENTITY_CACHE_MAX_ENTRIES = 2000;
+const IDENTITY_CACHE_EXCLUDED_OPERATIONS = new Set(['get-password-account']);
+const IDENTITY_STATE_OPERATIONS = new Set(['logout-nickname', 'change-password-account', 'configure-password-account']);
+const identityCache = new Map();
+const GUEST_PAGE_CACHE_TTL_MS = 30 * 1000;
+const GUEST_PAGE_CACHE_MAX_ENTRIES = 50;
+const GUEST_PAGE_CACHE_MAX_BYTES = 512 * 1024;
+const guestPageCache = new Map();
+
+function readOnlyOperation(operation) {
+  return /^(get|list|search)-/.test(String(operation || ''));
+}
+
+function recordCacheCount(name) {
+  const metrics = readMetricsScope.getStore();
+  if (metrics) metrics.counts[name] = (metrics.counts[name] || 0) + 1;
+}
+
+function identityCacheKey(accessToken) {
+  return crypto.createHash('sha256').update('shike-identity-cache:' + String(accessToken)).digest('hex');
+}
+
+function identityCacheable() {
+  const operation = operationScope.getStore() || '';
+  return readOnlyOperation(operation) && !IDENTITY_CACHE_EXCLUDED_OPERATIONS.has(operation);
+}
+
+function cachedIdentity(key) {
+  const entry = identityCache.get(key);
+  if (!entry) return null;
+  if (entry.expiresAt <= Date.now()) { identityCache.delete(key); return null; }
+  return entry;
+}
+
+function rememberIdentity(key, providerUid, canonicalUid, tokenExpiresAt) {
+  const now = Date.now();
+  let expiresAt = now + IDENTITY_CACHE_TTL_MS;
+  if (tokenExpiresAt > 0) expiresAt = Math.min(expiresAt, tokenExpiresAt);
+  if (expiresAt <= now) return;
+  identityCache.delete(key);
+  while (identityCache.size >= IDENTITY_CACHE_MAX_ENTRIES) identityCache.delete(identityCache.keys().next().value);
+  identityCache.set(key, { providerUid, canonicalUid, expiresAt });
+}
+
+function forgetIdentity(canonicalUid) {
+  for (const [key, entry] of identityCache) {
+    if (entry.canonicalUid === canonicalUid) identityCache.delete(key);
+  }
+}
+
+// Guests have no viewer-specific fields, so their first page (no cursor) can be shared for a few seconds.
+// The cursor inside a cached page still carries the original snapshot time, so paging stays consistent.
+async function guestFirstPage(operation, payload, load) {
+  const key = operation + ':' + JSON.stringify(payload || {});
+  const entry = guestPageCache.get(key);
+  if (entry && entry.expiresAt > Date.now()) { recordCacheCount('guestPageCacheHit'); return JSON.parse(entry.json); }
+  if (entry) guestPageCache.delete(key);
+  const result = await load();
+  recordCacheCount('guestPageCacheMiss');
+  const json = JSON.stringify(result);
+  if (typeof json === 'string' && json.length <= GUEST_PAGE_CACHE_MAX_BYTES) {
+    while (guestPageCache.size >= GUEST_PAGE_CACHE_MAX_ENTRIES) guestPageCache.delete(guestPageCache.keys().next().value);
+    guestPageCache.set(key, { json, expiresAt: Date.now() + GUEST_PAGE_CACHE_TTL_MS });
+  }
+  return result;
+}
+
+// Every operation runs inside this scope. Any non-read operation drops this instance's guest pages so a
+// publish, edit or delete handled here is visible to guests immediately (other instances: within 30 s).
+function runOperation(operation, action) {
+  if (!readOnlyOperation(operation)) guestPageCache.clear();
+  return operationScope.run(operation, action);
+}
 const { withCursorContext } = require('./stages47-common');
 const { requestId, errorCode, errorResponse, readStage, READ_OPT_VERSION, shouldReadMetrics } = require('./shared/read-errors');
 function withReadPhase(phase, action) {
@@ -1286,27 +1364,47 @@ async function ensureIdentityBinding(provider, providerUid, canonicalUid, env) {
   });
 }
 
-async function verifiedAgcUid(accessToken) {
+async function verifiedAgcToken(accessToken, checkRevoked = true) {
   if (!accessToken || String(accessToken).length > 8192) {
     throw accessError('未登录或登录状态已失效。', 'AUTH_REQUIRED');
   }
   try {
     const verified = await measuredDependency('authVerify', () => cloud.auth().verifyAccessToken({
       accessToken: String(accessToken),
-      checkRevoked: true
+      checkRevoked
     }));
     const uid = String(verified.getSub() || '');
     if (!uid) throw new Error('AGC 访问凭证未包含用户标识。');
-    return uid;
+    let expiresAt = 0;
+    try {
+      const exp = typeof verified.getExp === 'function' ? Number(verified.getExp()) : 0;
+      if (Number.isFinite(exp) && exp > 0) expiresAt = exp * 1000;
+    } catch (_) { expiresAt = 0; }
+    return { uid, expiresAt };
   } catch (_error) {
     // Account Kit access tokens are intentionally not accepted here.
     throw accessError('登录凭证无效或已撤销，请重新登录。', 'AUTH_REQUIRED');
   }
 }
 
+async function verifiedAgcUid(accessToken) {
+  const verified = await verifiedAgcToken(accessToken, true);
+  return verified.uid;
+}
+
 async function verifiedIdentity(accessToken, env, readOnly = false) {
+  // Read operations reuse a verified identity for up to 90 s in this instance (never past token expiry):
+  // no token round trip, IdentityBinding or UserProfile read. Writes and account operations always verify
+  // in full, including the revocation check.
+  const cacheable = readOnly && identityCacheable() && !!accessToken;
+  const cacheKey = cacheable ? identityCacheKey(accessToken) : '';
+  if (cacheKey) {
+    const hit = cachedIdentity(cacheKey);
+    if (hit) { recordCacheCount('identityCacheHit'); return { providerUid: hit.providerUid, canonicalUid: hit.canonicalUid }; }
+  }
   return withReadPhase('authentication', async () => {
-    const providerUid = await verifiedAgcUid(accessToken);
+    const verified = await verifiedAgcToken(accessToken, !cacheable);
+    const providerUid = verified.uid;
     const binding = await identityBinding('AGC', providerUid, env);
     if (binding && String(binding.status || 'ACTIVE') !== 'ACTIVE') throw accessError('账号身份已停用。', 'ACCOUNT_INACTIVE');
     if (binding && !String(binding.canonicalUid || '').trim()) throw accessError('账号身份绑定无效。', 'INVALID_STATE');
@@ -1321,6 +1419,12 @@ async function verifiedIdentity(accessToken, env, readOnly = false) {
     // The binding above is already validated. Ordinary mutations must not
     // re-query and rewrite an unchanged identity on every button press.
     if (!readOnly && !binding) await ensureIdentityBinding('AGC', providerUid, canonicalUid, env);
+    if (cacheKey) {
+      recordCacheCount('identityCacheMiss');
+      // Only an ACTIVE account reaches this point (assertAccountActive above).
+      rememberIdentity(cacheKey, providerUid, canonicalUid, verified.expiresAt);
+    }
+    if (IDENTITY_STATE_OPERATIONS.has(operationScope.getStore() || '')) forgetIdentity(canonicalUid);
     return { providerUid, canonicalUid };
   });
 }
@@ -3866,7 +3970,9 @@ async function verifiedDeletionUid(accessToken, env) {
   // retry. It cannot create a profile or re-enable an account.
   const providerUid = await verifiedAgcUid(accessToken);
   const binding = await identityBinding('AGC', providerUid, env);
-  return binding ? String(binding.canonicalUid || providerUid) : providerUid;
+  const canonicalUid = binding ? String(binding.canonicalUid || providerUid) : providerUid;
+  forgetIdentity(canonicalUid);
+  return canonicalUid;
 }
 
 const nicknameAuth = require('./nickname-auth').createNicknameAuth({ collection, one, models: OBJECT_TYPES, cloud,
@@ -3974,7 +4080,9 @@ const operations = {
     return stage3.capabilities(env);
   },
   'list-map-merchants': async ({ accessToken, payload }, env) => stage3.listMapMerchants(accessToken ? await verifiedUid(accessToken, env, true) : '', payload, env),
-  'search-public-cards': async ({ accessToken, payload }, env) => stage3.searchPublicCards(accessToken ? await verifiedUid(accessToken, env, true) : '', payload, env),
+  'search-public-cards': async ({ accessToken, payload }, env) => (!accessToken && !payload.cursor)
+    ? guestFirstPage('search-public-cards', payload, () => stage3.searchPublicCards('', payload, env))
+    : stage3.searchPublicCards(accessToken ? await verifiedUid(accessToken, env, true) : '', payload, env),
   'get-merchant-recommendations': async ({ accessToken, payload }, env) => stage3.getMerchantRecommendations(accessToken ? await verifiedUid(accessToken, env, true) : '', payload, env),
   'get-stage2-capabilities': async ({ accessToken }, env) => { await verifiedUid(accessToken, env); return stage2.capabilities(env); },
   'resolve-merchant': async ({ accessToken, payload }, env) => stage2.resolveMerchant(await verifiedUid(accessToken, env), payload, env),
@@ -4003,7 +4111,10 @@ const operations = {
     getPublicMedia('', { ...payload, readRequestId }, env),
   'publish-card': async ({ accessToken, payload }, env) => publishCard(await verifiedUid(accessToken, env), payload, env),
   'list-nearby-cards': async ({ accessToken, payload }, env) => payload.scope === 'all'
-    ? listPublicRecommendations(payload, env, accessToken ? await verifiedUid(accessToken, env, true) : '') : listNearby(await verifiedUid(accessToken, env, true), payload, env),
+    ? ((!accessToken && !payload.pageToken)
+      ? guestFirstPage('list-nearby-cards', payload, () => listPublicRecommendations(payload, env, ''))
+      : listPublicRecommendations(payload, env, accessToken ? await verifiedUid(accessToken, env, true) : ''))
+    : listNearby(await verifiedUid(accessToken, env, true), payload, env),
   'get-friend-profile': async ({ accessToken, payload }, env) =>
     friendProfile(await verifiedUid(accessToken, env, true), payload, env),
   'get-card-detail': async ({ accessToken, payload }, env) =>
@@ -4070,7 +4181,7 @@ function createHandler(operation) {
       const input = parseBody(event);
       const env = context && context.env ? context.env : {};
       id = requestId(input);
-      const data = await withCursorContext(env, () => cardReadScope.run(new Map(), () => readRequestScope.run(id, () => withReadMetrics(operation, env, () => operations[operation](input, env), id, input.readAttempt))));
+      const data = await runOperation(operation, () => withCursorContext(env, () => cardReadScope.run(new Map(), () => readRequestScope.run(id, () => withReadMetrics(operation, env, () => operations[operation](input, env), id, input.readAttempt)))));
       return callback({ ok: true, data, message: '', requestId: id, operation, functionVersion: READ_OPT_VERSION, ...require('./shared/release-info').buildInfo });
     } catch (error) {
       logger.error(`${operation} requestId=${id} code=${errorCode(error)} stage=${readStage(error)} failed: ${safeLogError(error)}`);
@@ -4083,10 +4194,10 @@ async function executeOperation(operation, input, env = process.env) {
   if (!operations[operation]) throw new Error(`未知操作 ${operation}`);
   const safeInput = input && typeof input === 'object' ? input : {};
   const id = requestId(safeInput);
-  return withCursorContext(env, () => cardReadScope.run(new Map(), () => readRequestScope.run(id, () => withReadMetrics(operation, env || {}, () => operations[operation]({
+  return runOperation(operation, () => withCursorContext(env, () => cardReadScope.run(new Map(), () => readRequestScope.run(id, () => withReadMetrics(operation, env || {}, () => operations[operation]({
     accessToken: typeof safeInput.accessToken === 'string' ? safeInput.accessToken : '',
     payload: safeInput.payload && typeof safeInput.payload === 'object' ? safeInput.payload : {}
-  }, env || {}), id, safeInput.readAttempt === 2 ? 2 : 1))));
+  }, env || {}), id, safeInput.readAttempt === 2 ? 2 : 1)))));
 }
 
 // Explicit one-off worker action. Each batch is bounded and can be retried at the

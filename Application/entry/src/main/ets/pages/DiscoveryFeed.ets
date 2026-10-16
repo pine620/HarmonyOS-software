@@ -14,11 +14,12 @@ import { AuthService } from '../service/AuthService';
 import { CloudBusinessError, CloudGateway } from '../service/CloudGateway';
 import { DiscoveryFeedState, DiscoverySnapshot, DiscoveryEntry, PreviousRegion } from '../service/DiscoveryFeedState';
 import { ImageRepository } from '../service/ImageRepository';
+import { PagedDataSource } from '../service/PagedDataSource';
 import { MapViewportStore } from '../service/MapViewportStore';
 import { SearchHistoryStore } from '../service/SearchHistoryStore';
 import { DiscoveryMap } from '../components/DiscoveryMap';
 import { DiscoveryCard } from '../components/DiscoveryCard';
-import { DISCOVERY_IDLE_MOTION_ENABLED, DISCOVERY_SHORTCUTS, DiscoveryActionStyle, DiscoveryBackdrop,
+import { DISCOVERY_SHORTCUTS, DiscoveryActionStyle, DiscoveryBackdrop,
   DiscoveryCategoryKey, DiscoveryChoiceStyle, DiscoveryLoadingMark, DiscoveryShortcut,
   discoveryCategoryIcon, discoveryPanelTransition } from '../components/DiscoveryVisuals';
 import { MerchantRecommendationSheet } from '../components/MerchantRecommendationSheet';
@@ -45,14 +46,17 @@ export struct DiscoveryFeed {
 
   @Consume('windowBreakpoint') windowBreakpoint: LayoutBreakpoint;
   @Require @Prop @Watch('onCapabilitiesChanged') capabilities: DiscoveryCapabilities;
-  @Prop @Watch('syncIdleMotion') capabilitiesLoading: boolean = false;
+  @Prop capabilitiesLoading: boolean = false;
   @Prop @Watch('onRevisionChanged') revision: number = 0;
   onOpenMeal: () => void = (): void => {};
   onOpenCard: (card: FoodCard) => void = (_card: FoodCard): void => {};
   onPrimaryCard: (card: FoodCard, remoteSync: boolean) => void = (_card: FoodCard, _remoteSync: boolean): void => {};
   onUnavailable: () => void = (): void => {};
   onReloadCapabilities: () => void = (): void => {};
-  @State @Watch('syncIdleMotion') cards: Array<DiscoveryEntry> = [];
+  // Pack 4.3: the waterfall renders through LazyForEach; this source mirrors `cards` on every change.
+  @State @Watch('syncCardSource') cards: Array<DiscoveryEntry> = [];
+  private cardSource: PagedDataSource<DiscoveryEntry> = new PagedDataSource<DiscoveryEntry>();
+  private syncCardSource(): void { this.cardSource.replace(this.cards.slice()); }
   @State keywordInput: string = '';
   @State mode: DiscoveryMode = 'ALL';
   @State categories: Array<FoodCategoryV2> = [];
@@ -60,9 +64,9 @@ export struct DiscoveryFeed {
   @State priceMin: string = '';
   @State priceMax: string = '';
   @State pricePreset: number = -1;
-  @State @Watch('syncIdleMotion') filtersOpen: boolean = false;
-  @State @Watch('syncIdleMotion') historyOpen: boolean = false;
-  @State @Watch('syncIdleMotion') categoriesOpen: boolean = false;
+  @State filtersOpen: boolean = false;
+  @State historyOpen: boolean = false;
+  @State categoriesOpen: boolean = false;
   @State draftCategories: Array<FoodCategoryV2> = [];
   @State draftSort: DiscoverySort = 'LATEST';
   @State draftPriceMin: string = '';
@@ -70,31 +74,30 @@ export struct DiscoveryFeed {
   @State draftPricePreset: number = -1;
   @State filterError: string = '';
   @State motionActive: boolean = false;
-  @State idleMotionReady: boolean = false;
   @State resultOpacity: number = 1;
   @State resultOffset: number = 0;
   @State history: Array<string> = [];
   @State status: string = '正在准备公开推荐。';
-  @State @Watch('syncIdleMotion') loading: boolean = false;
+  @State loading: boolean = false;
   @State loadFailed: boolean = false;
   @State featureNotReady: boolean = false;
-  @State @Watch('syncIdleMotion') loadingMore: boolean = false;
+  @State loadingMore: boolean = false;
   @State loadMoreFailed: boolean = false;
   @State nextCursor: string = '';
   @State scope: DiscoveryScope = 'ALL_PUBLIC';
   @State merchants: Array<MapMerchant> = [];
   @State mapCursor: string = '';
   @State mapStatus: string = '';
-  @State @Watch('syncIdleMotion') mapLoading: boolean = false;
+  @State mapLoading: boolean = false;
   @State viewportDirty: boolean = false;
-  @State @Watch('syncIdleMotion') expanded: boolean = false;
-  @State @Watch('syncIdleMotion') listOpen: boolean = false;
+  @State expanded: boolean = false;
+  @State listOpen: boolean = false;
   @State selectedMerchantId: string = '';
-  @State @Watch('syncIdleMotion') selectedMerchant: MapMerchant | undefined = undefined;
+  @State selectedMerchant: MapMerchant | undefined = undefined;
   @State merchantCards: Array<FoodCard> = [];
   @State merchantStatus: string = '';
   @State merchantCursor: string = '';
-  @State @Watch('syncIdleMotion') merchantLoading: boolean = false;
+  @State merchantLoading: boolean = false;
   @State cameraTarget: DiscoveryCamera = { latitude: 39.9, longitude: 116.4, zoom: 15 };
   @State showingPrevious: boolean = false;
   @State availableHeight: number = 700;
@@ -136,11 +139,9 @@ export struct DiscoveryFeed {
   private visibleFirst: number = 0;
   private visibleLast: number = 3;
   private scrolling: boolean = false;
-  private decodedCovers: Map<string, string> = new Map<string, string>();
   private motionObserver: RandomFoodMotionObserver = new RandomFoodMotionObserver((reduced: boolean): void => {
     this.motionActive = this.active && this.appActive && this.navigationVisible && this.visibleLifecycle && !reduced;
     if (!this.motionActive) this.stopResultMotion();
-    this.syncIdleMotion();
   });
   @StorageLink('accountContentRevision') @Watch('onRevisionChanged') accountContentRevision: number = 0;
   private onVisibilityChanged(visible: boolean): void { if (visible === this.visibleLifecycle) return; this.visibleLifecycle = visible; if (visible && this.appActive) this.resume(); else this.pause(false); }
@@ -162,26 +163,6 @@ export struct DiscoveryFeed {
   private signature(): string { return this.revision + ':' + this.accountContentRevision; }
   aboutToAppear(): void { this.resume(); }
   aboutToDisappear(): void { this.pause(true); }
-  private syncIdleMotion(): void {
-    // The feature is off by default, so no image or list work is added during ordinary browsing.
-    let ready: boolean = DISCOVERY_IDLE_MOTION_ENABLED && this.motionActive && this.active && this.appActive &&
-      this.navigationVisible && this.visibleLifecycle && !this.scrolling && !this.loading && !this.loadingMore && !this.capabilitiesLoading &&
-      !this.hydrationRunning && this.loadingPhotoIds.size === 0 && !this.prefetchRunning && this.prefetchTimer === undefined &&
-      !this.mapLoading && !this.merchantLoading && !this.expanded && !this.listOpen && !this.filtersOpen &&
-      !this.categoriesOpen && !this.historyOpen && this.selectedMerchant === undefined && this.debounce === undefined;
-    if (ready) {
-      const visible: Array<DiscoveryEntry> = this.cards.slice(Math.max(0, this.visibleFirst), this.visibleLast + 1);
-      ready = visible.length > 0 && visible.every((entry: DiscoveryEntry): boolean =>
-        entry.coverUrl.length > 0 ? this.decodedCovers.get(entry.card.id) === entry.coverUrl :
-          entry.card.primaryPhotoLoadFailed === true || entry.card.primaryPhotoResolved === true || entry.card.photoPath.length === 0);
-    }
-    if (this.idleMotionReady !== ready) this.idleMotionReady = ready;
-  }
-  private coverDecoded(id: string, url: string): void {
-    const entry: DiscoveryEntry | undefined = this.cards.find((value: DiscoveryEntry): boolean => value.card.id === id);
-    if (!this.active || entry === undefined || entry.coverUrl !== url) return;
-    this.decodedCovers.set(id, url); this.syncIdleMotion();
-  }
   private stopResultMotion(): void {
     const options: AnimateParam = { duration: 0 };
     this.getUIContext().animateTo(options, (): void => { this.resultOpacity = 1; this.resultOffset = 0; });
@@ -288,11 +269,10 @@ export struct DiscoveryFeed {
       this.cameraTarget = MapViewportStore.read(this.context(), owner); this.currentCamera = this.cameraTarget;
       void this.reload();
     }
-    this.syncIdleMotion();
   }
   private pause(destroying: boolean, keepCovers: boolean = false): void {
     this.cancelBottomPage();
-    this.motionObserver.stop(); this.motionActive = false; this.idleMotionReady = false; this.scrolling = false;
+    this.motionObserver.stop(); this.motionActive = false; this.scrolling = false;
     this.stopResultMotion();
     if (!this.active) return;
     console.info('[DiscoveryFeed] event=pause viewGeneration=' + this.listGeneration);
@@ -334,7 +314,7 @@ export struct DiscoveryFeed {
   }
   private onRevisionChanged(): void {
     if (!this.active) return;
-    this.setPanel('NONE'); this.decodedCovers.clear();
+    this.setPanel('NONE');
     DiscoveryFeedState.clear(); this.listGeneration++; this.mapGeneration++; this.closeMerchant();
     if (this.owner !== this.viewer()) {
       this.owner = this.viewer(); this.cards = []; this.previousCards = []; this.previousResultRegion = undefined;
@@ -430,7 +410,7 @@ export struct DiscoveryFeed {
     this.feedLoadStartedAt = Date.now();
     this.loadFailed = false; this.featureNotReady = false;
     this.loading = true; this.loadingMore = false; this.loadMoreFailed = false; this.hydrationRunning = false; this.hydratedIds.clear(); this.failedPhotoIds.clear(); this.loadingPhotoIds.clear(); this.nextCursor = '';
-    if (!retain) { this.cards = []; this.decodedCovers.clear(); }
+    if (!retain) { this.cards = []; }
     this.stopResultMotion(); this.status = retain ? '正在刷新好味道…' : '正在加载推荐…';
     try {
       const result: DiscoveryCardPage = await this.queryCards(query, '');
@@ -466,14 +446,14 @@ export struct DiscoveryFeed {
         this.nextCursor = retainedCursor;
         this.status = stage47ErrorText(failure as Object, '刷新失败，当前推荐已保留。');
       } else if (invalidatesProtectedPage(failure as Object)) {
-        DiscoveryFeedState.clear(); this.cards = []; this.decodedCovers.clear(); this.submittedQuery = undefined;
+        DiscoveryFeedState.clear(); this.cards = []; this.submittedQuery = undefined;
       }
       if (this.featureNotReady) {
         DiscoveryFeedState.clear(); this.cards = [];
         if (this.capabilities.searchEnabled || this.capabilities.mapEnabled) this.onUnavailable();
       }
       if (!retain || invalidatesProtectedPage(failure as Object)) this.status = stage47ErrorText(failure as Object, '推荐加载失败，请稍后重试。');
-    } finally { if (this.current(generation)) { this.loading = false; this.scheduleHomepagePrefetch(generation); this.syncIdleMotion(); this.scheduleBottomPage(generation); } }
+    } finally { if (this.current(generation)) { this.loading = false; this.scheduleHomepagePrefetch(generation); this.scheduleBottomPage(generation); } }
   }
   private cancelBottomPage(): void {
     if (this.bottomPageTimer !== undefined) clearTimeout(this.bottomPageTimer);
@@ -519,11 +499,10 @@ export struct DiscoveryFeed {
         this.status = stage47ErrorText(failure as Object, '推荐暂未开放。');
       }
       else this.status = stage47ErrorText(failure as Object, '推荐加载失败。');
-    } finally { if (this.current(generation)) { this.loadingMore = false; this.scheduleHomepagePrefetch(generation); this.syncIdleMotion(); this.scheduleBottomPage(generation); } }
+    } finally { if (this.current(generation)) { this.loadingMore = false; this.scheduleHomepagePrefetch(generation); this.scheduleBottomPage(generation); } }
   }
   private async hydrateVisible(first: number, last: number): Promise<void> {
     this.visibleFirst = first; this.visibleLast = last;
-    this.syncIdleMotion();
     if (this.hydrationRunning || !this.active || !this.navigationVisible || !this.appActive) return;
     const generation: number = this.listGeneration;
     const chosen: Array<FoodCard> = this.cards.slice(Math.max(0, first), Math.min(this.cards.length, last + 1))
@@ -531,7 +510,6 @@ export struct DiscoveryFeed {
     if (chosen.length === 0) { this.scheduleHomepagePrefetch(generation); return; }
     console.info('[DiscoveryFeed] event=hydrate viewGeneration=' + generation + ' count=' + chosen.length + ' first=' + first + ' last=' + last);
     this.hydrationRunning = true; const changed: Array<string> = [];
-    this.syncIdleMotion();
     for (const card of chosen) this.loadingPhotoIds.add(card.id);
     try {
       if (!this.current(generation)) return;
@@ -560,7 +538,6 @@ export struct DiscoveryFeed {
         for (const card of chosen) this.loadingPhotoIds.delete(card.id);
         if (changed.length > 0 || this.visibleFirst !== first || this.visibleLast !== last || this.cards.slice(this.visibleFirst, this.visibleLast + 1).some((entry: DiscoveryEntry): boolean => !this.hydratedIds.has(entry.card.id) && !this.failedPhotoIds.has(entry.card.id))) void this.hydrateVisible(this.visibleFirst, this.visibleLast);
         else this.scheduleHomepagePrefetch(generation);
-        this.syncIdleMotion();
       }
     }
   }
@@ -570,12 +547,10 @@ export struct DiscoveryFeed {
     const signature: string = this.cards.map((entry: DiscoveryEntry): string => this.prefetchCardKey(entry.card)).join('|');
     if (this.prefetchGeneration === generation && this.prefetchCompletedSignature === signature) return;
     this.prefetchRunning = true;
-    this.syncIdleMotion();
     void this.prefetchHomepage(generation).finally((): void => {
       this.prefetchRunning = false;
       // A refresh may replace the generation while a background request is settling.
       if (generation !== this.listGeneration) this.scheduleHomepagePrefetch(this.listGeneration);
-      this.syncIdleMotion();
     });
   }
   private deferPrefetch(generation: number): void {
@@ -584,7 +559,6 @@ export struct DiscoveryFeed {
       this.prefetchTimer = undefined;
       this.scheduleHomepagePrefetch(this.listGeneration);
     }, 400);
-    this.syncIdleMotion();
   }
   private prefetchCardKey(card: FoodCard): string { return card.id + ':' + (card.contentRevision || ''); }
   private async prefetchHomepage(generation: number): Promise<void> {
@@ -718,7 +692,6 @@ export struct DiscoveryFeed {
     this.keywordInput = value; this.listGeneration++; this.loading = false; this.loadingMore = false; this.nextCursor = ''; this.submittedQuery = undefined;
     if (this.debounce !== undefined) { clearTimeout(this.debounce); this.debounce = undefined; }
     this.debounce = setTimeout((): void => { this.debounce = undefined; if (this.active) this.submitSearch(false); }, 300);
-    this.syncIdleMotion();
   }
   private submitSearch(recordHistory: boolean = true): void {
     if (!this.capabilities.searchEnabled) return;
@@ -837,7 +810,7 @@ export struct DiscoveryFeed {
   private coverFailed(card: FoodCard): void {
     const currentEntry: DiscoveryEntry | undefined = this.cards.find((entry: DiscoveryEntry): boolean => entry.card.id === card.id);
     if (!this.active || currentEntry === undefined || (currentEntry.card !== card && currentEntry.card.contentRevision !== card.contentRevision)) return;
-    card = currentEntry.card; this.decodedCovers.delete(card.id);
+    card = currentEntry.card;
     card.photoUrl = ''; card.primaryPhotoLoadFailed = true; this.failedPhotoIds.add(card.id); this.hydratedIds.delete(card.id);
     this.cards = this.cards.map((entry: DiscoveryEntry): DiscoveryEntry => { const failed: DiscoveryEntry = { card, coverUrl: '', loadedAt: entry.loadedAt }; return entry.card.id === card.id ? failed : entry; });
   }
@@ -852,7 +825,6 @@ export struct DiscoveryFeed {
     this.getUIContext().animateTo(options, (): void => {
       this.categoriesOpen = panel === 'CATEGORIES'; this.filtersOpen = panel === 'FILTERS'; this.historyOpen = panel === 'HISTORY';
     });
-    this.syncIdleMotion();
   }
   private openFilters(): void {
     this.draftCategories = this.categories.slice(); this.draftSort = this.sort;
@@ -1134,26 +1106,25 @@ export struct DiscoveryFeed {
       }.layoutWeight(1).width('100%').padding(20).justifyContent(FlexAlign.Center)
     } else {
       WaterFlow({ scroller: this.resultScroller, footer: (): void => { this.paginationFooter(); } }) {
-        ForEach(this.cards, (entry: DiscoveryEntry, index: number) => {
+        LazyForEach(this.cardSource, (entry: DiscoveryEntry, index: number) => {
           FlowItem() {
             DiscoveryCard({ card: entry.card, coverUrl: entry.coverUrl, featured: index % 2 === 0, coverScale: this.coverScale(),
               marketStyle: true, motionEnabled: this.motionActive,
               selected: !this.showingPrevious && this.selectedMerchantId.length > 0 && entry.card.merchantId === this.selectedMerchantId,
-              onCoverDecoded: (id: string, url: string): void => this.coverDecoded(id, url),
               onCoverFailed: (): void => this.coverFailed(entry.card),
-              onRetry: (): void => { ImageRepository.retryUnavailableService(); this.failedPhotoIds.delete(entry.card.id); this.hydratedIds.delete(entry.card.id); this.decodedCovers.delete(entry.card.id); void this.hydrateVisible(index, index); },
+              onRetry: (): void => { ImageRepository.retryUnavailableService(); this.failedPhotoIds.delete(entry.card.id); this.hydratedIds.delete(entry.card.id); void this.hydrateVisible(index, index); },
               onOpen: (): void => this.openCard(entry.card) })
           }.width('100%')
         }, (entry: DiscoveryEntry): string => this.entryRenderKey(entry))
-      }.width('100%').layoutWeight(1).columnsTemplate(BreakpointSystem.columnsTemplate(this.windowBreakpoint))
+      }.width('100%').layoutWeight(1).cachedCount(4).columnsTemplate(BreakpointSystem.columnsTemplate(this.windowBreakpoint))
         .columnsGap(BreakpointSystem.CARD_GAP).rowsGap(BreakpointSystem.CARD_GAP).scrollBar(BarState.Off)
         .opacity(this.resultOpacity).translate({ y: this.resultOffset }).onAppear((): void => this.revealResults())
         .onAreaChange((_oldArea: Area, newArea: Area): void => {
           const width: number = Number(newArea.width);
           if (Number.isFinite(width) && width > 0 && this.waterfallWidthVp !== width) this.waterfallWidthVp = width;
         })
-        .onScrollStart((): void => { this.scrolling = true; this.syncIdleMotion(); })
-        .onScrollStop((): void => { this.scrolling = false; this.syncIdleMotion(); this.scheduleBottomPage(this.listGeneration); })
+        .onScrollStart((): void => { this.scrolling = true; })
+        .onScrollStop((): void => { this.scrolling = false; this.scheduleBottomPage(this.listGeneration); })
         .onReachEnd((): void => { void this.loadMore(true); })
         .onScrollIndex((first: number, last: number): void => {
           void this.hydrateVisible(first, last);
@@ -1178,7 +1149,7 @@ export struct DiscoveryFeed {
   }
   build() {
     Stack({ alignContent: Alignment.Bottom }) {
-      DiscoveryBackdrop({ idleMotion: this.idleMotionReady })
+      DiscoveryBackdrop()
       Column({ space: 4 }) {
         if (!this.expanded) {
           this.homeHeader();

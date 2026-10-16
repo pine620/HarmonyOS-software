@@ -12,6 +12,7 @@ import { PersonalPreviewLoader, PersonalPreviewRow, PersonalPreviewSource } from
 import { PersonalPreviewTile } from '../components/PersonalPreviewTile';
 import { ErrorDetail, errorText } from '../common/ErrorKit';
 import { ReadRequestOptions } from '../service/ReadScheduler';
+import { StateView } from '../common/StateViewUi';
 
 @Component
 export struct FavoriteCardsPage {
@@ -167,10 +168,12 @@ export struct FavoriteCardsPage {
               .fontColor($r('app.color.personal_surface')).onClick((): void => { void this.organize(); });
           }.width('100%').padding(16).backgroundColor($r('app.color.personal_surface')).borderRadius(16);
         }
-        if (this.busy && this.count === 0) { LoadingProgress().width(36).height(36).color($r('app.color.personal_action')); }
+        if (this.busy && this.count === 0) {
+          StateView({ kind: 'LOADING', palette: 'PERSONAL', title: '正在读取收藏…', skeletonRows: 3 });
+        }
         if (this.loaded && !this.busy && this.count === 0 && this.migration?.collectionReady === true) {
-          Text('还没有收藏，在详情页点亮 ❤️ 即可。')
-            .fontSize(14).fontColor($r('app.color.personal_muted')).width('100%').padding(20);
+          StateView({ kind: 'EMPTY', palette: 'PERSONAL', icon: 'food', title: '这里还空着',
+            hint: '在卡片详情点亮底部的「收藏」，喜欢的菜就会出现在这里。' });
         }
         List({ space: 10 }) {
           LazyForEach(this.source, (row: PersonalPreviewRow): void => {

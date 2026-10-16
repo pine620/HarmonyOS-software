@@ -203,7 +203,7 @@ export class CardInteractionController {
   chooseReaction(reaction: CardReactionType): void {
     if (!this.current() || this.view().reactionBusy) return;
     if (this.confirmed === undefined) { void this.refreshState(); return; }
-    if (!this.confirmed.reactionsEnabled) { this.message = this.confirmed.reactionsReason || '赞踩暂未开放。'; this.emit(); return; }
+    if (!this.confirmed.reactionsEnabled) { this.message = this.confirmed.reactionsReason || '点赞与不推荐暂未开放。'; this.emit(); return; }
     const started: number = Date.now();
     this.desiredReaction = this.confirmed.myReaction === reaction ? '' : reaction;
     this.message = ''; this.emit();
@@ -311,7 +311,7 @@ export class CardInteractionController {
     if (state === undefined) {
       const restored: InteractionState = { protocolVersion: 3, cardId: this.cardId, myReaction: result.myReaction,
         viewerFavorited: result.viewerFavorited, writeVersion: result.writeVersion, reactionsEnabled: false,
-        reactionsReason: '请刷新赞踩状态。', collectionEnabled: false, collectionReady: false, collectionReason: '请刷新收藏状态。' };
+        reactionsReason: '请刷新点赞状态。', collectionEnabled: false, collectionReady: false, collectionReason: '请刷新收藏状态。' };
       this.confirmed = restored;
     }
     if (state !== undefined && result.writeVersion >= state.writeVersion) {
