@@ -92,12 +92,6 @@ interface UiErrorDetail {
   message?: string;
 }
 
-export function featureUnavailable(error: Object): boolean {
-  if (error === null || error === undefined) return false;
-  const detail: UiErrorDetail = error as UiErrorDetail;
-  return detail.code === 'FEATURE_NOT_READY';
-}
-
 export function invalidatesProtectedPage(error: Object): boolean {
   if (error === null || error === undefined) return false;
   const detail: UiErrorDetail = error as UiErrorDetail;

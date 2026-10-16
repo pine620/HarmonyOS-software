@@ -7,6 +7,8 @@ import { AuthSessionStore } from '../service/AuthSessionStore';
 import { CloudBusinessError } from '../service/CloudReadErrors';
 import { ErrorDetail, errorText } from '../common/ErrorKit';
 import { ModeFieldCache } from '../service/ModeFieldCache';
+import { CardReportRepository } from '../repository/CardReportRepository';
+import { CardReportAccess } from '../model/CardReportModels';
 
 // Pack 4.3 (2026-10-15): split out of ProfileSubPages.ets without behaviour changes.
 
@@ -39,16 +41,33 @@ export struct ProfileSettingsPage {
   @State emailBindingVerifyCode: string = '';
   @State emailBindingCodeBusy: boolean = false;
   @State emailBindingCodeCountdown: number = 0;
+  // Only accounts on the server reviewer allowlist see the review entry; the server still checks every call.
+  @State reviewerAllowed: boolean = false;
+  private reviewAccessGeneration: number = 0;
   private deleteCodeTimer: number | undefined = undefined;
   private emailBindingCodeTimer: number | undefined = undefined;
 
   aboutToAppear(): void {
     this.active = true;
     this.profile = AuthService.profile();
+    void this.loadReviewerAccess();
+  }
+
+  private async loadReviewerAccess(): Promise<void> {
+    const generation: number = ++this.reviewAccessGeneration;
+    this.reviewerAllowed = false;
+    if (this.profile === undefined) return;
+    try {
+      const access: CardReportAccess = await new CardReportRepository().access();
+      if (this.active && generation === this.reviewAccessGeneration) this.reviewerAllowed = access.allowed === true;
+    } catch (_error) {
+      // Treat any failure as "not a reviewer"; the entry stays hidden.
+    }
   }
 
   aboutToDisappear(): void {
     this.active = false;
+    this.reviewAccessGeneration++;
     if (this.deleteCodeTimer !== undefined) {
       clearTimeout(this.deleteCodeTimer);
       this.deleteCodeTimer = undefined;
@@ -487,8 +506,10 @@ export struct ProfileSettingsPage {
               Column() {
                 this.settingsRow($r('sys.symbol.lock_shield'), '权限与隐私', '位置、通知与桌面卡片同步', true, false, false,
                   (): void => { if (!this.busy) this.pathStack.pushPathByName('profile-privacy', null); })
-                this.settingsRow($r('sys.symbol.doc_text'), '管理员系统', '卡片举报审核', false, false, false,
-                  (): void => this.pathStack.pushPathByName('card-review-reports', null))
+                if (this.reviewerAllowed) {
+                  this.settingsRow($r('sys.symbol.doc_text'), '管理员系统', '卡片举报审核', false, false, false,
+                    (): void => this.pathStack.pushPathByName('card-review-reports', null))
+                }
               }
               .width('100%').padding({ left: 14, right: 14 }).borderRadius(16).backgroundColor($r('app.color.personal_surface'))
               .border({ width: 1.2, color: $r('app.color.personal_line'), style: BorderStyle.Dashed })

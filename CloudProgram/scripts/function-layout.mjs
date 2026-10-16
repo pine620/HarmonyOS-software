@@ -4,7 +4,6 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 export const functionDefinitions = {
   'shike-auth': { entry: 'shikeAuth', className: 'ShikeAuth' },
   'shike-service': { entry: 'shikeService', className: 'ShikeService' },
-  'shike-location': { entry: 'shikeLocation', className: 'ShikeLocation' },
   'shike-media': { entry: 'shikeMedia', className: 'ShikeMedia', extra: ['cover-worker.js'] },
   'shike-image': { entry: 'shikeImage' },
   'shike-maintenance': { entry: 'shikeMaintenance', extraMedia: true },

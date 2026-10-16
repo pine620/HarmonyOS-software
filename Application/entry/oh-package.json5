@@ -12,8 +12,6 @@
     "@hw-agconnect/remoteconfig-ohos": "1.1.2",
     "@shike/cloud-objects": "file:../cloud_objects"
   },
-  "devDependencies": {
-    "@ohos/hypium": "^1.0.28"
-  },
+  "devDependencies": {},
   "dynamicDependencies": {}
 }

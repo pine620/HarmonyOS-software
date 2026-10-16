@@ -96,11 +96,6 @@ export interface UserIdRequest {
   targetUid: string;
 }
 
-export interface ReportUserRequest {
-  targetUid: string;
-  reason: string;
-}
-
 export interface ConversationSummary {
   id: string;
   friend: SocialUser;

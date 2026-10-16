@@ -1,13 +1,11 @@
 import { PagePaletteName, PagePaletteRoute, pageColor } from '../common/PagePaletteUi';
 import { EmailLoginPage } from '../components/EmailLoginPage';
-import { MyContentStatusPage } from './MyContentStatusPage';
 import { DeletedCardsPage } from './DeletedCardsPage';
 import { CardReportListPage } from './CardReportListPage';
 import { CardReportDetailPage } from './CardReportDetailPage';
 import { CardReportRoute } from '../model/CardReportModels';
 import { ReportContentPage } from './ReportContentPage';
 import { ReportRoute } from '../model/ContentStatusModels';
-import { CardIdRequest } from '../model/CloudContracts';
 import { RandomFoodPage } from './RandomFoodPage';
 import { FoodChoiceHistoryPage } from './FoodChoiceHistoryPage';
 import { DraftsPage } from './SocialDiscoveryPages';
@@ -536,14 +534,10 @@ struct Index {
       CardReportListPage({ admin: true })
     } else if ((routeName === 'report-detail' || routeName === 'card-review-detail') && routeParam !== null && routeParam !== undefined) {
       CardReportDetailPage({ reportId: (routeParam as CardReportRoute).reportId, admin: routeName === 'card-review-detail' })
-    } else if (routeName === 'review-requests') {
-      MyContentStatusPage({ scope: 'CORRECTIONS' })
     } else if (routeName === 'deleted-cards') {
       DeletedCardsPage()
     } else if (routeName === 'report-content' && routeParam !== null && routeParam !== undefined) {
       ReportContentPage({ targetType: (routeParam as ReportRoute).targetType, targetId: (routeParam as ReportRoute).targetId })
-    } else if (routeName === 'review-correction' && routeParam !== null && routeParam !== undefined) {
-      NavDestination() { CreateCardPage({ palette: 'PERSONAL', editCardId: (routeParam as CardIdRequest).cardId, accountUid: this.profile === undefined ? '' : this.profile.uid }) }.attributeModifier(new AppDestinationStyle('修改内容', $r('app.color.personal_canvas'), $r('app.color.personal_header'), 'PERSONAL'))
     } else if (routeName === 'random-food') {
       NavDestination() {
         RandomFoodPage({ palette: this.choicePalette(routeParam), navigationVisible: this.randomFoodVisible,

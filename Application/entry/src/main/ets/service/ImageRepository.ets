@@ -124,9 +124,6 @@ export class ImageRepository {
   static getCardReportPhotoUrl(context: common.Context, mediaId: string, reportId: string, admin: boolean, cover: boolean, mayContinue: MediaRequestGuard): Promise<string> {
     return ImageRepository.subscribe(context, mediaId, admin ? 'REPORT' : 'PUBLIC', cover ? 'COVER_480' : 'ORIGINAL', admin ? reportId : '', 'high', mayContinue, true);
   }
-  static getReviewDownloadUrl(context: common.Context, mediaId: string, mayContinue: MediaRequestGuard): Promise<string> {
-    return ImageRepository.subscribe(context, mediaId, 'REVIEW', 'ORIGINAL', '', 'high', mayContinue, true);
-  }
   private static async subscribe(context: common.Context, mediaId: string, mode: ImageMode, variant: ImageVariant, revisionId: string,
     priority: MediaPriority, mayContinue: MediaRequestGuard | undefined, force: boolean, bucket: string = '', path: string = '', readCycle: number = 0): Promise<string> {
     const session: number = AuthSessionStore.generation(); const epoch: number = ImageDescriptors.epoch();

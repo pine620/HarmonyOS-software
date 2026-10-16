@@ -1,10 +1,9 @@
 import { PagePaletteName, pageColor } from '../common/PagePaletteUi';
-import { NoteActionStyle, WarmNoteBackdrop, notePanelTransition } from '../common/WarmNoteUi';
+import { WarmNoteBackdrop, notePanelTransition } from '../common/WarmNoteUi';
 import { RandomFoodMotionObserver } from '../common/RandomFoodUi';
 import { ReportRoute } from '../model/ContentStatusModels';
 import { AppDestinationStyle, AppPageSurface } from '../common/AppPageUi';
 import { StateView } from '../common/StateViewUi';
-import { SecondaryActionStyle } from '../common/Stage47Ui';
 import { pasteboard } from '@kit.BasicServicesKit';
 import { MerchantRepository } from '../repository/MerchantRepository';
 import { MerchantResponse } from '../model/MerchantModels';

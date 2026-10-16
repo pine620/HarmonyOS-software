@@ -1,10 +1,10 @@
 import { common } from '@kit.AbilityKit';
 import { ReadRequestOptions } from '../service/ReadScheduler';
 import {
-  CardActionResponse, CardDetailRequest, CardIdRequest, CardPhoto, EmptyRequest, FoodCard,
-  MyCardsResponse, NearbyCardsRequest, NearbyCardsResponse, OperationResponse,
+  CardDetailRequest, CardIdRequest, CardPhoto, EmptyRequest, FoodCard,
+  MyCardsResponse, NearbyCardsResponse, OperationResponse,
   PrepareCardPhotoRequest, PrepareCardPhotoResponse, PublishCardRequest,
-  PublishCardResponse, PublicCardsRequest, ToggleCardActionRequest
+  PublishCardResponse, PublicCardsRequest
 } from '../model/CloudContracts';
 import { CloudBusinessError, ReadCancelledError } from '../service/CloudReadErrors';
 import { AuthService } from '../service/AuthService';
@@ -107,31 +107,6 @@ export class CardRepository {
     }
   }
 
-  /**
-   * Fetches nearby card metadata without blocking the first waterfall frame on
-   * every signed download URL. The list service remains the authenticated
-   * authority for the rounded-coordinate request.
-   */
-  async listNearbyMetadata(context: common.Context, request: NearbyCardsRequest,
-    mayContinue: () => boolean = (): boolean => true): Promise<NearbyCardsResponse> {
-    if (!mayContinue()) throw new Error('附近请求已失效。');
-    await AuthService.ensureSession(context);
-    if (!mayContinue()) throw new Error('附近请求已失效。');
-    const traceTaskId: number = NearbyPerformanceTrace.start('shike.nearby.cloud_list');
-    try {
-      return await CloudGateway.callAuthenticated<NearbyCardsResponse>('list-nearby-cards', request);
-    } finally {
-      NearbyPerformanceTrace.finish('shike.nearby.cloud_list', traceTaskId);
-    }
-  }
-
-  /** Compatibility full-list caller for nearby cards. */
-  async listNearby(context: common.Context, request: NearbyCardsRequest): Promise<NearbyCardsResponse> {
-    const response: NearbyCardsResponse = await this.listNearbyMetadata(context, request);
-    await this.hydrateNearbyPrimaryPhotoUrls(context, response.cards);
-    return response;
-  }
-
   async detail(context: common.Context, cardId: string, options: ReadRequestOptions = {}): Promise<FoodCard> {
     const request: CardDetailRequest = { cardId };
     const traceTaskId: number = NearbyPerformanceTrace.start('shike.detail.metadata');
@@ -154,14 +129,6 @@ export class CardRepository {
     return result.cards;
   }
 
-  async myFavoriteCards(context: common.Context): Promise<Array<FoodCard>> {
-    await AuthService.ensureSession(context);
-    const request: EmptyRequest = {};
-    const result = await CloudGateway.callAuthenticated<MyCardsResponse>('list-my-favorite-cards', request);
-    await Promise.all(result.cards.map((card: FoodCard): Promise<void> => this.resolvePublicMediaUrls(context, card)));
-    return result.cards;
-  }
-
   async preparePhoto(context: common.Context, request: PrepareCardPhotoRequest): Promise<PrepareCardPhotoResponse> {
     await AuthService.ensureSession(context);
     return CloudGateway.callAuthenticated<PrepareCardPhotoResponse>('prepare-card-photo', request);
@@ -170,11 +137,6 @@ export class CardRepository {
   async publish(context: common.Context, request: PublishCardRequest): Promise<PublishCardResponse> {
     await AuthService.ensureSession(context);
     return CloudGateway.callAuthenticated<PublishCardResponse>('publish-card', request);
-  }
-
-  async toggleCardAction(context: common.Context, request: ToggleCardActionRequest): Promise<CardActionResponse> {
-    await AuthService.ensureSession(context);
-    return CloudGateway.callAuthenticated<CardActionResponse>('toggle-card-action', request);
   }
 
   async deleteOwn(context: common.Context, cardId: string): Promise<void> {

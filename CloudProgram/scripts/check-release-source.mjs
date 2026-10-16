@@ -68,30 +68,34 @@ for(const [fieldName,fieldType] of [['friendVisibilitySince','Date'],['friendVis
   check('preserve deployed field FoodCard.'+fieldName,!!field&&JSON.stringify(fieldShape([field]))===JSON.stringify(fieldShape([expected])));
 }
 const service='CloudProgram/cloudfunctions/shike-service/';
-const modules=['runtime.js','stage1-services.js','stage2-services.js','stage3-services.js','stages47-common.js','stage6-services.js','random-food-services.js','stage7-services.js','food-ranking-services.js','personal-collections.js','content-status-services.js','card-report-services.js','lifecycle-services.js','authentication-cleanup.js'];
+const modules=['runtime.js','stage1-services.js','stage2-services.js','stage3-services.js','stages47-common.js','stage6-services.js','random-food-services.js','stage7-services.js','food-ranking-services.js','personal-collections.js','card-report-services.js','lifecycle-services.js','authentication-cleanup.js'];
 for(const module of modules){
   const file=join(root,service,module);check('module '+module,existsSync(file));if(!existsSync(file))continue;
   const result=spawnSync(process.execPath,['--check',file],{encoding:'utf8',shell:false});
   check('syntax '+module,!result.error&&result.status===0,(result.stderr||'').trim());
 }
-const methods={listMyReports:'list-my-reports',reportMerchant:'report-merchant',listOwnReviewRequests:'list-own-review-requests',listDeletedCards:'list-deleted-cards',restoreDeletedCard:'restore-deleted-card',getReviewMedia:'get-review-media'};
+const methods={listDeletedCards:'list-deleted-cards',restoreDeletedCard:'restore-deleted-card',getReviewMedia:'get-review-media'};
 Object.assign(methods,{getCardReportAccess:'get-card-report-access',getCardReportContext:'get-card-report-context',submitCardReport:'submit-card-report',listMyCardReports:'list-my-card-reports',getMyCardReport:'get-my-card-report',listCardReviewReports:'list-card-review-reports',getCardReviewReport:'get-card-review-report',resolveCardReport:'resolve-card-report'});
 Object.assign(methods,{getRandomFoodPool:'get-random-food-pool',getRandomFoodCards:'get-random-food-cards',saveFoodChoice:'save-food-choice',listFoodChoices:'list-food-choices',deleteFoodChoice:'delete-food-choice'});
-Object.assign(methods,{getCardPreviews:'get-card-previews',listPersonalCollection:'list-personal-collection',getPersonalCollectionMigration:'get-personal-collection-migration',startPersonalCollectionMigration:'start-personal-collection-migration',resumePersonalCollectionMigration:'resume-personal-collection-migration',setCardFavorite:'set-card-favorite',setCardWanted:'set-card-wanted',getStage47Capabilities:'get-stage47-capabilities',getMealCandidates:'get-meal-candidates',createMealPoll:'create-meal-poll',getMealPoll:'get-meal-poll',addMealPollOption:'add-meal-poll-option',voteMealPoll:'vote-meal-poll',closeMealPoll:'close-meal-poll',cancelMealPoll:'cancel-meal-poll',stopMealPollOptions:'stop-meal-poll-options',getUserPage:'get-user-page',listFoodRankings:'list-food-rankings',setCardReactionV2:'set-card-reaction-v2'});
-const entry=source(service+'shikeService.ts'),runtime=source(service+'runtime.js'),gateway=source('Application/entry/src/main/ets/service/CloudGateway.ets');
+Object.assign(methods,{getCardPreviews:'get-card-previews',listPersonalCollection:'list-personal-collection',getPersonalCollectionMigration:'get-personal-collection-migration',startPersonalCollectionMigration:'start-personal-collection-migration',resumePersonalCollectionMigration:'resume-personal-collection-migration',setCardFavorite:'set-card-favorite',getMealCandidates:'get-meal-candidates',createMealPoll:'create-meal-poll',getMealPoll:'get-meal-poll',addMealPollOption:'add-meal-poll-option',voteMealPoll:'vote-meal-poll',closeMealPoll:'close-meal-poll',cancelMealPoll:'cancel-meal-poll',stopMealPollOptions:'stop-meal-poll-options',getUserPage:'get-user-page',listFoodRankings:'list-food-rankings',setCardReactionV2:'set-card-reaction-v2'});
+const entry=source(service+'shikeService.ts'),runtime=source(service+'runtime.js'),gateway=source('Application/entry/src/main/ets/service/CloudGateway.ets'),routes=source('Application/entry/src/main/ets/service/CloudRoutes.ets');
 const retiredOperations=['get-stage89-capabilities','list-moderation-queue','get-moderation-detail','decide-moderation','list-lifecycle-jobs','get-lifecycle-job','retry-lifecycle-job','confirm-auth-cleanup','run-lifecycle-job','list-moderation-merchants','moderate-merchant','reconcile-merchant-counters','list-moderation-revisions','moderate-card-revision','start-migration-job','process-migration-job','get-migration-status','list-maintenance-jobs','get-maintenance-job','retry-maintenance-job','validate-lifecycle-job','process-friend-cleanup-job','list-moderation-cards','moderate-card','list-notifications','mark-notification-read','mark-all-notifications-read','open-notification','get-taste-preference','update-taste-preference','clear-taste-preference','list-personalized-recommendations',
   'list-food-lists','create-food-list','update-food-list','delete-food-list','list-food-list-items','add-food-list-item','remove-food-list-item',
   'reorder-food-list-items','get-personal-food-state','update-personal-food-state','list-friend-rankings','list-merchant-rankings','list-received-comments',
-  'create-card-comment','delete-card-comment','toggle-comment-reaction'];
+  'create-card-comment','delete-card-comment','toggle-comment-reaction',
+  // 2026-10-16: no client caller.
+  'report-card','report-user','report-merchant','set-card-reaction','get-card-revision','get-stage47-capabilities','toggle-card-action',
+  'list-my-favorite-cards','list-my-reports','list-own-review-requests','check-location'];
 for(const operation of retiredOperations)check('retired contract '+operation,
-  !runtime.includes("'"+operation+"':")&&!entry.includes("executeCloudOperation('"+operation+"'")&&!gateway.includes("case '"+operation+"':"));
-for(const module of ['stage4-services.js','stage5-services.js'])check('retired module '+module,!existsSync(join(root,service,module)));
-for(const [method,operation]of Object.entries(methods))check('contract '+operation,entry.includes(method+'(input: CloudEnvelope)')&&entry.includes("executeCloudOperation('"+operation+"'")&&runtime.includes("'"+operation+"':")&&gateway.includes("case '"+operation+"':")&&gateway.includes("invokeStage47('"+method+"'"));
+  !runtime.includes("'"+operation+"':")&&!entry.includes("executeCloudOperation('"+operation+"'")&&!gateway.includes("case '"+operation+"':")&&!routes.includes("['"+operation+"',"));
+for(const module of ['stage4-services.js','stage5-services.js','content-status-services.js'])check('retired module '+module,!existsSync(join(root,service,module)));
+for(const [method,operation]of Object.entries(methods))check('contract '+operation,entry.includes(method+'(input: CloudEnvelope)')&&entry.includes("executeCloudOperation('"+operation+"'")&&runtime.includes("'"+operation+"':")&&routes.includes("['"+operation+"', '"+method+"',"));
 for(const name of ['content-policy.js','media-descriptor.js','read-errors.js','release-info.js','image-models.js','image-reader.js','card-review-access.js']) {
   const path='CloudProgram/cloudfunctions/shared/'+name;
   check('shared source '+name,existsSync(join(root,path)));
 }
-for(const folder of ['shike-media','shike-service','shike-location']) for(const name of ['content-policy.js','media-descriptor.js','read-errors.js'])
+check('retired function shike-location',!existsSync(join(cloud,'cloudfunctions','shike-location')));
+for(const folder of ['shike-media','shike-service']) for(const name of ['content-policy.js','media-descriptor.js','read-errors.js'])
   check('no duplicate '+folder+'/'+name,!existsSync(join(cloud,'cloudfunctions',folder,name)));
 for(const path of ['package-cloud-object.mjs','package-maintenance.mjs'])
   check('shared packager '+path,source('CloudProgram/scripts/'+path).includes('packageFunction'));
@@ -110,7 +114,7 @@ check('worker-only card history entry',source(worker+'shikeMaintenance.js').incl
   runtime.includes('stage1.cardHistoryMaintenance(payload, source)')&&
   !entry.includes('maintainCardHistory(')&&!gateway.includes("case 'card-history-maintenance':"));
 check('no shipped triggers',(config.triggers||[]).length===0,'AGC timer must be configured and verified separately; this file intentionally contains no provider-specific trigger definition.');
-for(const path of [worker+'shikeMaintenance.js','CloudProgram/cloudfunctions/shared/image-reader.js','CloudProgram/cloudfunctions/shared/content-policy.js','CloudProgram/cloudfunctions/shike-image/shikeImage.js','CloudProgram/cloudfunctions/shike-media/runtime.js','CloudProgram/cloudfunctions/shike-media/cover-converter.js','CloudProgram/cloudfunctions/shike-media/cover-worker.js','CloudProgram/cloudfunctions/shike-location/runtime.js','CloudProgram/scripts/package-functions.mjs','CloudProgram/scripts/check-artifact.mjs']){
+for(const path of [worker+'shikeMaintenance.js','CloudProgram/cloudfunctions/shared/image-reader.js','CloudProgram/cloudfunctions/shared/content-policy.js','CloudProgram/cloudfunctions/shike-image/shikeImage.js','CloudProgram/cloudfunctions/shike-media/runtime.js','CloudProgram/cloudfunctions/shike-media/cover-converter.js','CloudProgram/cloudfunctions/shike-media/cover-worker.js','CloudProgram/scripts/package-functions.mjs','CloudProgram/scripts/check-artifact.mjs']){
   const result=spawnSync(process.execPath,['--check',join(root,path)],{encoding:'utf8',shell:false});check('syntax '+path,!result.error&&result.status===0,(result.stderr||'').trim());
 }
 const lifecycle=source(service+'lifecycle-services.js');

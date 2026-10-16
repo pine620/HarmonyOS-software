@@ -2778,18 +2778,6 @@ async function friendProfile(uid, payload, env) {
     coverPath: page.profile.coverPath || '', coverBucket: page.profile.coverBucket || '' }, cards: page.cards, nextPageToken: page.nextCursor };
 }
 
-async function myFavoriteCards(uid, env) {
-  const actions = await collection(env, 'CardAction').query().equalTo('actorUid', uid).equalTo('kind', 'FAVORITE')
-    .orderByDesc('createdAt').orderByAsc('id').limit(100).get();
-  const cards = [];
-  for (const action of actions) {
-    const row = await one(collection(env, 'FoodCard').query().equalTo('id', String(action.cardId || '')));
-    const card = await readCardIfAllowed(row, env, 0, true, uid);
-    if (card) cards.push(card);
-  }
-  return { cards };
-}
-
 function socialPair(uid, otherUid) {
   const first = String(uid || '');
   const second = String(otherUid || '');
@@ -3933,22 +3921,6 @@ async function removeGroupMember(uid, payload, env) {
   return { success: true };
 }
 
-function cardActionKind(value) {
-  const kind = String(value || '');
-  if (kind !== 'LIKE' && kind !== 'FAVORITE') throw new Error('不支持的帖子互动类型。');
-  return kind;
-}
-
-async function toggleCardAction(uid, payload, env) {
-  const kind = cardActionKind(payload.action);
-  return kind === 'LIKE' ? stage1.mutateReaction(uid, payload, env, true) : stage1.toggleFavorite(uid, payload, env);
-}
-
-async function reportCard(uid, payload, env) {
-  if (!payload.requestId || !payload.reasonType) throw accessError('请更新食刻后使用新版卡片举报表单。', 'REPORT_CLIENT_UPDATE_REQUIRED');
-  return cardReports.submit(uid, payload, env);
-}
-
 async function deleteOwnCard(uid, payload, env) {
   return stage1.softDelete(uid, payload, env);
 }
@@ -4016,7 +3988,6 @@ const contentLifecycleContext = { ...stages47Context, refreshPublishCount,
   deleteAuthentication: (job,binding,env) => authenticationCleanup.remove(job,binding,env),
   processLegacyJob: async (job,env) => job.jobType==='PURGE_CONVERSATION' ? processFriendCleanup(job.jobId,env) : stage1.processMigration({jobId:job.jobId},env)
 };
-const contentStatus = require('./content-status-services').createContentStatusServices(contentLifecycleContext);
 const cardReports = require('./card-report-services').createCardReportServices(contentLifecycleContext);
 const lifecycle = require('./lifecycle-services').createLifecycleServices(contentLifecycleContext);
 async function getReviewMedia(uid, payload, env) {
@@ -4038,9 +4009,6 @@ const operations = {
   'get-card-review-report': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return cardReports.detail(uid,payload,env,true); },
   'resolve-card-report': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return cardReports.resolve(uid,payload,env); },
 
-  'list-my-reports': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return contentStatus.reports(uid,payload,env); },
-  'report-merchant': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); throw accessError('当前仅受理卡片内容举报。', 'REPORT_TYPE_UNSUPPORTED'); },
-  'list-own-review-requests': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return contentStatus.ownReviewQueue(uid,payload,env); },
   'list-deleted-cards': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return lifecycle.deleted(uid,payload,env); },
   'restore-deleted-card': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return lifecycle.restore(uid,payload,env); },
   'get-review-media': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return getReviewMedia(uid,payload,env); },
@@ -4058,7 +4026,6 @@ const operations = {
   'get-card-interaction-receipt': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env, true); return cardInteractions.receipt(uid, payload, env); },
   'get-card-interaction-counts': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env, true); return cardInteractions.counts(uid, payload, env); },
   'set-card-favorite': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return personalCollections.set(uid,payload,env,'FAVORITE'); },
-  'get-stage47-capabilities': async ({ accessToken, payload }, env) => { const uid = accessToken ? await verifiedUid(accessToken, env, true) : ''; return stage7.capabilities(uid,env); },
   'get-random-food-pool': async ({ accessToken, payload }, env) => { const uid = accessToken ? await verifiedUid(accessToken, env, true) : ''; return randomFood.pool(uid,payload,env); },
   'get-random-food-cards': async ({ accessToken, payload }, env) => { const uid = accessToken ? await verifiedUid(accessToken, env, true) : ''; return randomFood.cards(uid,payload,env); },
   'save-food-choice': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return randomFood.saveChoice(uid,payload,env); },
@@ -4091,9 +4058,7 @@ const operations = {
   'get-merchant': async ({ accessToken, payload }, env) => stage2.getMerchant(await verifiedUid(accessToken, env), payload, env),
   'get-card-edit-context': async ({ accessToken, payload }, env) => stage1.getEditContext(await verifiedUid(accessToken, env), payload, env),
   'get-revision-media': async ({ accessToken, payload }, env) => getRevisionMedia(await verifiedUid(accessToken, env), payload, env),
-  'set-card-reaction': async ({ accessToken, payload }, env) => stage1.mutateReaction(await verifiedUid(accessToken, env), payload, env),
   'submit-card-revision': async ({ accessToken, payload }, env) => stage1.submitRevision(await verifiedUid(accessToken, env), payload, env),
-  'get-card-revision': async ({ accessToken, payload }, env) => stage1.getRevision(await verifiedUid(accessToken, env), payload, env),
   'withdraw-card-revision': async ({ accessToken, payload }, env) => stage1.withdrawRevision(await verifiedUid(accessToken, env), payload, env),
   'complete-legacy-login': async ({ accessToken, payload }, env) =>
     completeLegacyLogin(accessToken, payload, env),
@@ -4120,7 +4085,6 @@ const operations = {
   'get-card-detail': async ({ accessToken, payload }, env) =>
     cardDetail(accessToken ? await verifiedUid(accessToken, env, true) : '', payload, env),
   'list-my-cards': async ({ accessToken }, env) => myCards(await verifiedUid(accessToken, env), env),
-  'list-my-favorite-cards': async ({ accessToken }, env) => myFavoriteCards(await verifiedUid(accessToken, env), env),
   'search-users': async ({ accessToken, payload }, env) => searchUsers(await verifiedUid(accessToken, env), payload, env),
   'list-friends': async ({ accessToken, payload }, env) =>
     listFriends(await verifiedUid(accessToken, env), payload, env),
@@ -4134,10 +4098,6 @@ const operations = {
     blockUser(await verifiedUid(accessToken, env), payload, env),
   'unblock-user': async ({ accessToken, payload }, env) =>
     unblockUser(await verifiedUid(accessToken, env), payload, env),
-  'report-user': async ({ accessToken }, env) => {
-    await verifiedUid(accessToken, env);
-    throw accessError('当前仅受理卡片内容举报；好友页可使用拉黑。', 'REPORT_TYPE_UNSUPPORTED');
-  },
   'remove-friend': async ({ accessToken, payload }, env) => removeFriend(await verifiedUid(accessToken, env), payload, env),
   'list-conversations': async ({ accessToken, payload }, env) =>
     listConversations(await verifiedUid(accessToken, env, true), payload, env),
@@ -4167,8 +4127,6 @@ const operations = {
     unregisterServiceCardForms(await verifiedUid(accessToken, env), payload, env),
   'push-service-card-update': async ({ accessToken, payload }, env) =>
     pushServiceCardUpdate(await verifiedUid(accessToken, env), payload, env),
-  'report-card': async ({ accessToken, payload }, env) => reportCard(await verifiedUid(accessToken, env), payload, env),
-  'toggle-card-action': async ({ accessToken, payload }, env) => toggleCardAction(await verifiedUid(accessToken, env), payload, env),
   'delete-own-card': async ({ accessToken, payload }, env) => deleteOwnCard(await verifiedUid(accessToken, env), payload, env),
   'delete-account-data': async ({ accessToken }, env) => cleanupAccount(await verifiedDeletionUid(accessToken, env), env, accessToken)
 };

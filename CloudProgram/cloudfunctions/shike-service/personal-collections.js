@@ -46,10 +46,6 @@ function createPersonalCollections(ctx) {
     const job = await txOne(tx, env, 'MaintenanceJob', 'jobId', jobId(uid));
     if (!job || job.status !== 'DONE') throw fail('收藏正在整理，请在我的收藏中继续。', 'COLLECTION_MIGRATING');
   }
-  async function assertLegacyFavoriteWritable(tx, uid, env) {
-    const job = await txOne(tx, env, 'MaintenanceJob', 'jobId', jobId(uid));
-    if (job) throw fail('私人清单已合并到收藏，请更新客户端。', 'CLIENT_UPDATE_REQUIRED');
-  }
   async function start(uid, env) {
     requireEnabled(env);
     const committed = await collection(env, 'MaintenanceJob').runTransaction({ apply: async tx => {
@@ -300,7 +296,6 @@ function createPersonalCollections(ctx) {
     if (Number(latestOwner.updatedAt) !== Number(owner.updatedAt)) throw fail('收藏已变化，请刷新。', 'CURSOR_STALE');
     return { items, nextCursor: page.next ? encode(signature, at, page.next) : '', migration };
   }
-  return { enabled, status, start, resume, set, flags, previews, list, assertWritable,
-    assertLegacyFavoriteWritable };
+  return { enabled, status, start, resume, set, flags, previews, list, assertWritable };
 }
 module.exports = { createPersonalCollections };

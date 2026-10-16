@@ -108,9 +108,6 @@ export class ShikeContent {
   setCardFavorite(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('set-card-favorite', input);
   }
-  getStage47Capabilities(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('get-stage47-capabilities', input);
-  }
   getUserPage(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('get-user-page', input);
   }
@@ -153,14 +150,8 @@ export class ShikeContent {
   getRevisionMedia(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('get-revision-media', input);
   }
-  setCardReaction(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('set-card-reaction', input);
-  }
   submitCardRevision(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('submit-card-revision', input);
-  }
-  getCardRevision(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('get-card-revision', input);
   }
   withdrawCardRevision(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('withdraw-card-revision', input);
@@ -185,12 +176,6 @@ export class ShikeContent {
   }
   listMyCards(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('list-my-cards', input);
-  }
-  listMyFavoriteCards(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('list-my-favorite-cards', input);
-  }
-  toggleCardAction(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('toggle-card-action', input);
   }
   deleteOwnCard(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('delete-own-card', input);

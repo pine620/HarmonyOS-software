@@ -1,5 +1,5 @@
 import { packageFunction } from './package-functions.mjs';
-const names = ['shike-auth', 'shike-media', 'shike-service', 'shike-location',
+const names = ['shike-auth', 'shike-media', 'shike-service',
   'shike-content', 'shike-social', 'shike-account', 'shike-governance'];
 try {
   const name = process.argv[2];

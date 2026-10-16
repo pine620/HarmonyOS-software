@@ -178,26 +178,6 @@ function createStage1Services(ctx) {
     await ctx.contentPolicy(env).assertCardReadable(uid, current);
     return { active, ...summary };
   }
-  async function toggleFavorite(uid, payload, env) {
-    const cardId = String(payload.cardId || '');
-    const id = ctx.actionId('card:FAVORITE', uid, cardId);
-    let active = false;
-    const committed = await collection(env, 'CardAction').runTransaction({ apply: async (tx) => {
-      const profile = await activeProfile(tx, uid, env);
-      await ctx.collections().assertLegacyFavoriteWritable(tx, uid, env);
-      const card = await txOne(tx, env, 'FoodCard', 'id', cardId);
-      await transactionPolicy(tx, env, [profile]).assertCardReadable(uid, card);
-      const old = await txOne(tx, env, 'CardAction', 'id', id);
-      if (old) tx.executeDelete([old]);
-      else upsertRows(tx, [model('CardAction', { id, cardId, actorUid: uid, kind: 'FAVORITE', createdAt: Date.now() })]);
-      upsertRows(tx, [model('FoodCard', card), profileForWrite(profile, logicalWriteTime(profile.updatedAt))]);
-      active = !old;
-      return true;
-    } });
-    if (!committed) throw new Error('收藏未保存，请重试。');
-    return { active, ...(await reactionSummary(cardId, uid, env)) };
-  }
-
   async function softDelete(uid, payload, env) {
     const cardId = String(payload.cardId || '');
     let output = null;
@@ -441,13 +421,6 @@ function createStage1Services(ctx) {
     // REQUEST_CHANGE recovery does; refresh only that derived profile count.
     if (publishCountChanged) await refreshPublishCount(uid, env);
     return { success: true, revision: revisionView(result), alreadyProcessed };
-  }
-  async function getRevision(uid, payload, env) {
-    const row = await one(collection(env, 'FoodCardRevision').query().equalTo('revisionId', String(payload.revisionId || '')));
-    if (!row) throw accessError('编辑版本不存在。', 'NOT_FOUND');
-    await ctx.contentPolicy(env).assertAccountActive(uid);
-    if (row.authorUid !== uid) throw accessError('版本不存在或无权查看。', 'FORBIDDEN');
-    return { revision: revisionView(row) };
   }
   async function getEditContext(uid, payload, env) {
     const card = await one(collection(env, 'FoodCard').query().equalTo('id', String(payload.cardId || '')));
@@ -770,8 +743,8 @@ function createStage1Services(ctx) {
     }
   }
 
-  return { editableState, reactionSummary, favoriteSummary, mutateReaction, toggleFavorite, softDelete, beginAccountDeletion, derived,
-    submitRevision, getRevision, getEditContext, withdrawRevision,
+  return { editableState, reactionSummary, favoriteSummary, mutateReaction, softDelete, beginAccountDeletion, derived,
+    submitRevision, getEditContext, withdrawRevision,
     migrationReadiness, cardHistoryMaintenance, reactionHistoryMaintenance, processMigration, jobRow, jobView, txOne, activeProfile, model, hash, cardTime,
     publishReceiptSpec, checkPublishReceipt, readPublishReceipt, upsertRows };
 }

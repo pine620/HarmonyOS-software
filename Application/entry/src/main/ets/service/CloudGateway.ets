@@ -4,7 +4,7 @@ import { ImageDescriptors } from './ImageDescriptors';
 import { ImageReadItem, ImageReadRequest } from '../model/ImageModels';
 import { CardDetailRequest, CardRevisionResponse } from '../model/CloudContracts';
 import { cloudCommon, cloudFunction } from '@kit.CloudFoundationKit';
-import { importObject, ShikeAuth, ShikeLocation, ShikeMedia } from '@shike/cloud-objects';
+import { importObject, ShikeAuth, ShikeMedia } from '@shike/cloud-objects';
 import type { CloudEnvelope } from '@shike/cloud-objects';
 import { CLOUD_FUNCTION_VERSION } from './CloudFunctionVersion';
 import { CLIENT_DIRECT_UPLOAD_ENABLED } from './ImageReadConfig';
@@ -111,7 +111,6 @@ export class CloudGateway {
   private static appBuildId: string = 'unavailable';
   private static initialized: boolean = false;
   private static authObject: ShikeAuth | undefined = undefined;
-  private static locationObject: ShikeLocation | undefined = undefined;
   private static mediaObject: ShikeMedia | undefined = undefined;
   private static mediaCircuitOpenUntilMs: number = 0;
 
@@ -237,25 +236,34 @@ export class CloudGateway {
       if (functionName === LEGACY_SERVICE_FUNCTION) throw error as Error;
       const message: string = CloudGateway.cloudHandlerMessage(error as Object);
       CloudGateway.markDomainUnavailable(route, message);
-      // A handler that could not even be loaded never ran the operation, so writes are safe to retry too.
-      if (!isReadOnlyOperation(route.operation) && !CloudGateway.isHandlerLoadError(message)) throw error as Error;
+      // Only a module that could not be loaded proves the operation never ran. Other failures may come after a
+      // partial write, so writes are not replayed on shike-service (no idempotency key on e.g. send-message).
+      if (!isReadOnlyOperation(route.operation) && !CloudGateway.isModuleLoadError(message)) throw error as Error;
       return await CloudGateway.callRoute(LEGACY_SERVICE_FUNCTION, route, envelope);
     }
     // Fix 2026-10-16: the platform may report a broken deployment (e.g. "Cannot find module './service/runtime'")
     // as a normal response instead of a thrown error. Treat it exactly like an unavailable domain function.
     if (functionName !== LEGACY_SERVICE_FUNCTION && response.ok !== true &&
       CloudGateway.isHandlerLoadError(response.message || '')) {
-      CloudGateway.markDomainUnavailable(route, response.message || '');
+      const message: string = response.message || '';
+      CloudGateway.markDomainUnavailable(route, message);
+      if (!isReadOnlyOperation(route.operation) && !CloudGateway.isModuleLoadError(message)) return response;
       return await CloudGateway.callRoute(LEGACY_SERVICE_FUNCTION, route, envelope);
     }
     return response;
   }
 
+  // Any broken-deployment signature: marks the domain function unavailable and allows read retries.
   private static isHandlerLoadError(message: string): boolean {
+    return CloudGateway.isModuleLoadError(message) || (message.includes('Call handler error') &&
+      (message.includes('is not a function') || message.includes('SyntaxError')));
+  }
+
+  // The handler module itself failed to load, so no business code ran; also safe for write retries.
+  private static isModuleLoadError(message: string): boolean {
     return message.includes('Call handler error') &&
       (message.includes('Cannot find module') || message.includes('Cannot find package') ||
-        message.includes('Invalid package config') || message.includes('ERR_INVALID_PACKAGE_CONFIG') ||
-        message.includes('is not a function') || message.includes('SyntaxError'));
+        message.includes('Invalid package config') || message.includes('ERR_INVALID_PACKAGE_CONFIG'));
   }
 
   private static markDomainUnavailable(route: CloudRoute, message: string): void {
@@ -309,7 +317,6 @@ export class CloudGateway {
       }
     });
     CloudGateway.authObject = importObject(ShikeAuth, CLOUD_FUNCTION_VERSION);
-    CloudGateway.locationObject = importObject(ShikeLocation, CLOUD_FUNCTION_VERSION);
     CloudGateway.mediaObject = importObject(ShikeMedia, CLOUD_FUNCTION_VERSION);
     CloudGateway.initialized = true;
     registerHomeSnapshotPrefetch();
@@ -374,7 +381,7 @@ export class CloudGateway {
   private static hasPublicMediaManifest(name: string): boolean {
     return ['get-card-detail', 'get-card-previews', 'list-personal-collection',
       'get-random-food-cards', 'list-food-choices', 'get-meal-candidates', 'get-user-page', 'get-friend-profile', 'list-food-rankings', 'search-public-cards',
-      'get-merchant-recommendations', 'list-nearby-cards', 'list-my-cards', 'list-my-favorite-cards'].includes(name);
+      'get-merchant-recommendations', 'list-nearby-cards', 'list-my-cards'].includes(name);
   }
 
   private static changesReadContent(name: string): boolean {
@@ -382,9 +389,8 @@ export class CloudGateway {
       case 'set-card-interaction':
       case 'set-card-favorite': case 'set-card-reaction-v2':
       case 'start-personal-collection-migration': case 'resume-personal-collection-migration':
-      case 'toggle-card-action':
       case 'delete-own-card': case 'delete-account-data': case 'publish-card': case 'publish-cards':
-      case 'restore-deleted-card': case 'report-merchant':
+      case 'restore-deleted-card':
         return true;
       default: return false;
     }
@@ -454,9 +460,6 @@ export class CloudGateway {
       }
       case 'exchange-huawei-account':
         raw = await (CloudGateway.authObject as ShikeAuth).exchangeHuaweiAccount(envelope);
-        break;
-      case 'check-location':
-        raw = await (CloudGateway.locationObject as ShikeLocation).checkLocation(envelope);
         break;
       case 'prepare-card-photo':
         raw = await CloudGateway.invokeMedia('prepare-card-photo', envelope);

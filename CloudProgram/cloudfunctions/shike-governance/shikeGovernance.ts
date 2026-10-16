@@ -96,22 +96,7 @@ export class ShikeGovernance {
   resolveCardReport(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('resolve-card-report', input);
   }
-  listMyReports(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('list-my-reports', input);
-  }
-  reportMerchant(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('report-merchant', input);
-  }
-  listOwnReviewRequests(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('list-own-review-requests', input);
-  }
   getReviewMedia(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('get-review-media', input);
-  }
-  reportUser(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('report-user', input);
-  }
-  reportCard(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('report-card', input);
   }
 }

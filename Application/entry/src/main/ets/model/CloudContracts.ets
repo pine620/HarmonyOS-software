@@ -8,45 +8,6 @@ export type CardReviewState = 'LEGACY_APPROVED' | 'PENDING_POST_REVIEW' | 'APPRO
 export type CardReactionType = 'LIKE' | 'DISLIKE';
 export type CardRevisionStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'WITHDRAWN';
 
-/** Cloud DB Date values cross the JSON boundary as millisecond numbers. */
-export interface CardReactionRecord {
-  cardId: string;
-  uid: string;
-  reaction: CardReactionType;
-  createdAt: number;
-  updatedAt: number;
-}
-
-export interface FriendCleanupJobRequest {
-  jobId: string;
-}
-
-export interface PublishRequestRecord {
-  requestId: string;
-  uid: string;
-  operationType: string;
-  payloadHash: string;
-  resultEntityId?: string;
-  status: string;
-  createdAt: number;
-  expiresAt: number;
-}
-
-export interface FoodCardRevisionRecord {
-  revisionId: string;
-  cardId: string;
-  authorUid: string;
-  baseModifiedAt: number;
-  baseLifecycleGeneration: number;
-  payloadJson: string;
-  mediaManifestJson: string;
-  status: CardRevisionStatus;
-  submittedAt: number;
-  reviewedAt?: number;
-  reviewReason?: string;
-}
-
-/** Server-owned task metadata; clients do not access the database directly. */
 export interface UserProfile {
   uid: string;
   nickname: string;
@@ -209,10 +170,6 @@ export interface CardRevisionIdRequest {
   revisionId: string;
 }
 
-export interface RevisionMediaRequest extends CardRevisionIdRequest {
-  mediaId: string;
-}
-
 export interface CardRevisionView {
   revisionId: string;
   cardId: string;
@@ -243,7 +200,6 @@ export interface ReportCardRequest {
   reason: string;
 }
 
-export type CardActionType = 'LIKE' | 'FAVORITE';
 
 export interface CardPhoto {
   sha256?: string;
@@ -262,11 +218,6 @@ export interface CardPhoto {
   height: number;
 }
 
-export interface ToggleCardActionRequest {
-  cardId: string;
-  action: CardActionType;
-}
-
 export interface CardActionResponse {
   active: boolean;
   likeCount: number;
@@ -278,12 +229,6 @@ export interface CardActionResponse {
 }
 
 export interface EmptyRequest {
-}
-
-export interface RoundedLocation {
-  latE3: number;
-  lonE3: number;
-  district: string;
 }
 
 export interface FoodCard {
@@ -370,13 +315,6 @@ export interface FoodCard {
   createdAt: number;
 }
 
-export interface NearbyCardsRequest {
-  latE3: number;
-  lonE3: number;
-  pageToken: string;
-  pageSize: number;
-}
-
 /** Public homepage feed. Coordinates are deliberately absent. */
 export interface PublicCardsRequest {
   scope: 'all';
@@ -392,12 +330,6 @@ export interface NearbyCardsResponse {
   cards: Array<FoodCard>;
   nextPageToken: string;
   district: string;
-}
-
-export interface LocationCheckResponse {
-  authenticated: boolean;
-  locationAccepted: boolean;
-  expiresAt: number;
 }
 
 export interface PrepareCardPhotoRequest {
@@ -425,23 +357,6 @@ export interface UploadPreparedPhotoRequest {
   mediaId: string;
   dataBase64: string;
   sha256: string;
-}
-
-/** A server-authorized image payload, written to the app cache before rendering. */
-export interface PublicMediaRequest {
-  bucketName: string;
-  cloudPath: string;
-  metadataOnly?: boolean;
-  variant?: string;
-}
-
-export interface PublicMediaResponse {
-  mimeType: string;
-  dataBase64: string;
-  byteSize: number;
-  sha256?: string;
-  metadataOnly?: boolean;
-  variant?: string;
 }
 
 export interface PublishCardRequest {

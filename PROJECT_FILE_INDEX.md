@@ -26,7 +26,7 @@ Application/
 └── scripts/                  离线指标汇总
 CloudProgram/
 ├── cloud-config.json         本地生成的团队/项目/应用关联元数据
-├── cloudfunctions/           八个云对象与三个独立云函数
+├── cloudfunctions/           七个云对象与三个独立云函数
 ├── scripts/                  云对象、分享及维护打包工具
 ├── clouddb/objecttype/       当前数据库对象定义
 ├── clouddb/db-config.json    默认存储区与数据处理位置
@@ -54,7 +54,7 @@ CloudProgram/
 | 文件 | 职责 |
 | --- | --- |
 | `entryability/EntryAbility.ets` | 主 Ability 生命周期、窗口与页加载、Want/分享入口、后台清理及接续 |
-| `Index.ets` | 主容器、隐私门槛、游客双页签/我的登录入口、账号五页签、Navigation 路由、待处理分享/通知入口 |
+| `Index.ets` | 主容器、隐私门槛、游客三页签（推荐/榜单/我的）、账号四页签与发布悬浮按钮、Navigation 路由、待处理分享/通知入口 |
 | `NearbyPage.ets` | 公开推荐入口、能力门槛检查、发现页与旧列表回退 |
 | `DiscoveryFeed.ets` | 原生地图与推荐列表、区域／上一地区、搜索／筛选／排序、商家抽屉、分页及异步代次 |
 | `CreateCardPage.ets` | 外卖／到店发布和待审编辑、商家关联、金额、1–6 图、模式缓存、幂等重试与立即收窄 |
@@ -78,7 +78,6 @@ CloudProgram/
 | `FoodRankingPage.ets` | 高分/好友榜单、快照准备态与分页 |
 | `RandomFoodPage.ets` | 随机吃什么轮盘、来源、轮次与选择 |
 | `FoodChoiceHistoryPage.ets` | 本人选择历史、内容读取与删除 |
-| `MyContentStatusPage.ets` | 本人内容状态与后续操作 |
 
 | `CardReportListPage.ets`、`CardReportDetailPage.ets` | 举报列表、详情、图片与处理动作 |
 
@@ -99,7 +98,7 @@ CloudProgram/
 | `service/AuthSessionStore.ets` | AGC SDK 初始化、验证码注册/登录、会话/Token、重认证与认证用户删除 |
 | `service/PrivacyStore.ets` | 隐私同意状态及初始化门槛 |
 | `service/CloudGateway.ets` | Cloud Foundation 初始化、方法分发、业务信封、响应错误处理与媒体故障隔离 |
-| `service/LocationService.ets` | 双位置权限、单次定位、E3 舍入、行政区反查和短时定位缓存 |
+| `service/LocationService.ets` | 双位置权限检查、地图“定位到我”的单次定位与权限摘要；不缓存坐标 |
 | `service/ImagePreparationService.ets` | JPEG 重编码、缩放、去 EXIF/GPS、摘要计算与头像裁剪 |
 | `service/PhotoUploadService.ets` | 鉴权媒体上传、游客/账号媒体读取、Base64 到本机文件、文件缓存与下载队列 |
 | `service/NearbyPerformanceTrace.ets` | 附近/详情的固定指标与 trace，供人工采样 |
@@ -148,7 +147,7 @@ CloudProgram/
 | `repository/FoodRankingRepository.ets`、`model/FoodRankingModels.ets` | 榜单请求、快照与分页 DTO |
 | `repository/RandomFoodRepository.ets`、`model/RandomFoodModels.ets` | 候选池、轮盘内容、选择回执与历史 |
 | `service/RandomFoodRoundStore.ets` | 按账号/来源保存轮次，校验本机恢复数据 |
-| `repository/ContentStatusRepository.ets`、`model/ContentStatusModels.ets` | 本人内容状态 |
+| `repository/ContentStatusRepository.ets`、`model/ContentStatusModels.ets` | 删除记录列表与恢复 |
 | `components/FoodRankingTile.ets`、`common/RandomFoodUi.ets`、`common/ContentStatusUi.ets` | 榜单/轮盘/状态共用 UI |
 
 | `service/CardDeepLink.ets` | 应用内分享链接与待处理卡片入口 |
@@ -171,12 +170,10 @@ CloudProgram/
 | `cloud_objects/src/main/ets/shike-*/Shike*.ts` | auth/media/service/location 四类调用代理；Generated/DO NOT EDIT 文件通过 Generate Invoke Interface 更新 |
 | `entry/src/main/resources/base/profile/main_pages.json` | 普通应用入口，Index 内管理子页面导航 |
 | `entry/src/main/resources/base/element/`、`entry/src/main/resources/dark/element/` | 字符串、亮/暗色主题颜色 |
-| `entry/src/main/resources/base/media/create_category_*.svg` | 制作页六种分类图标 |
 | `entry/src/main/resources/base/media/food_*.png` | 分类兜底封面；staple=米饭、bakery=汤粉、drink=饮品、snack=炸鸡、fresh=烧烤、other=其他，文件名为兼容保留 |
-| `entry/src/main/resources/base/media/ic_*.svg`、`nav_*.svg` | 操作、个人功能与五页签图标；dark/media 提供部分暗色覆盖 |
+| `entry/src/main/resources/base/media/ic_*.svg`、`nav_*.svg` | 操作、个人功能与页签图标；dark/media 提供部分暗色覆盖 |
 | `AppScope/resources/base/`、`entry/.../media/app_icon.png` | 应用名称/图标资源 |
 | `scripts/summarize_preload_metrics.py` | 成员执行的离线日志聚合，按阶段/场景/网络计算 P50/P95，不连接设备或云端 |
-| `AppScope/resources/rawfile/schema.json` | 历史平台 schema，不能用来替代当前 DB 部署目录 |
 
 ## CloudProgram：工程、云对象与配置
 
@@ -191,12 +188,13 @@ CloudProgram/
 | --- | --- | --- |
 | `shike-auth/` | shikeAuth.ts / shikeAuth.ShikeAuth | 华为兼容授权校验、AGC 会话交换、迁移票据 |
 | `shike-media/` | shikeMedia.ts / shikeMedia.ShikeMedia | 图片准备、上传/读取、内部委托提升与删除 |
-| `shike-service/` | shikeService.ts / shikeService.ShikeService | 资料、卡片、好友/群聊、通知/卡片登记、身份绑定和清理 |
-| `shike-location/` | shikeLocation.ts / shikeLocation.ShikeLocation | 定位检查与旧附近接口；现行附近主链路走 service，不直接删除旧对象 |
+| `shike-service/` | shikeService.ts / shikeService.ShikeService | 全部业务操作的维护源码与兼容回落入口 |
+| `shike-content/`、`shike-social/`、`shike-account/`、`shike-governance/` | 各自 TS / 同名类 | 按领域拆分的云对象，运行生成的 service runtime 副本 |
+| `shike-image/`、`shike-prefetch/`、`shike-maintenance/` | `*.handler`（事件函数） | 批量读图、首页快照预取、定时维护 |
 
-每个目录均有 `runtime.js`（实际 JS 实现）、`function-config.json`（类型/handler/超时/鉴权）、`package.json` 与 `package-lock.json`（该对象独立依赖）、`tsconfig.json`（CommonJS 入口编译）。TS 导出负责包装响应，部署包必须带相邻 runtime 和生产依赖。media 另有 `check-deployment.mjs`供成员预检源码包/解包产物。
+auth、media、service 目录有 `runtime.js`（实际 JS 实现）；每个目录均有、`function-config.json`（类型/handler/超时/鉴权）、`package.json` 与 `package-lock.json`（该对象独立依赖）、`tsconfig.json`（CommonJS 入口编译）。TS 导出负责包装响应，部署包必须带相邻 runtime 和生产依赖。media 另有 `check-deployment.mjs`供成员预检源码包/解包产物。
 
-共享策略、错误与图片协议统一维护在 `cloudfunctions/shared/`；service 另带 当前保留的 `stage1-services.js`、`stage2-services.js`、`stage3-services.js`、`stage6-services.js`、`stage7-services.js`、`stages47-common.js`、`personal-collections.js`、`content-status-services.js`、`food-ranking-services.js`、`random-food-services.js`、`lifecycle-services.js`、`authentication-cleanup.js`。部署时必须随 runtime 同包，完整打包/已知问题见云端指南。`CloudProgram/scripts/package-cloud-object.mjs` 为部署成员准备编译入口、随包 JS 模块和独立依赖；不会自动部署 AGC。
+共享策略、错误与图片协议统一维护在 `cloudfunctions/shared/`；service 另带 当前保留的 `stage1-services.js`、`stage2-services.js`、`stage3-services.js`、`stage6-services.js`、`stage7-services.js`、`stages47-common.js`、`personal-collections.js`、`food-ranking-services.js`、`random-food-services.js`、`lifecycle-services.js`、`authentication-cleanup.js`。部署时必须随 runtime 同包，完整打包/已知问题见云端指南。`CloudProgram/scripts/package-cloud-object.mjs` 为部署成员准备编译入口、随包 JS 模块和独立依赖；不会自动部署 AGC。
 
 新增 `shike-content` / `shike-social` / `shike-account` / `shike-governance` 四个领域云对象，派生 service 副本不提交。独立入口为 `shike-image` 图片读取、`shike-prefetch` 首页预取和 `shike-maintenance` 维护函数。旧分享函数/网站已移除，端侧采用 `service/CardDeepLink.ets` 的应用内分享路由。
 
@@ -263,7 +261,7 @@ CloudProgram/
 以下按当前源码重新生成，排除依赖、构建产物、缓存、日志和本地配置。克隆 GitHub 仓库可获得下列文件；首次需补齐的两个 AGC 配置路径单独列在末尾。
 
 <details>
-<summary>Application：268 个文件</summary>
+<summary>Application：255 个文件</summary>
 
 ```text
 Application/.gitignore
@@ -271,7 +269,6 @@ Application/.idea/.gitignore
 Application/AppScope/app.json5
 Application/AppScope/resources/base/element/string.json
 Application/AppScope/resources/base/media/app_icon.png
-Application/AppScope/resources/rawfile/schema.json
 Application/build-profile.json5
 Application/cloud_objects/BuildProfile.ets
 Application/cloud_objects/Index.ets
@@ -280,18 +277,8 @@ Application/cloud_objects/hvigorfile.ts
 Application/cloud_objects/oh-package.json5
 Application/cloud_objects/src/main/ets/ImportObject.ts
 Application/cloud_objects/src/main/ets/shike-auth/ShikeAuth.ts
-Application/cloud_objects/src/main/ets/shike-location/ShikeLocation.ts
 Application/cloud_objects/src/main/ets/shike-media/ShikeMedia.ts
-Application/cloud_objects/src/main/ets/shike-service/ShikeService.ts
 Application/cloud_objects/src/main/module.json5
-Application/docs/service-card-redesign-20261003/IMPLEMENTATION.md
-Application/docs/service-card-redesign-20261003/PLAN.md
-Application/docs/service-card-redesign-20261003/direction-a-cover.png
-Application/docs/service-card-redesign-20261003/direction-a-cover.svg
-Application/docs/service-card-redesign-20261003/direction-a.png
-Application/docs/service-card-redesign-20261003/direction-a.svg
-Application/docs/service-card-redesign-20261003/direction-b.png
-Application/docs/service-card-redesign-20261003/direction-b.svg
 Application/entry/build-profile.json5
 Application/entry/hvigorfile.ts
 Application/entry/oh-package-lock.json5
@@ -356,7 +343,6 @@ Application/entry/src/main/ets/pages/FriendsPage.ets
 Application/entry/src/main/ets/pages/GroupChatPage.ets
 Application/entry/src/main/ets/pages/Index.ets
 Application/entry/src/main/ets/pages/MealPollPage.ets
-Application/entry/src/main/ets/pages/MyContentStatusPage.ets
 Application/entry/src/main/ets/pages/MyPublishedPage.ets
 Application/entry/src/main/ets/pages/NearbyPage.ets
 Application/entry/src/main/ets/pages/PermissionsPrivacyPage.ets
@@ -532,14 +518,13 @@ Application/entry/src/main/resources/dark/media/ic_service_card_refresh.svg
 Application/hvigor/hvigor-config.json5
 Application/hvigorfile.ts
 Application/oh-package.json5
-Application/package-lock.json
 Application/scripts/summarize_preload_metrics.py
 ```
 
 </details>
 
 <details>
-<summary>CloudProgram：152 个文件</summary>
+<summary>CloudProgram：145 个文件</summary>
 
 ```text
 CloudProgram/AppScope/resources/rawfile/schema.json
@@ -615,12 +600,6 @@ CloudProgram/cloudfunctions/shike-image/image-request.js
 CloudProgram/cloudfunctions/shike-image/package-lock.json
 CloudProgram/cloudfunctions/shike-image/package.json
 CloudProgram/cloudfunctions/shike-image/shikeImage.js
-CloudProgram/cloudfunctions/shike-location/function-config.json
-CloudProgram/cloudfunctions/shike-location/package-lock.json
-CloudProgram/cloudfunctions/shike-location/package.json
-CloudProgram/cloudfunctions/shike-location/runtime.js
-CloudProgram/cloudfunctions/shike-location/shikeLocation.ts
-CloudProgram/cloudfunctions/shike-location/tsconfig.json
 CloudProgram/cloudfunctions/shike-maintenance/function-config.json
 CloudProgram/cloudfunctions/shike-maintenance/package-lock.json
 CloudProgram/cloudfunctions/shike-maintenance/package.json
@@ -642,7 +621,6 @@ CloudProgram/cloudfunctions/shike-prefetch/shikePrefetch.js
 CloudProgram/cloudfunctions/shike-service/authentication-cleanup.js
 CloudProgram/cloudfunctions/shike-service/card-interaction-services.js
 CloudProgram/cloudfunctions/shike-service/card-report-services.js
-CloudProgram/cloudfunctions/shike-service/content-status-services.js
 CloudProgram/cloudfunctions/shike-service/food-ranking-services.js
 CloudProgram/cloudfunctions/shike-service/function-config.json
 CloudProgram/cloudfunctions/shike-service/lifecycle-services.js

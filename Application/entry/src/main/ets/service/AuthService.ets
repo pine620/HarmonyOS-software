@@ -607,18 +607,6 @@ export class AuthService {
     }
   }
 
-  static async revokeHuaweiAuthorization(context: common.Context): Promise<void> {
-    const state: string = util.generateRandomUUID();
-    const request = new authentication.HuaweiIDProvider().createCancelAuthorizationRequest();
-    request.state = state;
-    const controller = new authentication.AuthenticationController(context);
-    const raw = await controller.executeRequest(request);
-    const response = raw as authentication.CancelAuthorizationResponse;
-    if (response.state !== state) {
-      throw new Error('取消华为账号授权校验失败。');
-    }
-  }
-
   static async deleteAccount(
     context: common.Context,
     emailAddress: string = '',

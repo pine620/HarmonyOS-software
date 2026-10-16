@@ -6,8 +6,6 @@ const {timestampPage,afterTuple,hash}=require('../cloudfunctions/shike-service/s
 const {mediaVariant,sameMediaSource,verifyMediaBytes}=require('../cloudfunctions/shared/media-descriptor');
 const {dateMillis}=require('../cloudfunctions/shared/content-policy');
 const crypto=require('node:crypto');
-const {createFoodRankingServices}=require('../cloudfunctions/shike-service/food-ranking-services');
-const {createStage7Services}=require('../cloudfunctions/shike-service/stage7-services');
 const {createPersonalCollections}=require('../cloudfunctions/shike-service/personal-collections');
 const {createStage1Services}=require('../cloudfunctions/shike-service/stage1-services');
 const {createStage3Services}=require('../cloudfunctions/shike-service/stage3-services');
@@ -136,17 +134,6 @@ test('ascending Date queues continue across equal timestamps and exclude future 
  assert.deepEqual(second.rows.map(row=>row.id),['c','d']);
  const third=await timestampPage(query(),second.next,1000,2,'id','submittedAt',true,true);
  assert.deepEqual(third.rows.map(row=>row.id),['e']);assert.equal(third.next,null);
-});
-
-test('rankings can open while map and reaction product gates remain closed',async()=>{
- const query={equalTo:()=>query,limit:()=>query,get:async()=>[]};
- const context={collection:()=>({query:()=>query}),one:async q=>(await q.get())[0]||null,
-  stage1:()=>({migrationReadiness:async()=>({cardCoverageComplete:true,reactionCoverageComplete:false})}),
-  stage3:()=>({capabilities:async()=>({searchEnabled:false,mapEnabled:false})}),collections:()=>({enabled:()=>true})};
- const rankings=createFoodRankingServices(context);context.foodRankings=()=>rankings;
- const service=createStage7Services(context);
- const caps=await service.capabilities('',{SHIKE_FOOD_RANKINGS_VERIFIED:'true',SHIKE_INDEXED_QUERY_VERIFIED:'true',SHIKE_STAGE3_MAP_COORDINATE_SYSTEM:'GCJ02',SHIKE_REACTION_VERIFIED:'false'});
- assert.equal(caps.foodRankingsEnabled,true);assert.equal(caps.merchantEnabled,false);assert.equal(caps.reactionsEnabled,false);
 });
 
 function collectionFixture(hasLegacyWanted){

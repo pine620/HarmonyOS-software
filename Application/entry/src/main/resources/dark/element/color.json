@@ -17,10 +17,6 @@
       "value": "#662B2433"
     },
     {
-      "name": "profile_hero_fade_near",
-      "value": "#E62B2433"
-    },
-    {
       "name": "surface",
       "value": "#353025"
     },
@@ -31,10 +27,6 @@
     {
       "name": "muted",
       "value": "#D0C2A8"
-    },
-    {
-      "name": "accent",
-      "value": "#D6B96C"
     },
     {
       "name": "accent_action",
@@ -161,14 +153,6 @@
       "value": "#B99988"
     },
     {
-      "name": "food_ranking_rank_top_text",
-      "value": "#382711"
-    },
-    {
-      "name": "food_ranking_top_line",
-      "value": "#63503F"
-    },
-    {
       "name": "random_canvas",
       "value": "#28241B"
     },
@@ -251,14 +235,6 @@
     {
       "name": "discovery_clear",
       "value": "#0028241B"
-    },
-    {
-      "name": "discovery_arc",
-      "value": "#312B1E"
-    },
-    {
-      "name": "discovery_category_selected",
-      "value": "#D6B96C"
     },
     {
       "name": "create_canvas",

@@ -99,22 +99,3 @@ export struct StateView {
   }
 }
 
-// Shown above existing content when a refresh failed but older content is still on screen.
-@Component
-export struct WeakNetworkBanner {
-  @Prop text: string = '网络较慢，内容可能不是最新';
-  onRetry: () => void = (): void => {};
-
-  build() {
-    Row({ space: 8 }) {
-      SymbolGlyph($r('sys.symbol.wifi_slash')).fontSize(15).fontColor([$r('app.color.danger')]).accessibilityLevel('no')
-      Text(this.text).fontSize(12).lineHeight(18).fontColor($r('app.color.danger')).layoutWeight(1).maxLines(2)
-      Text('重试').fontSize(12).fontWeight(FontWeight.Bold).fontColor($r('app.color.danger'))
-        .padding({ left: 8, right: 4, top: 4, bottom: 4 }).onClick((): void => this.onRetry())
-    }
-    .width('100%').padding({ left: 12, right: 8, top: 8, bottom: 8 }).borderRadius(14)
-    .backgroundColor($r('app.color.danger_soft'))
-    .accessibilityGroup(true).accessibilityText(this.text + '，点按重试')
-    .onClick((): void => this.onRetry())
-  }
-}

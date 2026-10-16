@@ -2,12 +2,6 @@
 const {fail,hash,id,int,token,encode,flag,timestampPage}=require('./stages47-common');
 function createStage7Services(ctx){
  const {collection,one}=ctx;
- async function capabilities(uid,env){
-  if(uid)await ctx.contentPolicy(env).assertAccountActive(uid);
-  const readiness=await ctx.stage1().migrationReadiness(env), discovery=await ctx.stage3().capabilities(env,readiness), rankings=await ctx.foodRankings().capability(env,readiness);
-  const reactionsEnabled=readiness.reactionCoverageComplete&&flag(env,'SHIKE_REACTION_VERIFIED');
-  return {protocolVersion:2,reactionsEnabled,reactionsReason:!readiness.reactionCoverageComplete?'赞踩历史整理尚未完成':!reactionsEnabled?'赞踩尚未完成上线验证':'',mealEnabled:discovery.searchEnabled,merchantEnabled:discovery.mapEnabled,collectionEnabled:ctx.collections().enabled(env),foodRankingsEnabled:rankings.enabled,foodRankingsReason:rankings.reason};
- }
  async function userPage(uid,p,env){
   const target=id(p.userUid);
   await ctx.contentPolicy(env).assertProfileReadable(uid,target);
@@ -40,6 +34,6 @@ function createStage7Services(ctx){
   if(!history.ready)throw fail('赞踩历史整理尚未完成。','FEATURE_NOT_READY');
   return ctx.stage1().mutateReaction(uid,p,env,false,true);
  }
- return {capabilities,userPage,reaction};
+ return {userPage,reaction};
 }
 module.exports={createStage7Services};

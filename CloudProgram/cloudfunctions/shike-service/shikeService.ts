@@ -122,15 +122,6 @@ export class ShikeService {
     return executeCloudOperation('resolve-card-report', input);
   }
 
-  listMyReports(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('list-my-reports', input);
-  }
-  reportMerchant(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('report-merchant', input);
-  }
-  listOwnReviewRequests(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('list-own-review-requests', input);
-  }
   listDeletedCards(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('list-deleted-cards', input);
   }
@@ -158,10 +149,6 @@ export class ShikeService {
   setCardFavorite(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('set-card-favorite', input);
   }
-  getStage47Capabilities(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('get-stage47-capabilities', input);
-  }
-
   getMealCandidates(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('get-meal-candidates', input);
   }
@@ -244,16 +231,8 @@ export class ShikeService {
     return executeCloudOperation('get-revision-media', input);
   }
 
-  setCardReaction(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('set-card-reaction', input);
-  }
-
   submitCardRevision(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('submit-card-revision', input);
-  }
-
-  getCardRevision(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('get-card-revision', input);
   }
 
   withdrawCardRevision(input: CloudEnvelope): Promise<CloudResponse> {
@@ -320,10 +299,6 @@ export class ShikeService {
     return executeCloudOperation('list-my-cards', input);
   }
 
-  listMyFavoriteCards(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('list-my-favorite-cards', input);
-  }
-
   searchUsers(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('search-users', input);
   }
@@ -350,10 +325,6 @@ export class ShikeService {
 
   unblockUser(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('unblock-user', input);
-  }
-
-  reportUser(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('report-user', input);
   }
 
   removeFriend(input: CloudEnvelope): Promise<CloudResponse> {
@@ -422,14 +393,6 @@ export class ShikeService {
 
   pushServiceCardUpdate(input: CloudEnvelope): Promise<CloudResponse> {
     return executeCloudOperation('push-service-card-update', input);
-  }
-
-  reportCard(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('report-card', input);
-  }
-
-  toggleCardAction(input: CloudEnvelope): Promise<CloudResponse> {
-    return executeCloudOperation('toggle-card-action', input);
   }
 
   deleteOwnCard(input: CloudEnvelope): Promise<CloudResponse> {
