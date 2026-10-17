@@ -10,8 +10,11 @@ import { ModeFieldCache } from '../service/ModeFieldCache';
 import { CardReportRepository } from '../repository/CardReportRepository';
 import { CardReportAccess } from '../model/CardReportModels';
 
-// Pack 4.3 (2026-10-15): split out of ProfileSubPages.ets without behaviour changes.
+/**
+ * 【文件职责】“设置”页面：编辑资料入口、修改密码、绑定邮箱 / 关联华为账号、权限与隐私、管理员系统（仅服务端白名单可见）、退出登录、切换账号、注销账号。
+ */
 
+// 设置页面。
 @Component
 export struct ProfileSettingsPage {
   @Consume('pathStack') pathStack: NavPathStack;
@@ -41,18 +44,20 @@ export struct ProfileSettingsPage {
   @State emailBindingVerifyCode: string = '';
   @State emailBindingCodeBusy: boolean = false;
   @State emailBindingCodeCountdown: number = 0;
-  // Only accounts on the server reviewer allowlist see the review entry; the server still checks every call.
+  // 只有服务端审核员白名单中的账号才显示审核入口；每次操作服务端仍会校验权限。
   @State reviewerAllowed: boolean = false;
   private reviewAccessGeneration: number = 0;
   private deleteCodeTimer: number | undefined = undefined;
   private emailBindingCodeTimer: number | undefined = undefined;
 
+  // 出现时读取账号状态与审核权限。
   aboutToAppear(): void {
     this.active = true;
     this.profile = AuthService.profile();
     void this.loadReviewerAccess();
   }
 
+  // 检查当前账号是否为审核员（get-card-report-access）。
   private async loadReviewerAccess(): Promise<void> {
     const generation: number = ++this.reviewAccessGeneration;
     this.reviewerAllowed = false;
@@ -61,10 +66,11 @@ export struct ProfileSettingsPage {
       const access: CardReportAccess = await new CardReportRepository().access();
       if (this.active && generation === this.reviewAccessGeneration) this.reviewerAllowed = access.allowed === true;
     } catch (_error) {
-      // Treat any failure as "not a reviewer"; the entry stays hidden.
+      // 任何失败都视为“不是审核员”，入口保持隐藏。
     }
   }
 
+  // 消失时停止倒计时并清空输入。
   aboutToDisappear(): void {
     this.active = false;
     this.reviewAccessGeneration++;
@@ -78,11 +84,13 @@ export struct ProfileSettingsPage {
     }
   }
 
+  // 清空密码输入。
   private clearPasswordInputs(): void {
     this.currentPassword = ''; this.newPassword = ''; this.confirmPassword = '';
     this.currentPasswordError = ''; this.newPasswordError = ''; this.confirmPasswordError = '';
   }
 
+  // 展开修改密码表单。
   private showPasswordChange(): void {
     if (this.busy || this.profile === undefined) return;
     this.clearPasswordInputs(); this.passwordMessage = ''; this.passwordFailed = false;
@@ -90,12 +98,14 @@ export struct ProfileSettingsPage {
     this.passwordChangeVisible = true;
   }
 
+  // 收起修改密码表单。
   private cancelPasswordChange(): void {
     if (this.busy) return;
     this.clearPasswordInputs(); this.passwordChangeVisible = false;
     this.passwordMessage = ''; this.passwordFailed = false;
   }
 
+  // 校验修改密码表单。
   private validatePasswordChange(): boolean {
     this.currentPasswordError = ''; this.newPasswordError = ''; this.confirmPasswordError = '';
     if (this.currentPassword.length === 0) this.currentPasswordError = '请输入当前密码';
@@ -109,6 +119,7 @@ export struct ProfileSettingsPage {
     return this.currentPasswordError.length === 0 && this.newPasswordError.length === 0 && this.confirmPasswordError.length === 0;
   }
 
+  // 保存新密码（AuthService.changePassword）。
   private async savePassword(): Promise<void> {
     if (this.busy || !this.validatePasswordChange()) return;
     this.busy = true; this.passwordSaving = true; this.passwordMessage = ''; this.passwordFailed = false;
@@ -137,6 +148,7 @@ export struct ProfileSettingsPage {
     }
   }
 
+  // 显示密码表单错误。
   @Builder
   private passwordFieldError(message: string): void {
     if (message.length > 0) {
@@ -144,6 +156,7 @@ export struct ProfileSettingsPage {
     }
   }
 
+  // 修改密码表单。
   @Builder
   private passwordChangeForm(): void {
     Column({ space: 10 }) {
@@ -179,6 +192,7 @@ export struct ProfileSettingsPage {
     }.width('100%').alignItems(HorizontalAlign.Start)
   }
 
+  // 退出登录。
   private async logout(): Promise<void> {
     if (this.busy) return;
     this.busy = true;
@@ -197,6 +211,7 @@ export struct ProfileSettingsPage {
     }
   }
 
+  // 切换账号：退出当前会话并提示可以用其他账号重新登录。
   private async switchUser(): Promise<void> {
     if (this.busy) return;
     this.busy = true;
@@ -215,6 +230,7 @@ export struct ProfileSettingsPage {
     }
   }
 
+  // 展开绑定邮箱表单。
   private showEmailBinding(): void {
     if (this.busy) return;
     this.emailBindingAddress = '';
@@ -224,6 +240,7 @@ export struct ProfileSettingsPage {
     this.status = '';
   }
 
+  // 绑定邮箱验证码倒计时。
   private startEmailBindingCodeCountdown(): void {
     if (this.emailBindingCodeTimer !== undefined) {
       clearTimeout(this.emailBindingCodeTimer);
@@ -239,6 +256,7 @@ export struct ProfileSettingsPage {
     }, 1000);
   }
 
+  // 发送绑定邮箱的验证码。
   private async requestEmailBindingCode(): Promise<void> {
     if (this.busy || this.emailBindingCodeBusy || this.emailBindingCodeCountdown > 0) return;
     this.emailBindingCodeBusy = true;
@@ -256,6 +274,7 @@ export struct ProfileSettingsPage {
     }
   }
 
+  // 完成邮箱绑定（AuthService.linkEmailToHuawei）。
   private async completeEmailBinding(): Promise<void> {
     if (this.busy) return;
     this.busy = true;
@@ -273,6 +292,7 @@ export struct ProfileSettingsPage {
     }
   }
 
+  // 关联华为账号（AuthService.linkHuaweiToEmail）。
   private async linkHuaweiAccount(): Promise<void> {
     if (this.busy) return;
     this.busy = true;
@@ -288,6 +308,7 @@ export struct ProfileSettingsPage {
     }
   }
 
+  // 注销账号（二次确认后调用 AuthService.deleteAccount）。
   private async deleteAccount(): Promise<void> {
     if (this.busy) return;
     this.busy = true;
@@ -300,7 +321,7 @@ export struct ProfileSettingsPage {
         try {
           CardVisitStore.clear(context, deletedUid);
         } catch (_error) {
-          // Account deletion has already succeeded; local history cleanup is best effort.
+          // 账号注销已经成功；本机历史记录的清理尽力而为，失败不影响结果。
         }
         try { ModeFieldCache.clearAccount(context, deletedUid); } catch (_error) { }
       }
@@ -313,6 +334,7 @@ export struct ProfileSettingsPage {
     }
   }
 
+  // 注销验证码倒计时。
   private startDeleteCodeCountdown(): void {
     if (this.deleteCodeTimer !== undefined) {
       clearTimeout(this.deleteCodeTimer);
@@ -328,6 +350,7 @@ export struct ProfileSettingsPage {
     }, 1000);
   }
 
+  // 发送注销用的邮箱验证码。
   private async requestDeleteCode(): Promise<void> {
     if (this.busy || this.deleteCodeBusy || this.deleteCodeCountdown > 0) return;
     this.deleteCodeBusy = true;
@@ -345,8 +368,9 @@ export struct ProfileSettingsPage {
     }
   }
 
-  // ---- Pack 2: grouped settings list (forms still expand in place) ----
+  // ---- 分组设置列表（表单仍在原位展开）----
 
+  // 设置行的边框（分组首行 / 危险操作）。
   private rowBorder(first: boolean, danger: boolean): BorderOptions {
     if (first) {
       const none: BorderOptions = { width: 0 };
@@ -357,6 +381,7 @@ export struct ProfileSettingsPage {
     return dashed;
   }
 
+  // 一行设置项。
   @Builder
   private settingsRow(icon: Resource, label: string, hint: string, first: boolean, danger: boolean, expanded: boolean,
     onTap: () => void) {
@@ -384,11 +409,13 @@ export struct ProfileSettingsPage {
     .enabled(!this.busy).accessibilityText(hint.length > 0 ? `${label}，${hint}` : label).onClick(onTap)
   }
 
+  // 分组标题。
   @Builder
   private groupTitle(title: string) {
     Text(title).fontSize(12.5).fontColor($r('app.color.personal_muted')).width('100%').padding({ left: 4 })
   }
 
+  // 绑定邮箱表单。
   @Builder
   private emailBindingForm() {
     Column({ space: 10 }) {
@@ -423,6 +450,7 @@ export struct ProfileSettingsPage {
     }.width('100%').padding({ bottom: 12 })
   }
 
+  // 注销确认区域。
   @Builder
   private deleteConfirmation() {
     Column({ space: 10 }) {
@@ -468,6 +496,7 @@ export struct ProfileSettingsPage {
     }.width('100%').padding({ bottom: 12 })
   }
 
+  // 页面布局。
   build() {
     NavDestination() {
       Column() {

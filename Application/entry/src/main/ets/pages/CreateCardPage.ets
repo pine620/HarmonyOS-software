@@ -1,3 +1,12 @@
+/**
+ * 【文件职责】发布 / 编辑美食卡片页面（editCardId 为空 = 新建，否则 = 作者修改已发布的卡片）。
+ * 【表单】名称、新分类、外卖 / 到店模式（两种模式不兼容的字段由 ModeFieldCache 分别暂存）、价格、关联店铺、1–10 分口味评分、
+ * 点评（≤600 字）、1–6 张实拍图（首张为封面）、可选补充信息（外卖平台、订单总额、配送费、购买日期、HTTPS 来源链接）。
+ * 【发布链路】publish()：先把当前内容保存为草稿 → 每张新图 ImagePreparationService 处理 → CardRepository.preparePhoto（shike-media）
+ * → PhotoUploadService.upload → 新建时 CardRepository.publish（publish-card），编辑时 CardEditRepository.submit（submit-card-revision）。
+ * 请求带固定的 requestId（publicationRequestId），网络不确定时重试同一个请求，服务端据此防止重复发布。
+ * 【草稿】编辑过程中自动保存到 DraftStore；App 进入后台、退出登录前会 flush；发布成功后删除草稿。
+ */
 import { PagePaletteName, pageColor } from '../common/PagePaletteUi';
 import { DraftForm, DraftRestore, LocalDraft, DraftRetainedPhoto as RetainedPhoto } from '../model/DraftModels';
 import { DraftStore } from '../service/DraftStore';
@@ -27,17 +36,20 @@ import { isSafeHttpsSourceLink } from '../service/SafeSourceLink';
 import { tasteScoreLabel, tasteScoreReason } from '../model/TasteScore';
 import { ErrorDetail, errorText } from '../common/ErrorKit';
 
+// 下拉选项。
 interface LabelOption { value: string; }
 const FIRST_SCORE_ROW: Array<number> = [1, 2, 3, 4, 5];
 const SECOND_SCORE_ROW: Array<number> = [6, 7, 8, 9, 10];
 const MAX_CARD_PHOTOS: number = 6;
 
+// 时间戳 → 日期输入框文本。
 function dateInput(value: number | null | undefined): string {
   if (value === undefined || value === null) return '';
   const date: Date = new Date(value);
   return date.getUTCFullYear().toString() + '-' + (date.getUTCMonth() + 1).toString().padStart(2, '0') + '-' +
     date.getUTCDate().toString().padStart(2, '0');
 }
+// 日期输入框文本 → 时间戳（格式不对返回 null）。
 function consumedMillis(value: string): number | null {
   const input: string = value.trim();
   if (input.length === 0) return null;
@@ -48,6 +60,7 @@ function consumedMillis(value: string): number | null {
   return stamp;
 }
 
+// 发布 / 编辑页面。
 @Component
 export struct CreateCardPage {
   @Prop palette: PagePaletteName = 'CREATE';
@@ -136,13 +149,16 @@ export struct CreateCardPage {
   private draftFlush: () => Promise<void> = (): Promise<void> => this.flushDraft();
   private draftDirty: boolean = false;
   private draftEditSequence: number = 0;
+  // 草稿图片变化时安排自动保存。
   private onDraftMediaChanged(): void { this.onDraftChanged(); }
+  // 表单变化时安排自动保存（延迟合并）。
   private onDraftChanged(): void {
     if (!this.draftReady || this.initializing || this.hasPublishedNotice) return;
     this.draftDirty = true; this.draftEditSequence++;
     if (this.draftTimer !== undefined) clearTimeout(this.draftTimer);
     this.draftTimer = setTimeout((): void => { this.draftTimer = undefined; void this.flushDraft(); }, 700);
   }
+  // 把当前表单转换为草稿结构。
   private draftForm(): DraftForm {
     const form: DraftForm = { ownsPhoto: this.ownsPhoto, productName: this.productName, price: this.price, dineInAvg: this.dineInAvg,
       orderTotal: this.orderTotal, deliveryFee: this.deliveryFee, consumedDate: this.consumedDate, sourceLink: this.sourceLink,
@@ -156,6 +172,7 @@ export struct CreateCardPage {
       merchantRequestUnconfirmed: this.merchantRequestUnconfirmed, correctingMerchant: this.correctingMerchant };
     return form;
   }
+  // 立即保存草稿（required=true 时失败会抛错）。
   private async flushDraft(required: boolean = false): Promise<void> {
     if (!this.draftReady || this.activeUid.length === 0 || this.hasPublishedNotice) { if (required) throw new Error('草稿尚未就绪，请重新进入发布页。'); return; }
     if (this.draftTimer !== undefined) { clearTimeout(this.draftTimer); this.draftTimer = undefined; }
@@ -165,6 +182,7 @@ export struct CreateCardPage {
     try { await DraftStore.save(this.context(), this.activeUid, this.draftId, this.editCardId, this.draftForm(), this.preparedPhotos.slice()); if (this.stillCurrent(generation)) { if (sequence === this.draftEditSequence) this.draftDirty = false; this.draftNotice = '草稿已保存到本机'; } }
     catch (error) { if (this.stillCurrent(generation)) this.draftNotice = error instanceof Error ? error.message : '草稿保存失败，输入仍保留。'; if (required) throw error instanceof Error ? error : new Error('草稿落盘失败，尚未发送发布请求。'); }
   }
+  // 读取草稿箱列表（草稿面板使用）。
   private async loadDraftChoices(): Promise<void> {
     if (this.activeUid.length === 0) return;
     const generation: number = this.formGeneration; const uid: string = this.activeUid;
@@ -175,6 +193,7 @@ export struct CreateCardPage {
     if (!this.stillCurrent(generation)) return;
     if (reminders > 0) this.draftNotice = reminders.toString() + ' 个草稿将在 3 天内过期，请及时处理。';
   }
+  // 从草稿恢复表单与图片。
   private async restoreDraft(draft: LocalDraft): Promise<void> {
     const generation: number = this.formGeneration; this.initializing = true; this.draftReady = false;
     try {
@@ -207,22 +226,34 @@ export struct CreateCardPage {
     } catch (error) { this.draftNotice = error instanceof Error ? error.message : '草稿恢复失败。'; }
     finally { if (this.stillCurrent(generation)) { this.initializing = false; this.draftReady = true; } }
   }
+  // 删除一个草稿。
   private async deleteDraft(draft: LocalDraft): Promise<void> { try { await DraftStore.remove(this.context(), this.activeUid, draft.draftId); await this.loadDraftChoices(); } catch (error) { this.draftNotice = error instanceof Error ? error.message : '删除失败。'; } }
+  // 页面出现：开始监听动画设置，注册草稿 flush 并初始化。
   aboutToAppear(): void { this.reducedMotion = this.motionObserver.start(); DraftStore.flushHandler = this.draftFlush; void this.initialize(); }
+  // 页面消失：停止监听并保存草稿。
   aboutToDisappear(): void { this.motionObserver.stop(); this.sheetVisible = false; void this.flushDraft(); if (DraftStore.flushHandler === this.draftFlush) DraftStore.flushHandler = undefined; this.formGeneration++; this.saveModeFields(); this.publishing = false; this.merchantBusy = false; }
+  // 页面可见性变化时关闭面板。
   private onPageVisibilityChanged(): void { if (!this.pageActive) this.sheetVisible = false; }
+  // 账号变化时重置草稿与表单。
   private onAccountChanged(): void { this.draftReady = false; if (this.draftTimer !== undefined) clearTimeout(this.draftTimer); this.draftTimer = undefined; this.draftChoices = []; this.draftId = util.generateRandomUUID(); this.draftDirty = false; this.formGeneration++; MerchantLocationPicker.clearSelectionCenter(); this.successMerchant = undefined; this.resetForm(); void this.initialize(); }
+  // 取得 UIAbility 上下文。
   private context(): common.UIAbilityContext { return this.getUIContext().getHostContext() as common.UIAbilityContext; }
+  // 异步结果是否仍属于当前页面状态。
   private stillCurrent(generation: number): boolean {
     const profile = AuthService.profile();
     return generation === this.formGeneration && profile !== undefined && profile.uid === this.activeUid;
   }
+  // 是否为编辑模式。
   private isEditing(): boolean { return this.editCardId.length > 0; }
+  // 表单是否可编辑（编辑模式需加载完编辑上下文）。
   private formEnabled(): boolean { return (!this.isEditing() || this.editContextReady) && !this.initializing && !this.publishing && !this.savingDraft && !this.hasPublishedNotice && !this.merchantBusy && !this.requestUnconfirmed && !this.merchantRequestUnconfirmed; }
+  // 评分的标签 / 说明 / 是否选中。
   private scoreLabel(score: number = this.tasteScore): string { return tasteScoreLabel(score); }
   private scoreReason(score: number = this.tasteScore): string { return tasteScoreReason(score); }
   private isScoreSelected(score: number): boolean { return this.tasteScore === score; }
+  // 清除“已发布”提示。
   private resetPublicationState(): void { this.hasPublishedNotice = false; }
+  // 重置表单为空白。
   private resetForm(): void {
     this.sheetVisible = false; this.attemptedSubmit = false; this.extraError = ''; this.savingDraft = false; this.loadingDraftChoices = false;
     this.formGeneration++; this.publicationRequestId = ''; this.pendingPublication = undefined; this.pendingRevision = undefined;
@@ -236,6 +267,7 @@ export struct CreateCardPage {
     this.currentRevision = undefined; this.baseCard = undefined; this.editContextReady = false; this.savedEditNeedsReload = false; this.historicalShop = ''; this.hasPublishedNotice = false;
     this.status = '填写美食信息，留下你的真实口碑。';
   }
+  // 初始化：读取店铺能力 → 编辑模式下加载编辑上下文 → 读取外卖平台列表 → 读取草稿列表，指定了草稿时恢复该草稿。
   private async initialize(): Promise<void> {
     this.initializing = true;
     const generation: number = ++this.formGeneration;
@@ -257,6 +289,7 @@ export struct CreateCardPage {
       if (this.stillCurrent(generation)) this.status = '加载失败：' + errorText(error as ErrorDetail);
     } finally { if (this.stillCurrent(generation)) this.initializing = false; }
   }
+  // 编辑模式：读取编辑上下文并填充表单。
   private async loadEditContext(generation: number): Promise<void> {
     this.editContextReady = false;
     const response: CardEditContextResponse = await this.editRepository.context(this.context(), this.editCardId);
@@ -320,12 +353,14 @@ export struct CreateCardPage {
     } else this.merchant = undefined;
     if (this.stillCurrent(generation)) this.editContextReady = true;
   }
+  // 暂存当前模式下不兼容的字段。
   private saveModeFields(): void {
     if (this.activeUid.length === 0 || this.initializing || (this.isEditing() && !this.editContextReady)) return;
     const fields: ModeFields = { savedAt: Date.now(), dineInAvg: this.dineInAvg, orderTotal: this.orderTotal,
       deliveryFee: this.deliveryFee, platformKey: this.platformKey, platformLabel: this.platformLabel, consumedDate: this.consumedDate };
     try { ModeFieldCache.save(this.context(), this.activeUid, this.editCardId, fields, this.mode); } catch (_error) { }
   }
+  // 切换外卖 / 到店模式（先暂存当前模式字段，再恢复目标模式字段）。
   private selectMode(mode: FoodConsumptionMode): void {
     if (!this.formEnabled() || this.mode === mode) return;
     this.saveModeFields();
@@ -340,6 +375,7 @@ export struct CreateCardPage {
     }
     this.mode = mode; this.resetPublicationState();
   }
+  // 打开地图选点选择店铺。
   private async chooseMerchant(): Promise<void> {
     if (!this.formEnabled()) return;
     const correcting: boolean = this.correctingMerchant;
@@ -354,6 +390,7 @@ export struct CreateCardPage {
     } catch (error) { if (this.stillCurrent(generation)) this.status = errorText(error as ErrorDetail); }
     finally { if (this.stillCurrent(generation)) this.merchantBusy = false; }
   }
+  // 修改已选店铺。
   private correctMerchant(): void {
     const merchant: Merchant | undefined = this.merchant;
     if (merchant === undefined) return;
@@ -362,6 +399,7 @@ export struct CreateCardPage {
     this.merchantChoice = choice; this.merchantName = merchant.name; this.merchantAddress = merchant.address;
     this.correctingMerchant = true; this.merchantRequestId = util.generateRandomUUID(); this.pendingMerchantRequest = undefined;
   }
+  // 确认店铺：官方地点调用 resolve-merchant，否则创建用户店铺。
   private async confirmMerchant(provider: boolean): Promise<void> {
     const choice: MerchantChoice | undefined = this.merchantChoice;
     if (choice === undefined || this.merchantBusy) return;
@@ -399,6 +437,7 @@ export struct CreateCardPage {
       }
     } finally { if (this.stillCurrent(generation)) this.merchantBusy = false; }
   }
+  // 从相册选择实拍图（replace=true 替换全部）。
   private async chooseOwnedPhoto(replace: boolean = false): Promise<void> {
     if (!this.formEnabled()) return;
     const remaining: number = MAX_CARD_PHOTOS - this.retainedPhotos.length - (replace ? 0 : this.preparedPhotos.length);
@@ -423,6 +462,7 @@ export struct CreateCardPage {
     } catch (error) { if (this.stillCurrent(generation)) this.status = errorText(error as ErrorDetail); }
     finally { if (this.stillCurrent(generation)) this.publishing = false; }
   }
+  // 编辑模式下计算修改了哪些字段。
   private formChanges(): CardRevisionChanges {
     const item: number | null = parseYuanInputToFen(this.price);
     const changes: CardRevisionChanges = { productName: this.productName.trim(), priceFen: item === null ? 0 : item,
@@ -437,6 +477,7 @@ export struct CreateCardPage {
       consumedAt: this.mode === 'DELIVERY' ? consumedMillis(this.consumedDate) : null, shop: this.historicalShop };
     return changes;
   }
+  // 发布前检查，返回阻止发布的原因（为空表示可以发布）。
   private publishBlocker(): string {
     if (this.productName.trim().length < 2 || this.productName.trim().length > 100) return '美食名称需为 2–100 字。';
     if (!this.isEditing() && this.mode === 'UNSPECIFIED') return '请选择外卖或到店。';
@@ -451,6 +492,7 @@ export struct CreateCardPage {
     try { this.formChanges(); } catch (error) { return errorText(error as ErrorDetail); }
     return '';
   }
+  // 上传所有新图片，返回 mediaId 列表（准备 → 上传）。
   private async uploadPhotos(generation: number): Promise<Array<string>> {
     const ids: Array<string> = this.retainedPhotos.map((photo: RetainedPhoto): string => photo.id);
     for (let index: number = 0; index < this.preparedPhotos.length; index++) {
@@ -469,6 +511,7 @@ export struct CreateCardPage {
     }
     return ids;
   }
+  // 发布 / 提交修改（流程见文件头）。
   private async publish(): Promise<void> {
     if (this.publishing || this.initializing || this.merchantBusy || this.merchantRequestUnconfirmed ||
       (this.isEditing() && !this.editContextReady && !this.requestUnconfirmed)) return;
@@ -549,8 +592,7 @@ export struct CreateCardPage {
     } catch (error) {
       if (!this.stillCurrent(generation)) return;
       if (error instanceof CloudBusinessError) {
-        // A business rejection is a confirmed response. Transport/handler errors
-        // remain ambiguous and keep the immutable request for retry.
+        // 业务拒绝（云端明确返回错误）是确定的结果；传输或 handler 错误结果未知，保留同一个不可变的请求以便重试。
         const confirmed: Array<string> = ['CONFLICT', 'VALIDATION_ERROR',
           'MERCHANT_NOT_VERIFIED', 'ACCOUNT_INACTIVE', 'CONTENT_ACCESS_DENIED', 'COUNTER_RECONCILIATION_REQUIRED'];
         if (confirmed.includes(error.code)) { this.requestUnconfirmed = false; this.pendingRevision = undefined; this.pendingPublication = undefined; this.publicationRequestId = ''; }
@@ -563,6 +605,7 @@ export struct CreateCardPage {
       else if (this.hasPublishedNotice) this.publishing = false;
     }
   }
+  // 撤回尚未生效的修改。
   private async withdraw(): Promise<void> {
     const revision: CardRevisionView | undefined = this.currentRevision;
     if (revision === undefined || revision.status !== 'PENDING' || !this.formEnabled()) return;
@@ -574,6 +617,7 @@ export struct CreateCardPage {
     } catch (error) { if (this.stillCurrent(generation)) this.status = errorText(error as ErrorDetail); }
     finally { if (this.stillCurrent(generation)) this.publishing = false; }
   }
+  // 编辑冲突后重新读取编辑基准。
   private async reloadEditBasis(): Promise<void> {
     if (this.baseCard === undefined) { await this.initialize(); return; }
     const generation: number = this.formGeneration;
@@ -594,29 +638,36 @@ export struct CreateCardPage {
     } catch (error) { if (this.stillCurrent(generation)) this.status = errorText(error as ErrorDetail); }
     finally { if (this.stillCurrent(generation)) this.initializing = false; }
   }
+  // 发布成功后继续为同一店铺发布。
   private continueSameMerchant(): void {
     const merchant: Merchant | undefined = this.successMerchant; const mode: FoodConsumptionMode = this.successMode;
     this.resetForm(); this.merchant = merchant; this.mode = mode;
     this.draftReady = true; this.status = '已继承店铺和消费方式；请填写新菜品、价格、照片和评分。';
   }
+  // 选项切换动画参数。
   private choiceAnimation(duration: number = 160): AnimateParam {
     const options: AnimateParam = { duration: this.reducedMotion || !this.pageActive || !this.appActive ? 0 : duration, curve: Curve.EaseOut };
     return options;
   }
+  // 店铺相关控件是否可用。
   private merchantControlsEnabled(): boolean {
     return (!this.isEditing() || this.editContextReady) && !this.initializing && !this.publishing && !this.savingDraft && !this.hasPublishedNotice && !this.merchantBusy && !this.requestUnconfirmed;
   }
+  // 图片总数（保留的 + 新选的）。
   private photoCount(): number { return this.retainedPhotos.length + this.photoPreviewUris.length; }
+  // 新图片的渲染键。
   private newPhotoKey(index: number): string {
     const photo: PreparedPhoto | undefined = this.preparedPhotos[index];
     return (photo === undefined ? 'missing' : photo.sha256) + ':' + index.toString();
   }
+  // 店铺摘要文字。
   private merchantSummary(): string {
     if (this.merchantRequestUnconfirmed) return '地点结果未确认 · 点击重试';
     if (this.merchantChoice !== undefined) return '待确认 · ' + this.merchantName;
     if (this.merchant !== undefined) return this.merchant.name;
     return this.historicalShop.length > 0 ? this.historicalShop : '可选 · 选择店铺';
   }
+  // 补充信息摘要文字。
   private extrasSummary(): string {
     const count: number = this.mode === 'DELIVERY'
       ? [this.platformKey, this.orderTotal, this.deliveryFee, this.consumedDate, this.sourceLink].filter((value: string): boolean => value.trim().length > 0).length
@@ -624,14 +675,17 @@ export struct CreateCardPage {
     return count > 0 ? '已填写 ' + count.toString() + ' 项' : this.mode === 'DELIVERY' ? '平台、费用、日期、链接' :
       this.mode === 'DINE_IN' ? '单品价格、来源链接' : '来源链接';
   }
+  // 名称错误提示。
   private nameError(): string {
     return this.attemptedSubmit && (this.productName.trim().length < 2 || this.productName.trim().length > 100) ? '美食名称需为 2–100 字。' : '';
   }
+  // 价格错误提示。
   private mainPriceError(): string {
     if (!this.attemptedSubmit) return '';
     try { parseYuanInputToFen(this.mode === 'DINE_IN' ? this.dineInAvg : this.price); return ''; }
     catch (error) { return errorText(error as ErrorDetail); }
   }
+  // 补充信息错误提示。
   private extrasError(): string {
     if (!this.attemptedSubmit) return '';
     if (this.sourceLink.trim().length > 0 && !isSafeHttpsSourceLink(this.sourceLink)) return '来源链接无效，请在补充信息中修改。';
@@ -641,11 +695,13 @@ export struct CreateCardPage {
       return '';
     } catch (error) { return '请检查补充信息：' + errorText(error as ErrorDetail); }
   }
+  // 图片错误提示。
   private photoError(): string {
     if (!this.attemptedSubmit) return '';
     if (this.photoCount() < 1) return '请至少添加一张实拍图。';
     return !this.ownsPhoto ? '请确认照片拍摄或使用权。' : '';
   }
+  // 打开底部面板。
   private openSheet(kind: CreateSheetKind): void {
     if (this.initializing || this.publishing || this.savingDraft || this.merchantBusy) return;
     if ((kind === 'EXTRAS' || kind === 'SCORE') && !this.formEnabled()) return;
@@ -657,6 +713,7 @@ export struct CreateCardPage {
     this.sheetKind = kind; this.sheetVisible = true;
     if (kind === 'DRAFTS') void this.refreshDraftChoices();
   }
+  // 面板标题。
   private sheetTitle(): string {
     if (this.sheetKind === 'SCORE') return '选择口味评分';
     if (this.sheetKind === 'EXTRAS') return '补充信息 · 可选';
@@ -664,6 +721,7 @@ export struct CreateCardPage {
     if (this.sheetKind === 'PHOTOS') return '我的实拍 · ' + this.photoCount().toString() + '/6';
     return '本机草稿';
   }
+  // 面板选项。
   private sheetOptions(): SheetOptions {
     const options: SheetOptions = { height: this.sheetKind === 'SCORE' ? '62%' : '85%',
       backgroundColor: pageColor(this.palette, 'surface'), maskColor: pageColor(this.palette, 'scrim'),
@@ -676,6 +734,7 @@ export struct CreateCardPage {
       } };
     return options;
   }
+  // 应用补充信息面板中的输入。
   private applyExtras(): void {
     if (!this.formEnabled()) return;
     try {
@@ -693,6 +752,7 @@ export struct CreateCardPage {
     }
     this.sourceLink = this.extraLink; this.resetPublicationState(); this.sheetVisible = false;
   }
+  // 移除一张新选的图片。
   private removeNewPhoto(index: number): void {
     if (!this.formEnabled() || index < 0 || index >= this.preparedPhotos.length) return;
     this.preparedPhotos = this.preparedPhotos.filter((_photo: PreparedPhoto, position: number): boolean => position !== index);
@@ -700,6 +760,7 @@ export struct CreateCardPage {
     this.photoPreviewUris = this.photoPreviewUris.filter((_uri: string, position: number): boolean => position !== index);
     this.photoLabel = this.preparedPhotos.length > 0 ? '新照片 ' + this.preparedPhotos.length.toString() + ' 张，已完成本地处理。' : '';
   }
+  // 手动保存草稿。
   private async saveDraftFromUi(): Promise<void> {
     if (this.initializing || this.publishing || this.savingDraft || this.loadingDraftChoices || this.merchantBusy || !this.draftReady) return;
     const generation: number = this.formGeneration; this.savingDraft = true;
@@ -707,6 +768,7 @@ export struct CreateCardPage {
     catch (error) { if (this.stillCurrent(generation)) this.draftNotice = '保存失败：' + errorText(error as ErrorDetail); }
     finally { if (this.stillCurrent(generation)) this.savingDraft = false; }
   }
+  // 刷新草稿列表。
   private async refreshDraftChoices(): Promise<void> {
     if (this.loadingDraftChoices) return;
     const generation: number = this.formGeneration; this.loadingDraftChoices = true;
@@ -714,19 +776,24 @@ export struct CreateCardPage {
     catch (error) { if (this.stillCurrent(generation)) this.draftNotice = '草稿列表读取失败：' + errorText(error as ErrorDetail); }
     finally { if (this.stillCurrent(generation)) this.loadingDraftChoices = false; }
   }
+  // 从草稿面板恢复。
   private restoreFromUi(draft: LocalDraft): void {
     if (this.initializing || this.publishing || this.savingDraft || this.loadingDraftChoices || this.merchantBusy || this.requestUnconfirmed || this.merchantRequestUnconfirmed) return;
     this.sheetVisible = false; this.attemptedSubmit = false; this.hasPublishedNotice = false; void this.restoreDraft(draft);
   }
+  // 点击提交按钮。
   private submitFromUi(): void {
     if (this.savingDraft) return;
     if (this.hasPublishedNotice) { this.continueSameMerchant(); return; }
     this.attemptedSubmit = true; void this.publish();
   }
+  // 分类下拉选项。
   private categoryOptions(): Array<LabelOption> {
     return CATEGORY_V2_OPTIONS.map((option: CategoryV2Option): LabelOption => { return { value: option.label }; });
   }
+  // 当前分类在选项中的位置。
   private categoryIndex(): number { return CATEGORY_V2_OPTIONS.findIndex((option: CategoryV2Option): boolean => option.key === this.categoryV2); }
+  // 可选的外卖平台。
   private platformOptions(): Array<DeliveryPlatform> {
     const rows: Array<DeliveryPlatform> = this.platforms.filter((value: DeliveryPlatform): boolean => value.enabled);
     if (this.platformKey.length > 0 && !rows.some((value: DeliveryPlatform): boolean => value.key === this.platformKey)) {
@@ -735,9 +802,11 @@ export struct CreateCardPage {
     }
     const empty: DeliveryPlatform = { key: '', label: '不填写平台', enabled: true, sortOrder: -1 }; rows.unshift(empty); return rows;
   }
+  // 外卖平台下拉选项。
   private platformLabels(): Array<LabelOption> {
     return this.platformOptions().map((option: DeliveryPlatform): LabelOption => { return { value: option.label }; });
   }
+  // 字段标签（必填项带标记）。
   @Builder
   private fieldLabel(title: string, required: boolean = false): void {
     Row({ space: 4 }) {
@@ -745,6 +814,7 @@ export struct CreateCardPage {
       if (required) { Text('*').fontSize(14).fontColor(pageColor(this.palette, 'error')).accessibilityText('必填'); }
     }.constraintSize({ minHeight: 24 }).alignItems(VerticalAlign.Center);
   }
+  // 字段错误提示。
   @Builder
   private fieldError(message: string): void {
     if (message.length > 0) {
@@ -752,10 +822,13 @@ export struct CreateCardPage {
         .padding({ top: 4, bottom: 4 }).accessibilityText('提示：' + message);
     }
   }
+  // 分隔线。
   @Builder
   private divider(): void { Divider().color(pageColor(this.palette, 'line')).strokeWidth(1).accessibilityLevel('no'); }
+  // 右箭头图标。
   @Builder
   private chevron(): void { Image($r('app.media.ic_create_chevron')).width(18).height(18).accessibilityLevel('no'); }
+  // 页头。
   @Builder
   private pageHeader(): void {
     Row({ space: 8 }) {
@@ -769,6 +842,7 @@ export struct CreateCardPage {
         .onClick((): void => this.openSheet('DRAFTS'));
     }.width('100%').padding({ left: 16, right: 12, top: 8, bottom: 12 });
   }
+  // 外卖 / 到店切换。
   @Builder
   private modeControl(): void {
     Row({ space: 4 }) {
@@ -781,6 +855,7 @@ export struct CreateCardPage {
       Text('历史内容未区分外卖 / 到店，可保留或在这里补充。').fontSize(13).lineHeight(19).fontColor(pageColor(this.palette, 'muted')).width('100%');
     }
   }
+  // 基础字段（名称、分类、价格、店铺）。
   @Builder
   private commonFields(): void {
     Column() {
@@ -842,6 +917,7 @@ export struct CreateCardPage {
     }.width('100%').padding({ left: 12, right: 12 }).backgroundColor(pageColor(this.palette, 'surface'))
       .borderRadius(18).border({ width: 1, color: pageColor(this.palette, 'line') });
   }
+  // 点评区域。
   @Builder
   private reviewSection(): void {
     Column({ space: 6 }) {
@@ -854,6 +930,7 @@ export struct CreateCardPage {
         .onChange((value: string): void => { this.reviewText = value; });
     }.width('100%').enabled(this.formEnabled());
   }
+  // 一张图片缩略图。
   @Builder
   private photoThumbnail(uri: string, position: number): void {
     Button() {
@@ -871,6 +948,7 @@ export struct CreateCardPage {
       .accessibilityText((position === 0 ? '封面' : '第 ' + (position + 1).toString() + ' 张实拍') + '，点击管理照片')
       .onClick((): void => this.openSheet('PHOTOS'));
   }
+  // 图片区域。
   @Builder
   private photoSection(): void {
     Column({ space: 6 }) {
@@ -902,6 +980,7 @@ export struct CreateCardPage {
       this.fieldError(this.attemptedSubmit && this.photoCount() === 0 ? '请至少添加一张实拍图。' : '');
     }.width('100%');
   }
+  // 补充信息入口。
   @Builder
   private extrasEntry(): void {
     Button() {
@@ -914,6 +993,7 @@ export struct CreateCardPage {
       .enabled(this.formEnabled()).onClick((): void => this.openSheet('EXTRAS'));
     this.fieldError(this.extrasError());
   }
+  // 图片权利说明。
   @Builder
   private photoRights(): void {
     Row({ space: 4 }) {
@@ -926,6 +1006,7 @@ export struct CreateCardPage {
     }.width('100%').constraintSize({ minHeight: 48 });
     this.fieldError(this.attemptedSubmit && this.photoCount() > 0 ? this.photoError() : '');
   }
+  // 一个评分按钮。
   @Builder
   private scoreButton(score: number): void {
     Button() {
@@ -941,6 +1022,7 @@ export struct CreateCardPage {
       .accessibilityText(score.toString() + ' 分，' + this.scoreLabel(score) + (this.isScoreSelected(score) ? '，已选中' : ''))
       .enabled(this.formEnabled()).onClick((): void => { this.tasteScore = score; this.resetPublicationState(); this.sheetVisible = false; });
   }
+  // 评分面板。
   @Builder
   private scoreSheet(): void {
     Column({ space: 12 }) {
@@ -951,6 +1033,7 @@ export struct CreateCardPage {
       Text('1–10 分，按自己的真实口味选择。').fontSize(13).lineHeight(19).fontColor(pageColor(this.palette, 'muted'));
     }.width('100%').alignItems(HorizontalAlign.Start);
   }
+  // 补充信息面板。
   @Builder
   private extrasSheet(): void {
     Column({ space: 8 }) {
@@ -993,6 +1076,7 @@ export struct CreateCardPage {
       }.width('100%').padding({ top: 8 });
     }.width('100%').alignItems(HorizontalAlign.Start).enabled(this.formEnabled());
   }
+  // 店铺面板。
   @Builder
   private merchantSheet(): void {
     Column({ space: 10 }) {
@@ -1034,6 +1118,7 @@ export struct CreateCardPage {
       }
     }.width('100%').alignItems(HorizontalAlign.Start).enabled(this.merchantControlsEnabled());
   }
+  // 图片管理面板。
   @Builder
   private photosSheet(): void {
     Column({ space: 10 }) {
@@ -1069,6 +1154,7 @@ export struct CreateCardPage {
       this.photoRights();
     }.width('100%').alignItems(HorizontalAlign.Start);
   }
+  // 草稿面板。
   @Builder
   private draftsSheet(): void {
     Column({ space: 10 }) {
@@ -1099,6 +1185,7 @@ export struct CreateCardPage {
         });
     }.width('100%').alignItems(HorizontalAlign.Start);
   }
+  // 忙碌时的进度提示。
   @Builder
   private busyFeedback(): void {
     if (this.initializing || this.publishing || this.merchantBusy || this.savingDraft) {
@@ -1109,6 +1196,7 @@ export struct CreateCardPage {
       }.width('100%').padding(10).backgroundColor(pageColor(this.palette, 'soft')).borderRadius(12);
     }
   }
+  // 根据面板类型显示内容。
   @Builder
   private sheetContent(): void {
     Column({ space: 0 }) {
@@ -1132,6 +1220,7 @@ export struct CreateCardPage {
       }.layoutWeight(1).width('100%').align(Alignment.TopStart);
     }.width('100%').height('100%').backgroundColor(pageColor(this.palette, 'surface'));
   }
+  // 表单反馈信息。
   @Builder
   private formFeedback(): void {
     this.busyFeedback();
@@ -1152,6 +1241,7 @@ export struct CreateCardPage {
         .onClick((): void => { void this.withdraw(); });
     }
   }
+  // 底部提交栏。
   @Builder
   private submitBar(): void {
     Row({ space: 12 }) {
@@ -1165,6 +1255,7 @@ export struct CreateCardPage {
     }.width('100%').padding({ left: 16, right: 16, top: 10, bottom: 10 }).backgroundColor(pageColor(this.palette, 'canvas'))
       .border({ width: { top: 1 }, color: pageColor(this.palette, 'line') });
   }
+  // 页面布局。
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
       CreateCardBackdrop({ palette: this.palette });

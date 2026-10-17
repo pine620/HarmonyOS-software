@@ -7,8 +7,11 @@ import { PushNotificationService, PushNotificationStatus } from '../service/Push
 import { ServiceCardRemoteSyncService, ServiceCardRemoteSyncStatus } from '../service/ServiceCardRemoteSyncService';
 import { ErrorDetail, errorText } from '../common/ErrorKit';
 
-// Pack 4.3 (2026-10-15): split out of ProfileSubPages.ets without behaviour changes.
+/**
+ * 【文件职责】“权限与隐私”页面：展示定位权限状态与数据说明，开启/关闭/重试“食刻通知”（PushNotificationService）与“桌面卡片远程同步”（ServiceCardRemoteSyncService）。
+ */
 
+// 权限与隐私页面。
 @Component
 export struct PermissionsPrivacyPage {
   @State permissionStatus: string = '位置权限：待检查';
@@ -24,10 +27,12 @@ export struct PermissionsPrivacyPage {
   @State loading: boolean = false;
   @State showPrivacy: boolean = false;
 
+  // 出现时刷新状态。
   aboutToAppear(): void {
     this.refresh();
   }
 
+  // 刷新定位权限、通知与远程同步的状态。
   private async refresh(clearStatus: boolean = true): Promise<void> {
     if (this.loading) return;
     this.loading = true;
@@ -74,6 +79,7 @@ export struct PermissionsPrivacyPage {
     }
   }
 
+  // 开启通知。
   private async enableNotifications(): Promise<void> {
     if (this.loading) return;
     const profile: UserProfile | undefined = AuthService.profile();
@@ -95,6 +101,7 @@ export struct PermissionsPrivacyPage {
     }
   }
 
+  // 关闭通知（云端确认删除登记后才算关闭）。
   private async disableNotifications(): Promise<void> {
     if (this.loading) return;
     this.loading = true;
@@ -111,6 +118,7 @@ export struct PermissionsPrivacyPage {
     }
   }
 
+  // 重试通知登记 / 清理。
   private async retryNotificationRegistration(): Promise<void> {
     if (this.loading) return;
     const profile: UserProfile | undefined = AuthService.profile();
@@ -132,6 +140,7 @@ export struct PermissionsPrivacyPage {
     }
   }
 
+  // 开启桌面卡片远程同步。
   private async enableServiceCardSync(): Promise<void> {
     if (this.loading) return;
     if (AuthService.profile() === undefined) {
@@ -154,6 +163,7 @@ export struct PermissionsPrivacyPage {
     }
   }
 
+  // 关闭桌面卡片远程同步。
   private async disableServiceCardSync(): Promise<void> {
     if (this.loading) return;
     this.loading = true;
@@ -170,6 +180,7 @@ export struct PermissionsPrivacyPage {
     }
   }
 
+  // 重试远程同步登记 / 清理。
   private async retryServiceCardRegistration(): Promise<void> {
     if (this.loading) return;
     if (AuthService.profile() === undefined) {
@@ -192,6 +203,7 @@ export struct PermissionsPrivacyPage {
     }
   }
 
+  // 一行数据说明。
   @Builder
   private dataRow(title: string, description: string) {
     Column({ space: 5 }) {
@@ -202,6 +214,7 @@ export struct PermissionsPrivacyPage {
     }.width('100%').alignItems(HorizontalAlign.Start)
   }
 
+  // 页面布局。
   build() {
     NavDestination() {
       Scroll() {

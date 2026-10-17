@@ -1,12 +1,23 @@
+/**
+ * 【文件职责】图片磁盘缓存（目录 cacheDir/shike-image-v1）。
+ * 每个文件以“账号命名空间 + mediaId + 模式 + 尺寸 + 修订号”为键记录在索引中，命中时按 sha256 与字节数校验，
+ * 同样大小但内容损坏的文件不会被当作命中。容量上限 128 个文件 / 96MB，淘汰时优先保留列表封面，其余按最近使用时间淘汰。
+ * 不同账号使用不同的索引命名空间；游客使用 guest。
+ * 【新人注意】缓存命中只说明“文件有效”，是否允许显示仍由 ImageDescriptors 的授权决定。
+ */
 import { common } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import { util } from '@kit.ArkTS';
 import { ImageCacheEntry, ImageDescriptor, ImageMode, ImageVariant } from '../model/ImageModels';
 
+// 旧版缓存目录中的文件信息（迁移用）。
 interface LegacyImageFile { path: string; byteSize: number; modified: number; }
+// 磁盘索引文件的结构。
 interface ImageDiskIndex { entries: Array<ImageCacheEntry>; }
+// 图片磁盘缓存（静态类）。
 export class ImageDiskCache {
+  // 当前账号、索引命名空间、内存中的索引、加载状态、串行写入队列、上次写索引时间、已校验文件表。
   private static owner: string = 'guest';
   private static namespace: string = '';
   private static entries: Array<ImageCacheEntry> = [];
@@ -15,12 +26,15 @@ export class ImageDiskCache {
   private static writes: Promise<void> = Promise.resolve();
   private static lastAccessPersistAt: number = 0;
   private static verified: Map<string, string> = new Map<string, string>();
+  // 切换缓存所属账号（游客为 guest），下次访问时加载对应索引。
   static activate(owner: string): void {
     const next: string = owner || 'guest';
     if (next === ImageDiskCache.owner) return;
     ImageDiskCache.owner = next; ImageDiskCache.namespace = ''; ImageDiskCache.entries = []; ImageDiskCache.loaded = ''; ImageDiskCache.loading = undefined; ImageDiskCache.verified.clear();
   }
+  // 缓存目录路径。
   static directory(context: common.Context): string { return context.cacheDir + '/shike-image-v1'; }
+  // 计算字节的 SHA-256（十六进制）。
   private static async hash(bytes: Uint8Array): Promise<string> {
     const digest: cryptoFramework.Md = cryptoFramework.createMd('SHA256');
     const input: cryptoFramework.DataBlob = { data: bytes };
@@ -29,6 +43,7 @@ export class ImageDiskCache {
     let result: string = ''; for (const byte of value) result += byte.toString(16).padStart(2, '0');
     return result;
   }
+  // 确保当前账号的索引已加载到内存（并发调用共享同一次加载）。
   private static async ensure(context: common.Context): Promise<void> {
     const owner: string = ImageDiskCache.owner;
     if (ImageDiskCache.loaded === owner) return;
@@ -56,6 +71,7 @@ export class ImageDiskCache {
     ImageDiskCache.loading = task;
     try { await task; } finally { if (ImageDiskCache.loading === task) ImageDiskCache.loading = undefined; }
   }
+  // 查找缓存：存在且 sha256 / 字节数与描述符一致才返回条目，否则删除坏文件并返回 undefined。
   static async find(context: common.Context, mediaId: string, mode: ImageMode, variant: ImageVariant, revisionId: string): Promise<ImageCacheEntry | undefined> {
     const owner: string = ImageDiskCache.owner; await ImageDiskCache.ensure(context);
     if (owner !== ImageDiskCache.owner) return undefined;
@@ -82,6 +98,7 @@ export class ImageDiskCache {
     } catch (_error) { return undefined; }
     finally { if (file !== undefined) try { await fileIo.close(file); } catch (_error) { } }
   }
+  // 把旧版缓存目录中的同一张图迁移到新缓存（校验通过才迁移），避免升级后重新下载。
   static async migrateLegacy(context: common.Context, mediaId: string, mode: ImageMode, requested: ImageVariant, revisionId: string,
     bucket: string, cloudPath: string, descriptor?: ImageDescriptor): Promise<ImageCacheEntry | undefined> {
     const owner: string = ImageDiskCache.owner; const oldOwner: string = owner === 'guest' ? 'public' : owner;
@@ -102,7 +119,7 @@ export class ImageDiskCache {
           const sha256: string = await ImageDiskCache.hash(new Uint8Array(bytes));
           if (owner !== ImageDiskCache.owner) return undefined;
           if (descriptor !== undefined && descriptor.variant === variant && (descriptor.sha256 !== sha256 || descriptor.byteSize !== stat.size)) continue;
-          // This local descriptor is only a byte hint. It never registers server permission.
+          // 这里的本地描述符只是字节提示，绝不代表服务端授予了显示权限。
           const local: ImageDescriptor = { variant, sha256, byteSize: stat.size, width: descriptor?.width || 0, height: descriptor?.height || 0,
             ownerUid: '', cardId: descriptor?.cardId || '', cardRevision: '', recipeVersion: variant === 'COVER_480' ? 1 : 0 };
           const entry: ImageCacheEntry = await ImageDiskCache.put(context, mediaId, mode, requested, revisionId, local, new util.Base64Helper().encodeToStringSync(new Uint8Array(bytes)));
@@ -115,7 +132,9 @@ export class ImageDiskCache {
     }
     return undefined;
   }
+  // 条目对应的 file:// 地址。
   static url(context: common.Context, entry: ImageCacheEntry): string { return 'file://' + ImageDiskCache.directory(context) + '/' + entry.fileName; }
+  // 写入缓存：Base64 解码后按描述符校验大小与 sha256，通过后写文件并更新索引；校验失败抛错。
   static async put(context: common.Context, mediaId: string, mode: ImageMode, requested: ImageVariant, revisionId: string, descriptor: ImageDescriptor, base64: string): Promise<ImageCacheEntry> {
     const owner: string = ImageDiskCache.owner; await ImageDiskCache.ensure(context);
     const bytes: Uint8Array = new util.Base64Helper().decodeSync(base64);
@@ -147,13 +166,16 @@ export class ImageDiskCache {
     });
     return entry;
   }
+  // 把写操作串行化，避免并发写索引造成覆盖。
   private static enqueue(work: () => Promise<void>): Promise<void> {
     const task: Promise<void> = ImageDiskCache.writes.catch((): void => {}).then(work);
     ImageDiskCache.writes = task; return task;
   }
+  // 异步持久化当前索引。
   private static persist(context: common.Context, owner: string): Promise<void> {
     return ImageDiskCache.enqueue(async (): Promise<void> => ImageDiskCache.writeIndex(context, owner));
   }
+  // 清理旧版缓存目录，控制旧缓存占用。
   private static async pruneLegacy(context: common.Context, owner: string, count: number, bytes: number): Promise<void> {
     const directory: string = context.cacheDir + '/shike-approved-media-v2'; const files: Array<LegacyImageFile> = [];
     try {
@@ -169,10 +191,11 @@ export class ImageDiskCache {
       }
     } catch (_error) { }
   }
+  // 写索引并执行容量淘汰（最多 128 个文件 / 96MB）。
   private static async writeIndex(context: common.Context, owner: string): Promise<void> {
     if (owner !== ImageDiskCache.owner) return;
     const namespace: string = ImageDiskCache.namespace;
-    // Preserve list covers while background originals rotate through the bounded cache.
+    // 后台原图在有限的缓存中轮换时，优先保留列表封面。
     ImageDiskCache.entries.sort((a: ImageCacheEntry, b: ImageCacheEntry): number =>
       Number(b.requestedVariant === 'COVER_480') - Number(a.requestedVariant === 'COVER_480') || b.lastAccess - a.lastAccess);
     let total: number = 0; const keep: Array<ImageCacheEntry> = []; const removed: Array<ImageCacheEntry> = [];
@@ -199,6 +222,7 @@ export class ImageDiskCache {
       try { await fileIo.unlink(temporary); } catch (_error) { }
     }
   }
+  // 按 file:// 地址删除缓存文件，返回对应的 mediaId。
   static async evictUrl(context: common.Context, url: string): Promise<string> {
     const owner: string = ImageDiskCache.owner; await ImageDiskCache.ensure(context);
     if (owner !== ImageDiskCache.owner) return '';
@@ -207,6 +231,7 @@ export class ImageDiskCache {
     await ImageDiskCache.evict(context, entry.mediaId, entry.requestedVariant, entry.mode, entry.revisionId);
     return owner === ImageDiskCache.owner ? entry.mediaId : '';
   }
+  // 删除某张图某个尺寸的缓存。
   static async evict(context: common.Context, mediaId: string, variant: ImageVariant, mode: ImageMode, revisionId: string = ''): Promise<void> {
     const owner: string = ImageDiskCache.owner; await ImageDiskCache.ensure(context);
     await ImageDiskCache.enqueue(async (): Promise<void> => {
@@ -220,6 +245,7 @@ export class ImageDiskCache {
       await ImageDiskCache.writeIndex(context, owner);
     });
   }
+  // 清空当前账号的全部缓存。
   static async clear(context: common.Context): Promise<void> {
     const owner: string = ImageDiskCache.owner; await ImageDiskCache.ensure(context);
     await ImageDiskCache.enqueue(async (): Promise<void> => {

@@ -1,9 +1,14 @@
+/**
+ * 【文件职责】群聊“一起选餐”投票：候选（get-meal-candidates）、创建、读取、加选项 / 投票 / 截止 / 取消 / 停止加选项，均在 Cloud DB 事务中执行。
+ */
 'use strict';
 const crypto=require('crypto');
 const {dateMillis,currentVisibility,isAccountActive}=require('./shared/content-policy');
 const {fail,hash,id,uuid,int,version,token,encode,coordinate,distance}=require('./stages47-common');
+// 创建模块：ctx 由 runtime.js 注入。
 function createStage6Services(ctx){
  const {collection,one,models}=ctx;const model=(n,r)=>Object.assign(new models[n](),r);
+ // 按来源分层取候选卡片（收藏 / 好友 / 公开），每层有配额。
  async function candidates(uid,p,env){
   await ctx.contentPolicy(env).assertAccountActive(uid);const caps=await ctx.stage3().capabilities(env);if(!caps.searchEnabled)throw fail('选餐硬条件需先完成查询资格验证。','FEATURE_NOT_READY');
   const spec=ctx.stage3().querySpec({...p,scope:'ALL_PUBLIC',sort:'LATEST'},env);const source=p.source||'ALL';if(!['ALL','MY_COLLECTIONS','FRIENDS_ONLY','PUBLIC_ONLY'].includes(source))throw fail('来源无效。');
@@ -29,7 +34,7 @@ function createStage6Services(ctx){
     let meters=null;if(point){if(!merchants.has(row.merchantId))merchants.set(row.merchantId,await one(collection(env,'Merchant').query().equalTo('merchantId',row.merchantId||'')));const merchant=merchants.get(row.merchantId);if(!coordinate(merchant))continue;meters=distance(point.lat,point.lon,merchant);if(meters>point.radius)continue;}
     filtered.push({row,meters});}
    filtered.sort((a,b)=>(dateMillis(b.row.publishedAt)||Number(b.row.createdAt))-(dateMillis(a.row.publishedAt)||Number(a.row.createdAt)) || a.row.id.localeCompare(b.row.id));
-   // Each layer has a quota, so a single private candidate does not end ALL.
+   // 每一层都有配额，所以一个私人候选不会把“全部”结果占满。
    const quota=source==='ALL'?Math.max(1,3-output.length):3;
    for(const item of filtered){if(seen.has(item.row.id))continue;if(layer.reason==='来自当前好友推荐'){const relation=await ctx.friendshipBetween(uid,item.row.ownerUid,env);if(!relation||relation.status!=='ACCEPTED')continue;}const card=await ctx.readCardIfAllowed(item.row,env,item.meters===null?0:item.meters/1000,true,uid,false,1);if(!card)continue;seen.add(card.id);output.push({card,reasons:[layer.reason],distanceMeters:item.meters});if(output.length>=3 || output.filter(x=>x.reasons[0]===layer.reason).length>=quota)break;}
    if(output.length>=3)break;
@@ -38,19 +43,20 @@ function createStage6Services(ctx){
   const readable=await ctx.finalizeCardReads(final.map(x=>x.card),sources,uid,env);const candidates=final.filter(x=>readable.some(c=>c.id===x.card.id));
   return {candidates,coverage:'BOUNDED',scannedCandidateCount:scanned,insufficient:candidates.length<3,sessionExhausted:candidates.length===0};
  }
+ // 在事务中读取群与成员快照，校验当前用户是成员。
  async function groupSnapshot(tx,uid,groupId,env){
   const group=await ctx.stage1().txOne(tx,env,'GroupConversation','id',id(groupId));
   const members=await tx.executeQuery(collection(env,'GroupMember').query().equalTo('groupId',groupId).limit(21));
   if(!group||members.length>20||!members.some(member=>member.memberUid===uid))throw fail('你已不在此群。','FORBIDDEN');
   const uids=[...new Set(members.map(member=>member.memberUid))];
-  // Keep membership and account state inside the same transaction, replacing
-  // one profile lookup per member with a bounded primary-key batch.
+  // 成员关系与账号状态在同一个事务内读取，用有上限的主键批量查询代替逐个成员查询资料。
   const rows=await tx.executeQuery(collection(env,'UserProfile').query().in('uid',uids).limit(uids.length));
   const profiles=rows.filter(isAccountActive),active=new Set(profiles.map(profile=>profile.uid));
   if(!active.has(uid))throw fail('账号不可用。','ACCOUNT_INACTIVE');
   if(!active.has(group.ownerUid))throw fail('群主不可用。','FORBIDDEN');
   return {group,members:members.filter(member=>active.has(member.memberUid)),profiles};
  }
+ // 读取投票选项并校验每个选项当前仍可见。
  async function validatedOptions(tx,poll,snapshot,env){const options=await tx.executeQuery(collection(env,'MealPollOption').query().equalTo('pollId',poll.pollId).orderByAsc('optionId').limit(13));const votes=await tx.executeQuery(collection(env,'MealPollVote').query().equalTo('pollId',poll.pollId).limit(21));if(options.length>12||votes.length>20)throw fail('投票超过事务预算。','TRANSACTION_LIMIT');const policy=ctx.transactionPolicy(tx,env,snapshot.profiles);const details=new Map();const invalid=[];
   for(const option of options){let accessible=option.status==='ACTIVE';let row=null;
    if(accessible && poll.mode==='CARD'){row=await ctx.stage1().txOne(tx,env,'FoodCard','id',option.cardId);accessible=!!row && (poll.consumptionMode==='ANY'||row.consumptionMode===poll.consumptionMode);if(accessible)for(const member of snapshot.members){if(!await policy.canReadCard(member.memberUid,row)){accessible=false;break;}}}
@@ -60,10 +66,13 @@ function createStage6Services(ctx){
   const validVotes=votes.filter(v=>{const m=snapshot.members.find(x=>x.memberUid===v.voterUid);return m && dateMillis(v.updatedAt)>=Number(m.joinedAt||0) && details.get(v.optionId)&&details.get(v.optionId).accessible;});
   return {options,votes,validVotes,details,invalid};
  }
+ // 截止时汇总票数。
  function closeFields(poll,valid,now){const counts={};for(const o of valid.options)if(valid.details.get(o.optionId).accessible)counts[o.optionId]=0;for(const v of valid.validVotes)counts[v.optionId]++;const entries=Object.entries(counts);const max=Math.max(0,...entries.map(x=>x[1]));const tied=entries.filter(x=>x[1]===max && max>0);return {status:'CLOSED',acceptingOptions:false,closeOutcome:tied.length?'WINNER':'NO_RESULT',closeReason:tied.length?'':entries.length?'NO_VALID_VOTES':'NO_VALID_OPTIONS',winnerOptionId:tied.length?tied[crypto.randomInt(tied.length)][0]:'',winnerResolvedAt:new Date(now),resultCountsJson:JSON.stringify(counts)};}
+ // 创建投票（requestId 幂等）。
  async function createPoll(uid,p,env){const pollId=hash([uid,'poll',uuid(p.requestId)]);const groupId=id(p.groupId);const title=String(p.title||'一起选餐').trim();if(!title || title.length>50 || !['CARD','MERCHANT'].includes(p.mode)||!['NAMED','ANONYMOUS'].includes(p.visibilityMode)||!['ANY','DELIVERY','DINE_IN'].includes(p.consumptionMode))throw fail('投票设置无效。');const deadline=p.deadlineAt==null?null:int(p.deadlineAt,0,Number.MAX_SAFE_INTEGER);const requestHash=hash([groupId,title,p.mode,p.visibilityMode,p.consumptionMode,p.deadlineAt||null]);
   const committed=await collection(env,'MealPoll').runTransaction({apply:async tx=>{const snapshot=await groupSnapshot(tx,uid,groupId,env);const old=await ctx.stage1().txOne(tx,env,'MealPoll','pollId',pollId);if(old){if(old.requestPayloadHash!==requestHash)throw fail('请求已用于不同投票。','CONFLICT');return true;}const now=Date.now();if(deadline!==null&&(deadline<now+1000||deadline>now+7*86400000))throw fail('截止必须在服务端当前时间之后且不超过 7 天。');const r=model('MealPoll',{pollId,groupId,creatorUid:uid,title,mode:p.mode,visibilityMode:p.visibilityMode,consumptionMode:p.consumptionMode,status:'OPEN',deadlineAt:deadline===null?null:new Date(deadline),acceptingOptions:true,closeOutcome:'',closeReason:'',winnerOptionId:'',winnerResolvedAt:null,resultCountsJson:'{}',createdAt:new Date(now),updatedAt:new Date(now),version:1,requestPayloadHash:requestHash});const messageId=hash(['poll-message',pollId]);const preview=ctx.encryptPrivateText('选餐投票，请升级或打开查看','group-conversation:'+groupId+':preview',env);
    ctx.stage1().upsertRows(tx,[r,model('GroupMessage',{id:messageId,groupId,senderUid:uid,kind:'MEAL_POLL',referenceId:pollId,cardId:'',text:'',createdAt:now}),model('GroupConversation',{...snapshot.group,lastMessageId:messageId,lastMessageKind:'MEAL_POLL',lastMessagePreview:preview,lastMessageAt:now,updatedAt:now}),...snapshot.members.map(m=>model('GroupMember',{...m,unreadCount:m.memberUid===uid?Number(m.unreadCount||0):Math.min(999,Number(m.unreadCount||0)+1),updatedAt:now}))]);return true;}});if(!committed)throw fail('投票未创建。','CONFLICT');return getPoll(uid,{pollId},env);}
+ // 读取或变更投票（action：GET / ADD / VOTE / CLOSE / CANCEL / STOP）。
  async function mutatePoll(uid,p,env,action='GET'){
   let output;let deadlineReached=false;
   const committed=await collection(env,'MealPoll').runTransaction({apply:async tx=>{deadlineReached=false;const poll=await ctx.stage1().txOne(tx,env,'MealPoll','pollId',id(p.pollId));if(!poll)throw fail('投票不存在。','NOT_FOUND');const snapshot=await groupSnapshot(tx,uid,poll.groupId,env);const valid=await validatedOptions(tx,poll,snapshot,env);const now=Date.now();let next={...poll};const writes=[];const deletes=[];
@@ -84,10 +93,11 @@ function createStage6Services(ctx){
    }
    if(poll.status==='OPEN'){writes.push(...valid.invalid);for(const v of valid.votes)if(!valid.validVotes.some(x=>x.voterUid===v.voterUid))deletes.push(model('MealPollVote',v));}
    if(action!=='GET' || valid.invalid.length || deletes.length || next.status!==poll.status){next.version=Number(poll.version)+1;next.updatedAt=new Date(now);writes.push(model('MealPoll',next));writes.push(model('GroupConversation',{...snapshot.group,updatedAt:ctx.logicalWriteTime(snapshot.group.updatedAt)}));}
-   // All policy/authority queries above precede all SDK writes.
+   // 上面所有策略与权威数据查询都在任何 SDK 写入之前完成。
    if(deletes.length)tx.executeDelete(deletes);if(writes.length)ctx.stage1().upsertRows(tx,writes);output={poll:next,valid,snapshot};return true;
   }});if(!committed)throw fail('投票冲突，请刷新重试。','CONFLICT');if(deadlineReached)throw fail('截止已到，结果已固化。','POLL_DEADLINE_REACHED');return pollView(uid,output,env);
  }
+ // 生成返回给客户端的投票视图（匿名投票不返回投票人）。
  async function pollView(uid,data,env){const {poll,valid,snapshot}=data;await ctx.contentPolicy(env).assertAccountActive(uid);const currentMembers=await collection(env,'GroupMember').query().equalTo('groupId',poll.groupId).limit(21).get();if(!currentMembers.some(m=>m.memberUid===uid))throw fail('你已不在此群。','FORBIDDEN');const activeMembers=[];for(const member of currentMembers){const profile=await one(collection(env,'UserProfile').query().equalTo('uid',member.memberUid));if(isAccountActive(profile))activeMembers.push(member);}const counts=poll.status==='CLOSED'?JSON.parse(poll.resultCountsJson||'{}'):{};const liveVotes=valid.validVotes.filter(v=>activeMembers.some(m=>m.memberUid===v.voterUid&&dateMillis(v.updatedAt)>=Number(m.joinedAt||0)));if(poll.status==='OPEN')for(const v of liveVotes)counts[v.optionId]=(counts[v.optionId]||0)+1;const options=[];
   for(const o of valid.options){const d=valid.details.get(o.optionId);let card=null,merchant=null;if(d.accessible){if(poll.mode==='CARD'){let allReadable=true;const fresh=await one(collection(env,'FoodCard').query().equalTo('id',d.row.id));for(const member of activeMembers)if(!fresh||!await ctx.contentPolicy(env).canReadCard(member.memberUid,fresh)){allReadable=false;break;}if(allReadable){card=await ctx.readCardIfAllowed(fresh,env,0,true,uid,false,1);if(card){const finalized=await ctx.finalizeCardReads([card],[fresh],uid,env);card=finalized[0]||null;for(const member of activeMembers)if(!await ctx.contentPolicy(env).canReadCard(member.memberUid,fresh)){card=null;break;}}}}else{const fresh=await one(collection(env,'Merchant').query().equalTo('merchantId',d.row.merchantId));if(coordinate(fresh))merchant={merchantId:fresh.merchantId,name:fresh.name,address:fresh.address,latitude:fresh.latitudeE6/1e6,longitude:fresh.longitudeE6/1e6};}}const accessible=!!card||!!merchant;const out={optionId:o.optionId,status:accessible?'ACTIVE':'INVALID',accessible,card,merchant,voteCount:poll.status==='OPEN'&&!accessible?0:Number(counts[o.optionId]||0)};
    if(poll.visibilityMode==='NAMED'){out.voters=valid.validVotes.filter(v=>v.optionId===o.optionId&&activeMembers.some(m=>m.memberUid===v.voterUid&&dateMillis(v.updatedAt)>=Number(m.joinedAt||0))).map(v=>({uid:v.voterUid,nickname:String((snapshot.profiles.find(r=>r.uid===v.voterUid)||{}).nicknameValue||'群成员')}));}options.push(out);}

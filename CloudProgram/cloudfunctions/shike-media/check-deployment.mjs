@@ -1,3 +1,7 @@
+/**
+ * 【文件职责】shike-media 部署前自检脚本（由部署成员手动运行）：
+ * 不带参数时检查函数目录中是否存在运行所需的源文件与正确的 function-config；带 --artifact <解压目录> 时校验打包产物。
+ */
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';

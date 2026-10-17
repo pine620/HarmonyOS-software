@@ -1,10 +1,16 @@
+/**
+ * 【文件职责】五套页面色板（笔记 / 榜单 / 社交 / 发布 / 个人）及其颜色角色。
+ * 页面通过 pageColor(色板, 角色) 取颜色资源，亮色/暗色由系统按 resources/base 与 resources/dark 自动选择。
+ */
 export type PagePaletteName = 'NOTE' | 'RANKING' | 'SOCIAL' | 'CREATE' | 'PERSONAL';
+// 在页面之间传递色板的路由参数。
 export interface PagePaletteRoute { palette: PagePaletteName; }
 
+// 颜色角色：画布、表面、正文、次要文字、分隔线、强调色等。
 export type PageColorRole = 'canvas' | 'surface' | 'ink' | 'muted' | 'line' | 'gold' | 'on_gold' |
   'soft' | 'header' | 'header_clear' | 'header_fade' | 'action' | 'error' | 'good' | 'glow' | 'scrim';
 
-// Literal resource references retain native light/dark resource selection.
+// 返回字面量资源引用（$r），以保留系统原生的亮/暗色资源切换。
 export function pageColor(palette: PagePaletteName, role: PageColorRole): Resource {
   if (palette === 'RANKING') {
     switch (role) {

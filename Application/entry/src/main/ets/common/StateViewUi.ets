@@ -1,9 +1,14 @@
 import { PagePaletteName, pageColor } from './PagePaletteUi';
 
-// Pack 2 (2026-10-15): one empty / loading / error component for the whole app, tinted by page palette.
+/**
+ * 【文件职责】全 App 统一的空状态 / 加载中 / 出错视图组件，颜色随页面色板变化。
+ */
+// 状态类型。
 export type StateViewKind = 'EMPTY' | 'LOADING' | 'ERROR';
+// 状态图标。
 export type StateViewIcon = 'food' | 'message' | 'search' | 'offline' | 'card' | 'list';
 
+// 状态视图组件：kind 决定显示内容，可带标题、说明与“重试”按钮。
 @Component
 export struct StateView {
   @Prop kind: StateViewKind = 'EMPTY';
@@ -12,10 +17,11 @@ export struct StateView {
   @Prop title: string = '';
   @Prop hint: string = '';
   @Prop actionLabel: string = '';
-  // Skeleton rows shown while loading (0 = only the progress line).
+  // 加载中时显示的骨架行数（0 = 只显示进度条）。
   @Prop skeletonRows: number = 2;
   onAction: () => void = (): void => {};
 
+  // 绘制状态图标。
   @Builder
   private symbol(size: number) {
     if (this.icon === 'message') {
@@ -33,12 +39,14 @@ export struct StateView {
     }
   }
 
+  // 骨架行的索引数组（ForEach 使用）。
   private skeletonIndexes(): Array<number> {
     const indexes: Array<number> = [];
     for (let index = 0; index < Math.max(0, Math.min(4, this.skeletonRows)); index++) indexes.push(index);
     return indexes;
   }
 
+  // 一行骨架占位。
   @Builder
   private skeletonCard() {
     Row({ space: 10 }) {

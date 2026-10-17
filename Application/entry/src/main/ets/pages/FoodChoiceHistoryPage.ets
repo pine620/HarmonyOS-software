@@ -1,3 +1,6 @@
+/**
+ * 【文件职责】「今日吃什么」选择记录页面：按天分组列出历史选择（list-food-choices），可预览卡片、删除记录。
+ */
 import { PagePaletteName, pageColor } from '../common/PagePaletteUi';
 import { common } from '@kit.AbilityKit';
 import { FoodCard } from '../model/CloudContracts';
@@ -13,6 +16,7 @@ import { AccountRequestGuard } from '../service/AccountRequestGuard';
 import { CloudBusinessError } from '../service/CloudReadErrors';
 import { RandomFoodRoundStore } from '../service/RandomFoodRoundStore';
 
+// 选择记录页面。
 @Component
 export struct FoodChoiceHistoryPage {
   @Prop palette: PagePaletteName = 'NOTE';
@@ -37,21 +41,31 @@ export struct FoodChoiceHistoryPage {
   private guard: ContentPageGuard = new ContentPageGuard();
   private repo: RandomFoodRepository = new RandomFoodRepository();
   private cardRepo: CardRepository = new CardRepository();
+  // 取得 UIAbility 上下文。
   private context(): common.UIAbilityContext { return this.getUIContext().getHostContext() as common.UIAbilityContext; }
+  // 是否允许动画（用户开关且系统未减弱动态效果）。
   private motionAllowed(): boolean { return this.motion && !this.systemReduced; }
+  // 显示错误提示。
   private showError(error: Object, fallback: string): void {
     if (randomFoodAccountUnavailable(error)) { this.items = []; this.nextCursor = ''; this.deletingId = ''; this.loaded = false; }
     this.message = stage47ErrorText(error, fallback);
   }
+  // 出现时恢复。
   aboutToAppear(): void { this.resume(); }
+  // 消失时暂停。
   aboutToDisappear(): void { this.pause(); }
+  // 导航可见性变化时暂停 / 恢复。
   private onVisibilityChanged(): void { if (this.navigationVisible) this.resume(); else this.pause(); }
+  // App 前后台切换时暂停 / 恢复。
   private onActiveChanged(): void { if (this.appActive) this.resume(); else this.pause(); }
+  // 账号内容变化时重新加载。
   private onRevisionChanged(): void { this.pause(); this.resume(); }
+  // 暂停：作废进行中的加载。
   private pause(): void {
     this.active = false; this.motionObserver.stop(); this.guard.close(); this.items = []; this.busy = false;
     this.deletingId = ''; this.loaded = false;
   }
+  // 恢复：加载第一页。
   private resume(): void {
     if (this.active || !this.navigationVisible || !this.appActive) return;
     this.active = true; this.guard.open();
@@ -60,6 +74,7 @@ export struct FoodChoiceHistoryPage {
     if (AccountRequestGuard.owner().length === 0) { this.message = '登录后查看你的云端选择记录。'; return; }
     void this.load(true);
   }
+  // 加载一页（reset=true 时从头开始）。
   private async load(reset: boolean): Promise<void> {
     if (this.busy) return;
     const ticket: ContentPageTicket = this.guard.ticket(); this.busy = true;
@@ -81,6 +96,7 @@ export struct FoodChoiceHistoryPage {
     } catch (error) { if (this.guard.valid(ticket)) this.showError(error as Object, '记录暂不可读取，请刷新重试。'); }
     finally { if (this.guard.valid(ticket)) this.busy = false; }
   }
+  // 删除选中的记录。
   private async remove(): Promise<void> {
     if (this.busy || this.deletingId.length === 0) return;
     const id: string = this.deletingId, ticket: ContentPageTicket = this.guard.ticket(); this.busy = true;
@@ -93,6 +109,7 @@ export struct FoodChoiceHistoryPage {
     } catch (error) { if (this.guard.valid(ticket)) this.showError(error as Object, '删除尚未确认，请重试。'); }
     finally { if (this.guard.valid(ticket)) this.busy = false; }
   }
+  // 预览记录对应的卡片。
   private async preview(item: FoodChoiceItem): Promise<void> {
     if (this.busy || item.card === null) return;
     const cardId: string = item.card.id, ticket: ContentPageTicket = this.guard.ticket(); this.busy = true;
@@ -108,6 +125,7 @@ export struct FoodChoiceHistoryPage {
       }
     } finally { if (this.guard.valid(ticket)) this.busy = false; }
   }
+  // 日期分组标题。
   private day(value: number): string {
     const date: Date = new Date(value), today: Date = new Date();
     const yesterday: Date = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
@@ -115,17 +133,24 @@ export struct FoodChoiceHistoryPage {
     if (date.toDateString() === yesterday.toDateString()) return '昨天';
     return date.getFullYear().toString() + '年' + (date.getMonth() + 1).toString() + '月' + date.getDate().toString() + '日';
   }
+  // 该行是否为新一天的第一行（需要显示日期标题）。
   private groupStarts(item: FoodChoiceItem, index: number): boolean { return index === 0 || this.day(item.selectedAt) !== this.day(this.items[index - 1].selectedAt); }
+  // 卡片名称（卡片已不可用时给出提示）。
   private name(item: FoodChoiceItem): string { return item.card === null ? '卡片已不可用' : item.card.productName; }
+  // 封面地址。
   private photo(item: FoodChoiceItem): string { return item.card === null ? '' : item.card.photoUrl; }
+  // 店铺名称。
   private merchant(item: FoodChoiceItem): string {
     return item.card === null ? '原卡片当前不可展示' : item.card.merchantNameSnapshot || item.card.shop || '未关联店铺';
   }
+  // 价格文本。
   private price(item: FoodChoiceItem): string { return item.card === null ? '' : cardPriceText(item.card); }
+  // 选择时间。
   private time(item: FoodChoiceItem): string {
     const date: Date = new Date(item.selectedAt);
     return date.getHours().toString().padStart(2, '0') + ':' + date.getMinutes().toString().padStart(2, '0');
   }
+  // 列表行的渲染键。
   private rowKey(item: FoodChoiceItem, index: number): string {
     const parts: Array<string> = [item.historyId, this.groupStarts(item, index) ? this.day(item.selectedAt) : '',
       this.name(item), this.photo(item), this.merchant(item), this.price(item), item.card === null ? '' : item.card.contentRevision || '',
@@ -133,6 +158,7 @@ export struct FoodChoiceHistoryPage {
       String(item.card !== null && item.card.primaryPhotoLoadFailed === true), String(this.deletingId === item.historyId)];
     return JSON.stringify(parts);
   }
+  // 一行记录。
   @Builder private row(item: FoodChoiceItem) {
     Row({ space: 12 }) {
       if (this.photo(item).length > 0) {
@@ -162,6 +188,7 @@ export struct FoodChoiceHistoryPage {
         .onClick((): void => { this.deletingId = item.historyId; })
     }.width('100%').padding({ top: 16, bottom: 16 })
   }
+  // 删除确认弹层。
   @Builder private deletePrompt() {
     Column({ space: 10 }) {
       Text('删除这条选择记录？').fontSize(16).fontWeight(FontWeight.Bold).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'ink') : $r('app.color.random_ink')))
@@ -174,6 +201,7 @@ export struct FoodChoiceHistoryPage {
     }.padding(16).width('100%').backgroundColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'soft') : $r('app.color.random_soft'))).borderRadius(12)
       .transition(randomFoodTransition(this.motionAllowed(), 'RECORD'))
   }
+  // 页面布局。
   build() {
     Scroll() {
       Column({ space: 12 }) {

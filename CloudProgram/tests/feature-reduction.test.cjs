@@ -33,7 +33,7 @@ function publicFeedFixture(total, hidden = false) {
     finalizeCardReads: async cards => cards
   };
   vm.runInNewContext(sourceBlock(source, 'async function scanCardPage(', 'function cardContractFields(') +
-    sourceBlock(source, 'async function listPublicRecommendations(', 'async function listNearby('), scope);
+    sourceBlock(source, 'async function listPublicRecommendations(', '// get-card-detail：'), scope);
   return { read: payload => scope.listPublicRecommendations(payload, {}), calls };
 }
 

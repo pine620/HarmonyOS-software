@@ -1,3 +1,8 @@
+/**
+ * 【文件职责】「今日吃什么」页面：按来源（我的收藏 / 公开推荐 / 好友推荐）取候选池，每轮翻开三张卡片供用户选一张，
+ * 确认后保存选择记录（save-food-choice），6 小时后可以开始下一顿。轮次保存在本机（RandomFoodRoundStore），返回或重启后可恢复；
+ * 同时让桌面卡片跟随所选来源（RandomFoodWidgetStore）。动画遵循用户开关与系统“减弱动态效果”设置。
+ */
 import { PagePaletteName, pageColor } from '../common/PagePaletteUi';
 import { common } from '@kit.AbilityKit';
 import util from '@ohos.util';
@@ -18,6 +23,7 @@ import { CloudBusinessError } from '../service/CloudReadErrors';
 import { ReadRequestOptions } from '../service/ReadScheduler';
 import { RandomFoodWidgetStore } from '../service/RandomFoodWidgetStore';
 
+// 今日吃什么页面。
 @Component
 export struct RandomFoodPage {
   @Prop palette: PagePaletteName = 'NOTE';
@@ -25,7 +31,7 @@ export struct RandomFoodPage {
   @StorageLink('stage47AppActive') @Watch('onActiveChanged') appActive: boolean = true;
   @StorageLink('accountContentRevision') @Watch('onRevisionChanged') accountRevision: number = 0;
   @StorageLink('contentMutationRevision') @Watch('onRevisionChanged') contentRevision: number = 0;
-  // Votes no longer bump contentMutationRevision; the personal pool is built from favorites.
+  // 投票不再改变 contentMutationRevision；“我的收藏”候选池由收藏数据生成。
   @StorageLink('favoritesMutationRevision') @Watch('onRevisionChanged') favoritesRevision: number = 0;
   onBack: () => void = (): void => {};
   onOpenCard: (card: FoodCard) => void = (_card: FoodCard): void => {};
@@ -54,33 +60,50 @@ export struct RandomFoodPage {
   private repo: RandomFoodRepository = new RandomFoodRepository();
   private cardRepo: CardRepository = new CardRepository();
   private sources: Array<RandomFoodSource> = ['MY', 'PUBLIC', 'FRIENDS'];
+  // 取得 UIAbility 上下文。
   private context(): common.UIAbilityContext { return this.getUIContext().getHostContext() as common.UIAbilityContext; }
+  // 系统字体缩放比例（至少 1）。
   private fontScale(): number { return Math.max(1, this.context().config.fontSizeScale || 1); }
+  // 卡片区域高度（随字体缩放）。
   private foodHeight(): number { return 224 + 44 + 112 * this.fontScale(); }
+  // 卡背区域高度。
   private backHeight(): number { return 200 + 60 * Math.min(1.4, this.fontScale()); }
+  // 是否为大字体模式。
   private largeText(): boolean { return this.fontScale() > 1.3; }
+  // 是否允许动画。
   private motionAllowed(): boolean { return this.motion && !this.systemReduced; }
+  // 显示错误提示。
   private showError(error: Object, fallback: string): void {
     if (randomFoodAccountUnavailable(error)) { this.cards = []; this.round = undefined; this.stopMealClock(); }
     this.message = stage47ErrorText(error, fallback);
   }
+  // 当前身份（guest 或 user:uid）。
   private viewer(): string { const uid: string = AccountRequestGuard.owner(); return uid.length === 0 ? 'guest' : 'user:' + uid; }
+  // 异步结果是否仍有效。
   private current(generation: number): boolean {
     return this.active && this.navigationVisible && this.appActive && generation === this.generation &&
       this.owner === this.viewer() && this.session === AuthSessionStore.generation();
   }
+  // 带有效性守卫的读请求参数。
   private options(generation: number): ReadRequestOptions {
     const options: ReadRequestOptions = { priority: 'metadata', mayContinue: async (): Promise<boolean> => this.current(generation) };
     return options;
   }
+  // 出现时恢复。
   aboutToAppear(): void { this.resume(); }
+  // 消失时暂停。
   aboutToDisappear(): void { this.pause(); }
+  // 导航可见性变化时暂停 / 恢复。
   private onVisibilityChanged(): void { if (this.navigationVisible) this.resume(); else this.pause(); }
+  // App 前后台切换时暂停 / 恢复。
   private onActiveChanged(): void { if (this.appActive) this.resume(); else this.pause(); }
+  // 账号内容变化时重新加载。
   private onRevisionChanged(): void { this.pause(); this.resume(); }
+  // 暂停：作废进行中的请求并停止计时器。
   private pause(): void {
     this.active = false; this.motionObserver.stop(); this.stopMealClock(); this.generation++; this.cards = []; this.busy = false;
   }
+  // 恢复：读取来源与本机轮次。
   private resume(): void {
     if (this.active || !this.navigationVisible || !this.appActive) return;
     this.active = true; this.owner = this.viewer(); this.session = AuthSessionStore.generation();
@@ -91,6 +114,7 @@ export struct RandomFoodPage {
       this.loadSource();
     } catch (error) { this.round = undefined; this.message = stage47ErrorText(error as Object, '本轮进度暂不可读取。'); }
   }
+  // 读取当前选择的来源（游客固定为公开推荐）。
   private loadSource(): void {
     this.stopMealClock();
     this.generation++; this.cards = []; this.index = 0; this.busy = false; this.rangeOpen = false;
@@ -99,51 +123,60 @@ export struct RandomFoodPage {
     if (this.round !== undefined && this.round.batchIds.length > 0) void this.restore();
     this.refreshMealClock();
   }
+  // 切换来源。
   private switchSource(source: RandomFoodSource): void {
     if (this.busy || source === this.source) return;
     if (this.owner === 'guest' && source !== 'PUBLIC') { this.onLogin(); return; }
     try {
       RandomFoodRoundStore.selectSource(this.context(), this.owner, source); this.source = source; this.loadSource();
-      // The desktop card follows this source; it refreshes its own pool in the background.
+      // 桌面卡片跟随本页选择的来源，并在后台刷新自己的候选池。
       void RandomFoodWidgetStore.sync(this.context()).catch((): void => {});
     }
     catch (error) { this.message = stage47ErrorText(error as Object, '来源切换暂未保存。'); }
   }
+  // 保存轮次到本机并刷新界面。
   private commit(round: RandomFoodRound): void {
     RandomFoodRoundStore.write(this.context(), round);
     this.round = copyRandomFoodRound(round);
     this.refreshMealClock();
   }
+  // 下一顿可以开始的时间。
   private nextMealAt(): number { return this.round === undefined ? 0 : randomFoodNextMealAt(this.round); }
+  // 现在是否可以开始下一顿。
   private nextMealReady(now: number): boolean {
     return this.round !== undefined && randomFoodCanStartNextMeal(this.round, now);
   }
+  // 距离下一顿的剩余时间文字。
   private nextMealRemaining(): string {
     const totalMinutes: number = Math.ceil(Math.max(0, this.nextMealAt() - this.mealNow) / 60000);
     const hours: number = Math.floor(totalMinutes / 60), minutes: number = totalMinutes % 60;
     return (hours > 0 ? hours.toString() + '小时' : '') + (minutes > 0 || hours === 0 ? minutes.toString() + '分钟' : '');
   }
+  // 停止“下一顿”倒计时。
   private stopMealClock(): void {
     this.mealClockGeneration++;
     if (this.mealClockTimer !== -1) clearTimeout(this.mealClockTimer);
     this.mealClockTimer = -1;
   }
+  // 刷新“下一顿”倒计时显示。
   private refreshMealClock(): void {
     this.stopMealClock(); this.mealNow = Date.now();
     const remaining: number = this.nextMealAt() - this.mealNow;
     if (!this.current(this.generation) || !this.confirmed() || !Number.isFinite(remaining) || remaining <= 0) return;
     const clockGeneration: number = this.mealClockGeneration, generation: number = this.generation;
-    // Refresh presentation only; expiration never clears a choice or starts a request.
+    // 只刷新显示；到期不会清除已做的选择，也不会发起请求。
     this.mealClockTimer = setTimeout((): void => {
       if (clockGeneration === this.mealClockGeneration && this.current(generation)) this.refreshMealClock();
     }, Math.max(1, Math.min(60000, remaining)));
   }
+  // 空轮次。
   private blankRound(): RandomFoodRound {
     const value: RandomFoodRound = { version: 1, owner: this.owner, source: this.source, roundId: util.generateRandomUUID(),
       cardIds: [], position: 0, shownCount: 0, batchIds: [], drawId: '', chosenCardId: '', pendingCardId: '', selectedAt: 0,
       historyId: '', recordDeleted: false, rangeLabel: '', preparedAt: 0, ended: false };
     return value;
   }
+  // 读取一批卡片内容。
   private async fetch(ids: Array<string>, drawId: string, generation: number): Promise<Array<FoodCard>> {
     const request: RandomFoodCardsRequest = { source: this.source, drawId, cardIds: ids };
     const page: RandomFoodCards = await this.repo.cards(request, this.options(generation));
@@ -151,6 +184,7 @@ export struct RandomFoodPage {
     for (const id of ids) { const card: FoodCard | undefined = page.cards.find((item: FoodCard): boolean => item.id === id); if (card !== undefined) ordered.push(card); }
     return ordered;
   }
+  // 为本轮的卡片补全内容与封面。
   private async hydrate(generation: number): Promise<void> {
     const cards: Array<FoodCard> = this.cards.slice();
     try {
@@ -158,8 +192,9 @@ export struct RandomFoodPage {
         async (): Promise<boolean> => this.current(generation), (card: FoodCard): void => {
           if (this.current(generation) && this.cards.some((item: FoodCard): boolean => item === card)) this.cards = this.cards.slice();
         }, (card: FoodCard): boolean => this.cards.some((item: FoodCard): boolean => item === card));
-    } catch (_error) { /* The card stays usable with an explicit photo placeholder. */ }
+    } catch (_error) { /* 卡片仍可使用，并明确显示图片占位。 */ }
   }
+  // 恢复本机保存的轮次（卡片内容重新从云端读取）。
   private async restore(): Promise<void> {
     if (this.round === undefined) return;
     const saved: RandomFoodRound = copyRandomFoodRound(this.round), generation: number = ++this.generation;
@@ -178,12 +213,14 @@ export struct RandomFoodPage {
     } catch (error) { if (this.current(generation)) this.showError(error as Object, '结果恢复失败，进度仍保留。'); }
     finally { if (this.current(generation)) this.busy = false; }
   }
+  // 结束一轮（显示结果）。
   private finishRound(round: RandomFoodRound): void {
     round.ended = true; round.batchIds = []; round.drawId = ''; round.chosenCardId = ''; round.pendingCardId = '';
     round.historyId = ''; round.selectedAt = 0; round.recordDeleted = false;
     this.commit(round); this.cards = [];
     this.message = round.shownCount === 0 ? '本轮候选不足三张，请换来源或稍后开始新一轮。' : '剩余可用候选不足三张，本轮结束。';
   }
+  // 翻牌：从候选池中抽取三张（newRound=true 开始新一轮）。
   private async draw(newRound: boolean = false): Promise<void> {
     if (this.busy || !this.current(this.generation)) return;
     if (this.round !== undefined && this.round.pendingCardId.length > 0) { this.message = '先重试保存上次选择，再继续抽取。'; return; }
@@ -233,10 +270,12 @@ export struct RandomFoodPage {
     } catch (error) { if (this.current(generation)) this.showError(error as Object, '暂未抽取成功，点击重试，本轮进度保留。'); }
     finally { if (this.current(generation)) this.busy = false; }
   }
+  // 选择结果提示文字。
   private choiceMessage(round: RandomFoodRound, restored: boolean = false): string {
     return this.owner === 'guest' ? '已经选好。游客不保存选择记录，登录后可使用云端记录。' : round.recordDeleted ? '这次选择的记录已删除。' :
       restored ? '继续这次已确认的选择，云端记录状态可在记录页查看。' : '已保存到选择记录。';
   }
+  // 确认选择：保存选择记录，成功后打开卡片详情。
   private async choose(): Promise<void> {
     if (this.busy || this.round === undefined || this.round.chosenCardId.length > 0) return;
     const round: RandomFoodRound = copyRandomFoodRound(this.round), generation: number = this.generation;
@@ -263,12 +302,12 @@ export struct RandomFoodPage {
       this.commit(round); this.cards = fresh; this.index = 0; this.message = this.choiceMessage(round);
       if (fresh.length === 0) {
         try { fresh = await this.fetch([cardId], round.drawId, generation); }
-        catch (_error) { /* The receipt remains authoritative even if the card disappeared afterwards. */ }
+        catch (_error) { /* 即使卡片之后消失，选择回执仍然有效。 */ }
         if (!this.current(generation)) return;
         this.cards = fresh;
       }
       void this.hydrate(generation);
-      // Only an explicit successful choice opens details; restore keeps the chosen screen.
+      // 只有用户明确成功选择后才打开详情；恢复轮次时停留在“已选择”的界面。
       const chosen: FoodCard | undefined = fresh.find((item: FoodCard): boolean => item.id === cardId);
       if (chosen !== undefined && this.current(generation)) {
         try { this.onOpenCard(chosen); }
@@ -285,6 +324,7 @@ export struct RandomFoodPage {
       }
     } finally { if (this.current(generation)) this.busy = false; }
   }
+  // 预览当前卡片的详情。
   private async preview(): Promise<void> {
     if (this.busy) return;
     const card: FoodCard | undefined = this.cards[this.index]; if (card === undefined) return;
@@ -297,38 +337,48 @@ export struct RandomFoodPage {
     } catch (error) { if (this.current(generation)) this.showError(error as Object, '卡片已不可用。'); }
     finally { if (this.current(generation)) this.busy = false; }
   }
+  // 本轮是否已确认选择。
   private confirmed(): boolean { return this.round !== undefined && this.round.chosenCardId.length > 0; }
+  // 翻牌按钮样式。
   private drawStyle(): AttributeModifier<ButtonAttribute> {
     return !this.confirmed() && this.cards.length > 0 ? new RandomSecondaryStyle(this.palette) : new RandomPrimaryStyle(this.palette);
   }
+  // 翻牌按钮文字。
   private drawLabel(): string {
     if (this.confirmed()) return '抽下一餐';
     if (this.round !== undefined && this.round.ended) return '开始新一轮';
     return this.cards.length > 0 || (this.round !== undefined && this.round.batchIds.length > 0) ? '再抽三张' : '帮我选';
   }
+  // 来源说明文字。
   private sourceNote(): string { return this.source === 'MY' ? '我的收藏' : this.source === 'FRIENDS' ? '当前好友发布的卡片' : '公开发布的美食卡片'; }
+  // 店铺名称。
   private merchant(card: FoodCard): string { return card.merchantNameSnapshot || card.shop || '未关联店铺'; }
+  // 卡片的渲染键（封面加载完成后需要重建占位）。
   private cardRenderKey(card: FoodCard): string {
-    // Match the feed: rebuild the placeholder when an asynchronous cover settles.
+    // 与推荐流一致：异步封面加载完成时重建占位。
     const parts: Array<string> = [card.id, card.contentRevision || '', card.photoUrl,
       String(card.primaryPhotoResolved === true), String(card.primaryPhotoLoadFailed === true)];
     return JSON.stringify(parts);
   }
+  // 结果区的渲染键（决定是否重放入场动画）。
   private resultKeys(): Array<string> {
-    // Replay the page entrance for a new draw/confirmation, never for cover hydration.
+    // 只在新的翻牌 / 确认时重放页面入场动画，封面补全时不重放。
     const parts: Array<string> = [this.owner, this.source, this.round === undefined ? '' : this.round.drawId,
       this.round === undefined ? '' : this.round.chosenCardId];
     return [JSON.stringify(parts)];
   }
+  // 在结果中前后切换卡片。
   private moveCard(previous: boolean): void {
     if (this.busy || this.cards.length !== 3 || this.confirmed()) return;
     if (previous && this.index > 0) this.swiper.showPrevious();
     else if (!previous && this.index < 2) this.swiper.showNext();
   }
+  // 切换动画开关。
   private async toggleMotion(): Promise<void> {
     try { RandomFoodRoundStore.setMotion(this.context(), !this.motion); this.motion = !this.motion; }
     catch (_error) { this.message = '动效偏好暂未保存。'; }
   }
+  // 顶部区域。
   @Builder private header() {
     Row({ space: 8 }) {
       Button('‹').fontSize(30).width(48).height(48).backgroundColor(Color.Transparent).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'ink') : $r('app.color.random_ink')))
@@ -342,6 +392,7 @@ export struct RandomFoodPage {
         .fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'muted') : $r('app.color.random_muted'))).onClick((): void => { if (this.owner === 'guest') this.onLogin(); else this.onOpenHistory(); })
     }.width('100%')
   }
+  // 来源切换控件。
   @Builder private sourcesControl() {
     Column({ space: 0 }) {
       Row({ space: 0 }) {
@@ -361,6 +412,7 @@ export struct RandomFoodPage {
       }.width('100%').height(2).backgroundColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'line') : $r('app.color.random_line')))
     }.width('100%')
   }
+  // 一张卡背。
   @Builder private cardBack(ordinal: string, angle: number, offset: number) {
     Column({ space: 8 }) {
       Text(ordinal).fontSize(24).maxFontScale(1.4).fontWeight(FontWeight.Medium).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'action') : $r('app.color.random_accent')))
@@ -373,6 +425,7 @@ export struct RandomFoodPage {
     }.width('72%').height(this.backHeight()).padding({ left: 20, right: 20 }).backgroundColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'surface') : $r('app.color.random_surface')))
       .borderRadius(16).border({ width: 1, color: (this.palette === 'PERSONAL' ? pageColor(this.palette, 'line') : $r('app.color.random_line')) }).rotate({ angle }).translate({ x: offset })
   }
+  // 翻牌前的卡背区域。
   @Builder private backs() {
     Stack({ alignContent: Alignment.Center }) {
       this.cardBack('01', -9, -24)
@@ -381,6 +434,7 @@ export struct RandomFoodPage {
     }.width('100%').height(this.backHeight() + 50).accessibilityGroup(true)
       .accessibilityText('三张未翻开的美食卡片，点击帮我选开始')
   }
+  // 一张美食卡片。
   @Builder private food(card: FoodCard) {
     Column({ space: 0 }) {
       if (card.photoUrl.length > 0) {
@@ -403,6 +457,7 @@ export struct RandomFoodPage {
     }.width('100%').backgroundColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'surface') : $r('app.color.random_surface'))).borderRadius(16).clip(true)
       .border({ width: 1, color: (this.palette === 'PERSONAL' ? pageColor(this.palette, 'line') : $r('app.color.random_line')) })
   }
+  // 翻牌结果（Swiper 左右滑动）。
   @Builder private results(key: string) {
     Swiper(this.swiper) {
       ForEach(this.cards, (card: FoodCard): void => { this.food(card) }, (card: FoodCard): string => this.cardRenderKey(card))
@@ -414,6 +469,7 @@ export struct RandomFoodPage {
       })
       .transition(randomFoodTransition(this.motionAllowed(), this.confirmed() ? 'CONFIRM' : 'REVEAL'))
   }
+  // 左右切换按钮。
   @Builder private navigationButtons() {
     Row({ space: 4 }) {
       if (!this.confirmed() && this.cards.length === 3) {
@@ -427,12 +483,14 @@ export struct RandomFoodPage {
       }
     }.width(this.largeText() ? '100%' : '58%')
   }
+  // 预览按钮。
   @Builder private previewButton() {
     Button('查看卡片 ›').constraintSize({ minHeight: 48 }).fontSize(13).backgroundColor(Color.Transparent)
       .width(this.largeText() || this.cards.length !== 3 ? '100%' : '42%')
       .labelStyle({ maxLines: 2, overflow: TextOverflow.Ellipsis }).fontColor((this.palette === 'PERSONAL' ? pageColor(this.palette, 'action') : $r('app.color.random_accent')))
       .enabled(!this.busy).onClick((): void => { void this.preview(); })
   }
+  // 底部导航栏。
   @Builder private navigationRail() {
     if (this.largeText() || this.cards.length !== 3) {
       Column({ space: 0 }) {
@@ -443,6 +501,7 @@ export struct RandomFoodPage {
       Row({ space: 0 }) { this.navigationButtons(); this.previewButton() }.width('100%')
     }
   }
+  // 页面布局。
   build() {
     Scroll() {
       Column({ space: 12 }) {

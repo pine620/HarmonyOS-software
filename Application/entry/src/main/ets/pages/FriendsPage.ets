@@ -1,3 +1,8 @@
+/**
+ * 【文件职责】“好友”页签（登录后可见）：消息分区（私信会话 + 群聊，按最近消息排序）与好友分区（好友、收到/发出的申请、黑名单），
+ * 支持同意/拒绝申请、解除好友、拉黑/解除拉黑、撤回申请、建群。数据来自 FriendRepository（shike-social）。
+ * 前台时监听 socialForegroundRevision（IM 推送或回到前台）立即刷新；列表使用 DiffDataSource + LazyForEach。
+ */
 import { PagePaletteName, pageColor } from '../common/PagePaletteUi';
 import { NoteActionStyle, WarmNoteBackdrop, notePanelTransition } from '../common/WarmNoteUi';
 import { RandomFoodMotionObserver } from '../common/RandomFoodUi';
@@ -13,11 +18,14 @@ import { ImageRepository } from '../service/ImageRepository';
 import { SECONDARY_DATA_REUSE_MS } from '../service/ImageReadConfig';
 import { DiffDataSource } from '../service/PagedDataSource';
 
+// 好友操作弹层的类型：解除好友 / 拉黑。
 type FriendActionKind = 'REMOVE' | 'BLOCK';
+// 消息分区中的一项（私信或群聊）。
 interface NoteConversationEntry {
   id: string; updatedAt: number; conversation?: ConversationSummary; group?: GroupConversationSummary;
 }
 
+// 会话时间文字。
 function timeLabel(timestamp: number): string {
   if (!Number.isFinite(timestamp) || timestamp <= 0) return '';
   const date = new Date(timestamp);
@@ -30,6 +38,7 @@ function timeLabel(timestamp: number): string {
   return `${date.getMonth() + 1}月${date.getDate()}日`;
 }
 
+// 好友页签。
 @Component
 export struct FriendsPage {
   @Prop palette: PagePaletteName = 'SOCIAL';
@@ -41,10 +50,13 @@ export struct FriendsPage {
   private active: boolean = false;
   private readGeneration: number = 0;
   private lastRefreshedAt: number = 0;
+  // 异步结果是否仍有效。
   private current(generation: number): boolean { return this.active && this.pageActive && this.appActive && generation === this.readGeneration; }
+  // 带有效性守卫的读请求参数。
   private readOptions(generation: number): ReadRequestOptions {
     return { priority: 'secondary', mayContinue: async (): Promise<boolean> => this.current(generation) };
   }
+  // 页面激活状态变化：激活时刷新，失活时作废并清空。
   private onActiveChanged(): void {
     const active: boolean = this.mounted && this.pageActive && this.appActive;
     if (active === this.active) return;
@@ -60,15 +72,16 @@ export struct FriendsPage {
   @StorageLink('socialForegroundRevision') @Watch('onSocialForegroundChanged') socialForegroundRevision: number = 0;
   @StorageLink('requestedFriendSection') @Watch('onRequestedFriendSectionChanged') requestedFriendSection: number = 0;
   @State selectedSection: number = 0;
-  // Pack 4.3: friends and conversations render through LazyForEach. Render keys include the row data, so a
-  // changed unread count / last message / nickname rebuilds just that row.
+  // 好友与会话通过 LazyForEach 渲染。渲染键包含行数据，所以未读数、最后一条消息或昵称变化时只重建那一行。
   @State @Watch('syncFriendSource') friends: Array<SocialUser> = [];
   private friendSource: DiffDataSource<SocialUser> = new DiffDataSource<SocialUser>(
     (user: SocialUser): string => user.uid, (user: SocialUser): string => user.uid + ':' + JSON.stringify(user));
   private conversationSource: DiffDataSource<NoteConversationEntry> = new DiffDataSource<NoteConversationEntry>(
     (entry: NoteConversationEntry): string => entry.id,
     (entry: NoteConversationEntry): string => entry.id + ':' + JSON.stringify(entry));
+  // 把好友数组同步到 LazyForEach 数据源。
   private syncFriendSource(): void { this.friendSource.update(this.friends); }
+  // 把会话数组同步到 LazyForEach 数据源。
   private syncConversationSource(): void { this.conversationSource.update(this.orderedConversations()); }
   @State blockedUsers: Array<SocialUser> = [];
   @State incomingRequests: Array<FriendRequestItem> = [];
@@ -96,6 +109,7 @@ export struct FriendsPage {
   @State groupCreating: boolean = false;
   private repository: FriendRepository = new FriendRepository();
 
+  // 出现时注册并刷新。
   aboutToAppear(): void {
     this.mounted = true;
     if (this.requestedFriendSection === 1) {
@@ -104,8 +118,10 @@ export struct FriendsPage {
     }
     this.onActiveChanged();
   }
+  // 消失时失活。
   aboutToDisappear(): void { this.mounted = false; this.onActiveChanged(); }
 
+  // 外部（例如通知点击）要求切换到某个分区。
   private onRequestedFriendSectionChanged(): void {
     if (this.requestedFriendSection === 1) {
       this.selectedSection = 1;
@@ -113,10 +129,12 @@ export struct FriendsPage {
     }
   }
 
+  // 收到 IM 推送或回到前台时刷新。
   private onSocialForegroundChanged(): void {
     if (this.active && this.socialForegroundRevision > 0) void this.refreshAll(false);
   }
 
+  // 追加一页用户（按 uid 去重）。
   private appendUsers(existing: Array<SocialUser>, next: Array<SocialUser>): Array<SocialUser> {
     const output: Array<SocialUser> = existing.slice();
     for (const user of next) {
@@ -125,6 +143,7 @@ export struct FriendsPage {
     return output;
   }
 
+  // 追加一页申请（按 id 去重）。
   private appendRequests(existing: Array<FriendRequestItem>, next: Array<FriendRequestItem>): Array<FriendRequestItem> {
     const output: Array<FriendRequestItem> = existing.slice();
     for (const request of next) {
@@ -133,6 +152,7 @@ export struct FriendsPage {
     return output;
   }
 
+  // 加载好友与申请（reset=true 从第一页开始）。
   private async loadFriends(reset: boolean): Promise<void> {
     if (!this.active || this.friendsLoading || (!reset && this.friendsNextPageToken.length === 0)) return;
     const generation: number = this.readGeneration;
@@ -156,6 +176,7 @@ export struct FriendsPage {
     }
   }
 
+  // 加载私信会话。
   private async loadConversations(reset: boolean): Promise<void> {
     if (!this.active || this.conversationsLoading || (!reset && this.conversationsNextPageToken.length === 0)) return;
     const generation: number = this.readGeneration;
@@ -175,6 +196,7 @@ export struct FriendsPage {
     }
   }
 
+  // 加载群聊列表。
   private async loadGroups(reset: boolean): Promise<void> {
     if (!this.active || this.groupsLoading || (!reset && this.groupsNextPageToken.length === 0)) return;
     const generation: number = this.readGeneration;
@@ -194,6 +216,7 @@ export struct FriendsPage {
     }
   }
 
+  // 刷新全部分区。
   private async refreshAll(force: boolean = true): Promise<void> {
     if (!this.active || this.friendsLoading || this.conversationsLoading || this.groupsLoading ||
       !force && Date.now() - this.lastRefreshedAt < SECONDARY_DATA_REUSE_MS) return;
@@ -203,11 +226,13 @@ export struct FriendsPage {
       this.lastRefreshedAt = Date.now();
   }
 
+  // 通知其他页面好友关系已变化。
   private notifyRelationshipChanged(): void {
     const revision: number = AppStorage.get<number>('friendRelationshipRevision') || 0;
     AppStorage.setOrCreate('friendRelationshipRevision', revision + 1);
   }
 
+  // 同意 / 拒绝好友申请。
   private async respond(request: FriendRequestItem, accept: boolean): Promise<void> {
     if (this.actionUid.length > 0) return;
     this.actionUid = request.user.uid;
@@ -225,6 +250,7 @@ export struct FriendsPage {
     }
   }
 
+  // 确认解除好友。
   private async removePendingFriend(): Promise<void> {
     const user = this.pendingRemoveUser;
     if (user === undefined || this.actionUid.length > 0) return;
@@ -245,6 +271,7 @@ export struct FriendsPage {
     }
   }
 
+  // 确认拉黑。
   private async blockPendingFriend(): Promise<void> {
     const user = this.pendingRemoveUser;
     if (user === undefined || this.actionUid.length > 0) return;
@@ -265,6 +292,7 @@ export struct FriendsPage {
     }
   }
 
+  // 解除拉黑。
   private async unblockUser(user: SocialUser): Promise<void> {
     if (this.actionUid.length > 0) return;
     this.actionUid = user.uid;
@@ -281,6 +309,7 @@ export struct FriendsPage {
     }
   }
 
+  // 撤回自己发出的申请。
   private async cancelOutgoingRequest(request: FriendRequestItem): Promise<void> {
     if (this.actionUid.length > 0) return;
     this.actionUid = request.user.uid;
@@ -297,16 +326,19 @@ export struct FriendsPage {
     }
   }
 
+  // 打开解除好友 / 拉黑的确认弹层。
   private openFriendAction(user: SocialUser, action: FriendActionKind): void {
     if (this.actionUid.length > 0) return;
     this.pendingRemoveUser = user;
     this.pendingFriendAction = action;
   }
 
+  // 建群时某好友是否已选中。
   private isGroupMemberSelected(uid: string): boolean {
     return this.groupMemberUids.some((value: string): boolean => value === uid);
   }
 
+  // 建群时切换选中。
   private toggleGroupMember(uid: string): void {
     if (this.isGroupMemberSelected(uid)) {
       this.groupMemberUids = this.groupMemberUids.filter((value: string): boolean => value !== uid);
@@ -315,6 +347,7 @@ export struct FriendsPage {
     }
   }
 
+  // 创建群聊。
   private async createGroupChat(): Promise<void> {
     const name = this.groupName.trim();
     if (name.length === 0) {
@@ -343,6 +376,7 @@ export struct FriendsPage {
     }
   }
 
+  // 把私信会话与群聊合并后按最近消息时间排序。
   private orderedConversations(): Array<NoteConversationEntry> {
     const entries: Array<NoteConversationEntry> = [];
     for (const conversation of this.conversations) {
@@ -355,6 +389,7 @@ export struct FriendsPage {
     }
     return entries.sort((left: NoteConversationEntry, right: NoteConversationEntry): number => right.updatedAt - left.updatedAt || left.id.localeCompare(right.id));
   }
+  // 分区切换按钮（带数量）。
   @Builder
   private sectionButton(label: string, index: number, count: number): void {
     Button() {
@@ -371,6 +406,7 @@ export struct FriendsPage {
       .accessibilitySelected(this.selectedSection === index).accessibilityText(label + (count > 0 ? `，${count} 条待处理` : ''))
       .onClick((): void => { this.selectedSection = index; });
   }
+  // 页头。
   @Builder
   private pageHeader(): void {
     Row({ space: 8 }) {
@@ -382,6 +418,7 @@ export struct FriendsPage {
         .accessibilityText('刷新好友和消息').onClick((): void => { void this.refreshAll(true); });
     }.width('100%');
   }
+  // 快捷入口（添加好友、建群等）。
   @Builder
   private socialShortcuts(): void {
     Button() {
@@ -418,6 +455,7 @@ export struct FriendsPage {
     }.width('100%');
   }
 
+  // 空状态面板。
   @Builder
   private emptyPanel(title: string, detail: string, action: string, section: number, opensAddFriend: boolean = false): void {
     Column({ space: 12 }) {
@@ -437,6 +475,7 @@ export struct FriendsPage {
     .border({ width: 1, color: pageColor(this.palette, 'line') });
   }
 
+  // 一行私信会话。
   @Builder
   private conversationRow(conversation: ConversationSummary): void {
     Row({ space: 12 }) {
@@ -474,6 +513,7 @@ export struct FriendsPage {
     });
   }
 
+  // 一行群聊。
   @Builder
   private groupConversationRow(group: GroupConversationSummary): void {
     Row({ space: 12 }) {
@@ -512,6 +552,7 @@ export struct FriendsPage {
     });
   }
 
+  // 消息分区。
   @Builder
   private messageSection(): void {
     if ((this.conversationsLoading || this.groupsLoading) && this.conversations.length === 0 && this.groupConversations.length === 0) {
@@ -544,6 +585,7 @@ export struct FriendsPage {
     }
   }
 
+  // 一行收到的申请。
   @Builder
   private incomingRow(request: FriendRequestItem): void {
     Column({ space: 10 }) {
@@ -575,6 +617,7 @@ export struct FriendsPage {
     .border({ width: 1, color: pageColor(this.palette, 'line') });
   }
 
+  // 一行好友。
   @Builder
   private friendRow(user: SocialUser): void {
     Row({ space: 12 }) {
@@ -599,6 +642,7 @@ export struct FriendsPage {
     }.width('100%').padding({ top: 10, bottom: 10 });
   }
 
+  // 好友行左滑操作（解除 / 拉黑）。
   @Builder
   private friendSwipeActions(user: SocialUser): void {
     Row({ space: 8 }) {
@@ -616,6 +660,7 @@ export struct FriendsPage {
     .height(72).padding({ left: 8, right: 2, top: 10, bottom: 10 }).backgroundColor(pageColor(this.palette, 'canvas'));
   }
 
+  // 一行发出的申请。
   @Builder
   private outgoingRow(request: FriendRequestItem): void {
     Row({ space: 12 }) {
@@ -634,6 +679,7 @@ export struct FriendsPage {
     }.width('100%').padding({ top: 8, bottom: 8 });
   }
 
+  // 好友分区。
   @Builder
   private friendSection(): void {
     List({ space: 14 }) {
@@ -734,6 +780,7 @@ export struct FriendsPage {
     .width('100%').layoutWeight(1).scrollBar(BarState.Off).edgeEffect(EdgeEffect.Spring);
   }
 
+  // 解除好友 / 拉黑确认弹层。
   @Builder
   private removeSheet(): void {
     Column({ space: 12 }) {
@@ -772,6 +819,7 @@ export struct FriendsPage {
     .border({ width: 1, color: pageColor(this.palette, 'line') });
   }
 
+  // 建群弹层。
   @Builder
   private groupCreatorSheet(): void {
     Column({ space: 12 }) {
@@ -828,6 +876,7 @@ export struct FriendsPage {
     .border({ width: 1, color: pageColor(this.palette, 'line') }).alignItems(HorizontalAlign.Start);
   }
 
+  // 页面布局。
   build() {
     Stack({ alignContent: Alignment.Bottom }) {
       WarmNoteBackdrop({ palette: this.palette });

@@ -1,3 +1,10 @@
+/**
+ * 【文件职责】卡片内容的核心规则（阶段 1 模块）：
+ *   - 发布幂等回执（publishReceiptSpec / readPublishReceipt / checkPublishReceipt，存于 PublishRequestRecord）；
+ *   - 作者直接修改：编辑上下文、提交修订（带基准版本冲突检测，直接生效）、撤回修订；
+ *   - 旧版赞 / 收藏汇总与写入（mutateReaction 等，兼容新旧数据）；软删除卡片；开始注销账号（停用账号并创建清理任务）；
+ *   - 历史数据维护：旧卡片回填（card-history）、旧赞迁移（reaction-history），只能由维护函数调用。
+ */
 'use strict';
 
 const crypto = require('crypto');
@@ -7,16 +14,16 @@ const BATCH = 20;
 const CATEGORY_MAP = Object.freeze({ staple: 'RICE_SET', bakery: 'NOODLES', drink: 'DRINK',
   snack: 'GRILL_FRIED', fresh: 'GRILL_FRIED', other: 'OTHER' });
 
-// The entry package injects its existing SDK boundary and models. Nothing here
-// executes on import, creates another SDK client, or trusts a payload UID.
+// 入口模块注入现有的 SDK 边界与模型；本文件在 import 时不执行任何操作、不创建新的 SDK 客户端，也绝不信任请求中的 UID。
+// 创建模块：ctx 由 runtime.js 注入 SDK 边界与模型。
 function createStage1Services(ctx) {
   const { collection, one, transactionPolicy, profileForWrite, logicalWriteTime,
     validateCard, uniqueMediaIds, promotePendingMedia, refreshPublishCount, models } = ctx;
   const model = (name, row) => Object.assign(new models[name](), row);
   const hash = (value) => crypto.createHash('sha256').update(value).digest('hex');
+  // 在事务中批量 upsert，按对象类型分组（SDK 一次操作只能是一种对象类型）。
   function upsertRows(tx, rows) {
-    // SDK assigns one objectTypeName to an entire operation, from its first
-    // model. Never mix FoodCard/UserProfile/jobs in the same SDK array.
+    // SDK 会用第一个模型决定整个操作的 objectTypeName，所以绝不能在同一个数组里混合 FoodCard / UserProfile / 任务行。
     const groups = new Map();
     for (const row of rows) {
       const name = row.getClassName();
@@ -26,25 +33,32 @@ function createStage1Services(ctx) {
     for (const group of groups.values()) tx.executeUpsert(group);
   }
 
+  // 卡片的内容时间（修改时间 > 更新时间 > 创建时间）。
   const cardTime = (card) => dateMillis(card.modifiedAt) === null ? Number(card.updatedAt || card.createdAt || 0) : dateMillis(card.modifiedAt);
+  // 卡片生命周期代次（删除 / 恢复时递增）。
   const generation = (card) => {
     const value = Number(card.lifecycleGeneration || 0);
     if (!Number.isSafeInteger(value) || value < 0 || !Number.isSafeInteger(value + 1)) throw accessError('生命周期版本无效。', 'INVALID_STATE');
     return value;
   };
+  // 卡片是否可编辑（可读，或处于“要求修改”状态）。
   const editableState = card => readableCardState(card) || !!card && card.reviewState === 'REQUEST_CHANGE' && card.deletedAt == null && card.purgeAt == null;
+  // 文本规范化（搜索用）。
   const normalize = (value) => String(value || '').normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
+  // 由旧字段推导新字段（新分类、搜索文本等）。
   const derived = (card) => {
     const fields = { categoryV2: CATEGORY_MAP[card.category] || 'OTHER', categoryVersion: 2,
       searchTextNormalized: normalize(String(card.productName || '') + ' ' + String(card.shop || '')) };
     if (Number(card.priceFen || 0) > 0) { fields.itemPriceFen = Number(card.priceFen); fields.queryPriceFen = Number(card.priceFen); }
     return fields;
   };
+  // 校验 UUID。
   function uuid(value) {
     const id = String(value || '').trim().toLowerCase();
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)) throw new Error('请求标识必须为 UUID。');
     return id;
   }
+  // 由用户与请求内容计算发布回执的 id 与内容指纹。
   function publishReceiptSpec(uid, payload) {
     const fields = {};
     for (const key of ['productName', 'brand', 'priceFen', 'priceLabel', 'originalPriceFen', 'specification', 'shop',
@@ -57,6 +71,7 @@ function createStage1Services(ctx) {
     const requestId = payload.requestId ? uuid(payload.requestId) : 'legacy:' + payloadHash;
     return { receiptId: hash('publish:' + uid + ':' + requestId), payloadHash };
   }
+  // 检查已有回执：同一 requestId 且内容一致时返回原结果，内容不一致时报冲突。
   function checkPublishReceipt(row, uid, spec) {
     if (!row) return null;
     if (row.uid !== uid || row.operationType !== 'PUBLISH_CARD' || row.payloadHash !== spec.payloadHash || row.status !== 'COMMITTED') {
@@ -64,17 +79,21 @@ function createStage1Services(ctx) {
     }
     return { cardId: String(row.resultEntityId), status: 'APPROVED', alreadyProcessed: true };
   }
+  // 读取发布回执（重复提交时直接返回之前的结果）。
   async function readPublishReceipt(uid, spec, env) {
     return checkPublishReceipt(await one(collection(env, 'PublishRequestRecord').query().equalTo('requestId', spec.receiptId)), uid, spec);
   }
+  // 事务内按字段读取一行。
   async function txOne(tx, env, name, field, value) {
     return (await tx.executeQuery(collection(env, name).query().equalTo(field, value).limit(1)))[0] || null;
   }
+  // 事务内读取有效的用户资料（账号无效时抛错）。
   async function activeProfile(tx, uid, env) {
     const profile = await txOne(tx, env, 'UserProfile', 'uid', uid);
     if (!isAccountActive(profile)) throw accessError('账号不存在、已停用或正在注销。', 'ACCOUNT_INACTIVE');
     return profile;
   }
+  // 分页读取查询的全部结果（有上限）。
   async function all(queryFactory) {
     const result = [];
     for (let offset = 0; ; offset += 100) {
@@ -83,12 +102,14 @@ function createStage1Services(ctx) {
       if (rows.length < 100) return result;
     }
   }
+  // 构造一个 MaintenanceJob 任务行。
   function jobRow(type, entityId, ownerUid, version, now, runAfterAt, checkpoint = {}) {
     return model('MaintenanceJob', { jobId: hash(type + ':' + entityId + ':' + version), jobType: type,
       entityId, ownerUid, generation: version, status: 'PENDING', attemptCount: 0, cursor: '',
       checkpointJson: JSON.stringify(checkpoint), lastErrorCode: '', createdAt: new Date(now), updatedAt: new Date(now),
       runAfterAt: new Date(runAfterAt), leaseOwner: '', leaseUntilAt: null });
   }
+  // 任务的返回视图。
   function jobView(job, includeCheckpoint = false) {
     const view = { jobId: job.jobId, jobType: job.jobType, entityId: job.entityId, generation: Number(job.generation),
       status: job.status, attemptCount: Number(job.attemptCount || 0), cursor: String(job.cursor || ''),
@@ -98,6 +119,7 @@ function createStage1Services(ctx) {
     return view;
   }
 
+  // 旧版互动摘要（赞 / 踩数量与“我”的状态）。
   async function reactionSummary(cardId, uid, env, options = {}) {
     const [reactions, likes, favoritesRows, privateFlags] = await Promise.all([
       all(() => collection(env, 'CardReaction').query().equalTo('cardId', cardId)),
@@ -118,9 +140,9 @@ function createStage1Services(ctx) {
       dislikeCount: [...states.values()].filter((value) => value === 'DISLIKE').length,
       favoriteCount: favorites.size, myReaction, viewerLiked: myReaction === 'LIKE', viewerFavorited: favorites.has(uid), ...privateFlags };
   }
+  // 收藏摘要。
   async function favoriteSummary(cardId, uid, env) {
-    // Collection writes do not need to reread all reactions or legacy likes.
-    // Keep distinct-user counts and fresh per-account migration flags.
+    // 收藏写入不需要重新读取全部反应或旧赞，只保留按用户去重的计数与最新的迁移标记。
     const [rows, privateFlags] = await Promise.all([
       all(() => collection(env, 'CardAction').query().equalTo('cardId', cardId).equalTo('kind', 'FAVORITE').orderByAsc('id')),
       ctx.collections().flags(cardId, uid, env)
@@ -128,6 +150,7 @@ function createStage1Services(ctx) {
     const favorites = new Set(rows.map(row => String(row.actorUid)));
     return { favoriteCount: favorites.size, viewerFavorited: favorites.has(uid), ...privateFlags };
   }
+  // 写入旧版反应（兼容 LIKE 历史数据）。
   async function mutateReaction(uid, payload, env, legacyToggle = false, historyComplete = false) {
     const cardId = String(payload.cardId || '');
     const desired = String(payload.reaction || '');
@@ -150,8 +173,7 @@ function createStage1Services(ctx) {
         active = desired === 'LIKE'; return true;
       }
       const rows = await tx.executeQuery(collection(env, 'CardReaction').query().equalTo('cardId', cardId).equalTo('uid', uid).limit(1));
-      // Only the verified V2 entry may skip legacy LIKE reads. Older callers
-      // keep the migration-compatible path, including source deletion.
+      // 只有已验证的 V2 入口可以跳过旧 LIKE 的读取；旧调用方仍走兼容迁移的路径（包括删除源数据）。
       const old = historyComplete ? [] : await tx.executeQuery(collection(env, 'CardAction').query().equalTo('cardId', cardId)
         .equalTo('actorUid', uid).equalTo('kind', 'LIKE').limit(50));
       if (old.length === 50) throw accessError('旧互动记录过多，请先迁移后再操作。', 'MIGRATION_REQUIRED');
@@ -165,7 +187,7 @@ function createStage1Services(ctx) {
       if (!next) { if (rows[0]) tx.executeDelete(rows); }
       else upsertRows(tx, [model('CardReaction', { cardId, uid, reaction: next,
         createdAt: rows[0] ? rows[0].createdAt : new Date(now), updatedAt: new Date(now) })]);
-      // Existing rows serialize first writes and NONE against legacy migration.
+      // 已存在的行会让首次写入与 NONE 在旧数据迁移期间串行化。
       upsertRows(tx, [model('FoodCard', card), profileForWrite(profile, now)]);
       if (receiptId) upsertRows(tx, [model('PublishRequestRecord', { requestId: receiptId, uid, operationType: 'REACTION',
         payloadHash, resultEntityId: cardId, status: 'COMMITTED', createdAt: new Date(now), expiresAt: new Date(now + 30 * DAY) })]);
@@ -178,6 +200,7 @@ function createStage1Services(ctx) {
     await ctx.contentPolicy(env).assertCardReadable(uid, current);
     return { active, ...summary };
   }
+  // 软删除自己的卡片：标记删除并设置 30 天后清理，创建 PURGE_CARD 任务。
   async function softDelete(uid, payload, env) {
     const cardId = String(payload.cardId || '');
     let output = null;
@@ -214,6 +237,7 @@ function createStage1Services(ctx) {
     await refreshPublishCount(uid, env);
     return output;
   }
+  // 开始注销账号：停用账号、加密保存 Token（供之后删除认证用户），创建 DELETE_ACCOUNT 任务。
   async function beginAccountDeletion(uid, env) {
     let output = null;
     const committed = await collection(env, 'UserProfile').runTransaction({ apply: async (tx) => {
@@ -235,7 +259,7 @@ function createStage1Services(ctx) {
         { phase: 'BUSINESS_CLEANUP', providerBindingsRetained: true, physicalDeletionStarted: false,
           counterRemovalDeferred: true, registrationCleanupPending: pushRows.length === 50 || widgetRows.length === 50,
           bindingStatusCleanupPending: bindings.length === 50 });
-      const counters = []; // Stage 8 removes each card contribution in its durable cleanup batch.
+      const counters = []; // 阶段 8（注销清理）会在持久化的清理批次中移除每张卡片的计数贡献。
       upsertRows(tx, [model('UserProfile', { ...profileForWrite(profile, now), accountStatus: 'DELETION_IN_PROGRESS', deletionJobId: job.jobId }), job, ...counters]);
       if (bindings.length > 0) upsertRows(tx, bindings.map((row) => model('IdentityBinding', {
         ...row, status: 'INACTIVE', updatedAt: now
@@ -253,6 +277,7 @@ function createStage1Services(ctx) {
     'shop', 'sellingPoints', 'publicOffers', 'reviewText', 'tasteScore', 'sourceLink', 'category', 'visibility',
     'consumptionMode', 'categoryV2', 'merchantId', 'itemPriceFen', 'dineInAvgFen', 'orderTotalFen',
     'deliveryFeeFen', 'deliveryPlatformKey', 'deliveryPlatformLabelSnapshot', 'consumedAt']);
+  // 计算修订后的卡片字段（店铺、价格等规范化）。
   async function editFields(card, changes, uid, env, read) {
     if (!changes || typeof changes !== 'object' || Array.isArray(changes)) throw new Error('编辑内容无效。');
     if (Object.keys(changes).some((key) => !EDIT_FIELDS.includes(key))) throw new Error('包含本阶段不支持的编辑字段。');
@@ -277,6 +302,7 @@ function createStage1Services(ctx) {
       publicOffersJson: JSON.stringify(ctx.safeArray(candidate.publicOffers).filter((item) => !ctx.personalized.test(item)).slice(0, 4)),
       category: candidate.category, visibility: candidate.visibility, ...fields };
   }
+  // 修订的返回视图。
   function revisionView(row) {
     const stored = JSON.parse(row.payloadJson);
     const { sellingPointsJson, publicOffersJson, ...fields } = stored;
@@ -286,6 +312,7 @@ function createStage1Services(ctx) {
       mediaIds: JSON.parse(row.mediaManifestJson), submittedAt: dateMillis(row.submittedAt),
       reviewedAt: dateMillis(row.reviewedAt), reviewReason: String(row.reviewReason || '') };
   }
+  // 修订中保留的旧图片是否可复用（属于本人且属于该卡片）。
   async function reusableRevisionMedia(media, uid, cardId, readRevision) {
     if (!media || media.ownerUid !== uid || !['APPROVED', 'PENDING_UPLOAD'].includes(media.status)) return false;
     if (!media.cardId || media.cardId === cardId) return true;
@@ -294,6 +321,7 @@ function createStage1Services(ctx) {
     return !!previous && previous.authorUid === uid && previous.cardId === cardId &&
       ['PENDING', 'REJECTED', 'WITHDRAWN'].includes(previous.status);
   }
+  // 提交修订：校验基准版本 → 在一个事务中更新卡片、回执、发布数、店铺计数与图片关联。
   async function submitRevision(uid, payload, env) {
     const cardId = String(payload.cardId || '');
     const revisionId = hash('revision:' + uid + ':' + uuid(payload.requestId));
@@ -308,8 +336,7 @@ function createStage1Services(ctx) {
     const inputFields = {};
     for (const key of EDIT_FIELDS) if (payload.changes[key] !== undefined) inputFields[key] = payload.changes[key];
     const requestPayloadHash = hash(JSON.stringify({ cardId, baseTime, baseGeneration, changes: inputFields, mediaIds }));
-    // Replay is compared to immutable input before deriving fields from a card
-    // or Merchant that may have changed since submission/approval.
+    // 重放请求先与不可变的输入比较，然后才根据可能已变化的卡片或店铺推导字段。
     const saved = await one(collection(env, 'FoodCardRevision').query().equalTo('revisionId', revisionId));
     const matchesInput = (row) => row.authorUid === uid && row.cardId === cardId && dateMillis(row.baseModifiedAt) === baseTime &&
       Number(row.baseLifecycleGeneration) === baseGeneration && row.mediaManifestJson === JSON.stringify(mediaIds) &&
@@ -332,8 +359,7 @@ function createStage1Services(ctx) {
     }
     if ((!saved || saved.requestPayloadHash || saved.status === 'PENDING') &&
         (cardTime(initial) !== baseTime || generation(initial) !== baseGeneration)) {
-      // Another invocation may have committed between the receipt read and
-      // the card read. Return that immutable result instead of a false conflict.
+      // 在读回执与读卡片之间，可能已有另一次调用提交成功；此时返回那个不可变的结果，而不是错误地报冲突。
       const replay = await concurrentReplay();
       if (replay) return replay;
       throw accessError('内容版本已变化，请刷新后重建编辑。', 'CONFLICT');
@@ -391,20 +417,17 @@ function createStage1Services(ctx) {
       const now = logicalWriteTime(owner.updatedAt, cardTime(card));
       const updated = model('FoodCard', { ...card, ...ctx.stage2().storageFields(currentFields),
         mediaId: mediaIds[0], status: 'APPROVED', schemaVersion: 2, migrationSource: 'SERVER',
-        // Keep the existing readable publication state without claiming an
-        // administrator reviewed this author save. Do not boost publication time.
+        // 保持现有的可读发布状态，但不声称管理员审核过这次作者保存，也不提前发布时间。
         reviewState: 'PENDING_POST_REVIEW', reviewReason: '', edited: true,
         modifiedAt: new Date(now), updatedAt: now, lifecycleGeneration: baseGeneration + 1 });
       const counters = await ctx.stage2().prepareCounterTransition(tx, card, updated, owner, env, now);
       publishCountChanged = !readableCardState(card);
-      // APPROVED is the legacy revision enum for an applied receipt. reviewedAt
-      // records completion; neither field represents an administrator decision.
+      // APPROVED 是历史上“已应用回执”的修订状态枚举，reviewedAt 记录完成时间；两者都不代表管理员的决定。
       result = model('FoodCardRevision', { revisionId, cardId, authorUid: uid, baseModifiedAt: new Date(baseTime),
         baseLifecycleGeneration: baseGeneration, requestPayloadHash, payloadJson: JSON.stringify(fields), mediaManifestJson: JSON.stringify(mediaIds),
         status: 'APPROVED', submittedAt: existing ? existing.submittedAt : new Date(now), reviewedAt: new Date(now), reviewReason: '' });
       const superseded = pending.filter(row => row.revisionId !== revisionId);
-      // No reads after this point: card, receipt, profile, counters and media
-      // associations commit or roll back together in one SDK transaction.
+      // 此后不再有读取：卡片、回执、资料、计数与图片关联在一个 SDK 事务中一起提交或一起回滚。
       if (superseded.length > 0) upsertRows(tx, superseded.map((row) => model('FoodCardRevision', {
         ...row, status: 'WITHDRAWN', reviewedAt: new Date(now), reviewReason: 'SUPERSEDED'
       })));
@@ -417,11 +440,11 @@ function createStage1Services(ctx) {
       return true;
     } });
     if (!committed || !result) throw new Error('编辑未保存，请重试。');
-    // Ordinary edits do not change the owner's publish count. Historical
-    // REQUEST_CHANGE recovery does; refresh only that derived profile count.
+    // 普通修改不改变作者的发布数；只有历史上的 REQUEST_CHANGE 恢复会改变，此时只刷新这个派生计数。
     if (publishCountChanged) await refreshPublishCount(uid, env);
     return { success: true, revision: revisionView(result), alreadyProcessed };
   }
+  // 读取编辑上下文。
   async function getEditContext(uid, payload, env) {
     const card = await one(collection(env, 'FoodCard').query().equalTo('id', String(payload.cardId || '')));
     if (!card || card.ownerUid !== uid) throw accessError('无权编辑此卡片。', 'FORBIDDEN');
@@ -436,6 +459,7 @@ function createStage1Services(ctx) {
     if (!fresh || fresh.ownerUid !== uid || !editableState(fresh) || cardTime(fresh) !== cardTime(card)) throw accessError('编辑内容已变化，请刷新。', 'CONFLICT');
     return result;
   }
+  // 撤回修订。
   async function withdrawRevision(uid, payload, env) {
     let output=null;
     const committed=await collection(env,'FoodCardRevision').runTransaction({apply:async tx=>{
@@ -454,6 +478,7 @@ function createStage1Services(ctx) {
   const MIGRATION_TYPES = Object.freeze(['BACKFILL_CARD', 'MIGRATE_REACTION']);
   const CARD_HISTORY_JOB_ID = hash('BACKFILL_CARD:stage1-v1:1');
   const REACTION_HISTORY_JOB_ID = hash('MIGRATE_REACTION:stage1-v1:1');
+  // 卡片回填任务的进度。
   function cardHistoryCheckpoint(job) {
     let checkpoint;
     try { checkpoint = JSON.parse(String(job.checkpointJson || '{}')); }
@@ -463,6 +488,7 @@ function createStage1Services(ctx) {
     }
     return checkpoint;
   }
+  // 卡片回填任务的状态视图。
   function cardHistoryState(job) {
     if (!job) return { initialized: false, ready: false, batchSize: BATCH, job: null };
     if (job.jobType !== 'BACKFILL_CARD' || Number(job.generation) !== 1 ||
@@ -472,8 +498,7 @@ function createStage1Services(ctx) {
       Number(checkpoint.failures) === 0 && Number(checkpoint.verificationMissing) === 0;
     return { initialized: true, ready, batchSize: BATCH, job: { ...jobView(job), checkpoint } };
   }
-  // Worker-only adapter for the fixed card-history task. It cannot select an
-  // arbitrary job/table or schedule account deletion and other maintenance.
+  // 固定的卡片回填任务的维护专用入口：不能选择任意任务或表，也不能安排注销等其他维护。
   async function cardHistoryMaintenance(payload = {}, env = {}) {
     const mode = payload.mode === undefined ? 'status' : payload.mode;
     if (!['status', 'initialize', 'run', 'retry'].includes(mode)) throw accessError('卡片回填维护模式无效。', 'VALIDATION_ERROR');
@@ -521,7 +546,7 @@ function createStage1Services(ctx) {
     await processMigration({ jobId: CARD_HISTORY_JOB_ID }, env);
     return cardHistoryState(await one(jobs.query().equalTo('jobId', CARD_HISTORY_JOB_ID)));
   }
-  // Internal query-coverage gate; task processing is worker-only.
+  // 内部的查询覆盖门槛；任务处理只能由维护函数执行。
   async function migrationReadiness(env, includeJobs = false) {
     const ids = MIGRATION_TYPES.map(type => hash(type + ':stage1-v1:1'));
     const rows = await collection(env, 'MaintenanceJob').query().in('jobId', ids).limit(ids.length).get();
@@ -532,12 +557,12 @@ function createStage1Services(ctx) {
       Number(job.checkpoint.failures) === 0 && Number(job.checkpoint.verificationMissing) === 0;
     const cardReady = complete(cardJob);
     const reactionReady = complete(reactionJob);
-    // Stage 3 consumes this gate; an environment variable alone cannot claim
-    // that historical indexed queries have coverage.
+    // 阶段 3（搜索 / 地图）使用这个门槛；单靠环境变量不能声称历史索引查询已覆盖。
     return { ...(includeJobs ? { jobs } : {}), cardCoverageComplete: cardReady, reactionCoverageComplete: reactionReady,
       indexedQueryReady: cardReady && reactionReady && String(env.SHIKE_INDEXED_QUERY_VERIFIED || process.env.SHIKE_INDEXED_QUERY_VERIFIED || '') === 'true',
       userQueryVerificationRequired: true };
   }
+  // 旧赞迁移任务的状态视图。
   function reactionHistoryState(job) {
     if (!job) return { initialized: false, ready: false, batchSize: BATCH, job: null };
     if (job.jobType !== 'MIGRATE_REACTION' || Number(job.generation) !== 1 || job.entityId !== 'stage1-v1') {
@@ -554,8 +579,7 @@ function createStage1Services(ctx) {
       Number(checkpoint.failures) === 0 && Number(checkpoint.verificationMissing) === 0;
     return { initialized: true, ready, batchSize: BATCH, job: { ...jobView(job), checkpoint } };
   }
-  // Worker-only continuation of the existing fixed reaction migration. It
-  // cannot create/select arbitrary jobs or enter deletion maintenance.
+  // 现有固定的旧赞迁移任务的维护专用续跑入口：不能创建 / 选择任意任务，也不能进入注销维护。
   async function reactionHistoryMaintenance(payload = {}, env = {}) {
     const mode = payload.mode === undefined ? 'status' : payload.mode;
     if (!['status', 'run', 'retry'].includes(mode)) throw accessError('旧互动迁移维护模式无效。', 'VALIDATION_ERROR');
@@ -596,6 +620,7 @@ function createStage1Services(ctx) {
     }
     return reactionHistoryState(await one(jobs.query().equalTo('jobId', REACTION_HISTORY_JOB_ID)));
   }
+  // 领取迁移任务（租约）。
   async function claimMigration(jobId, env) {
     const leaseOwner = crypto.randomUUID();
     let result = null;
@@ -619,10 +644,12 @@ function createStage1Services(ctx) {
     if (!committed || !result) throw new Error('任务租约未保存。');
     return { job: result, leaseOwner };
   }
+  // 确认仍持有租约。
   function requireLease(job, leaseOwner) {
     if (!job || job.status !== 'RUNNING' || job.leaseOwner !== leaseOwner || dateMillis(job.leaseUntilAt) === null ||
       dateMillis(job.leaseUntilAt) <= Date.now()) throw accessError('任务租约已失效。', 'CONFLICT');
   }
+  // 执行一批迁移。
   async function processMigration(payload, env) {
     const jobId = String(payload.jobId || '');
     const claimed = await claimMigration(jobId, env);
@@ -657,9 +684,7 @@ function createStage1Services(ctx) {
             if (legacy && (!historical || !Number.isSafeInteger(modified) || modified < 0 || !['APPROVED', 'REMOVED', 'PENDING'].includes(current.status))) {
               throw accessError('历史卡片不符合确定性迁移基线。', 'INVALID_STATE');
             }
-            // Unpublished legacy cards remain untouched. They count as scanned
-            // and skipped, and are outside published-card timestamp coverage.
-            // Keep the same exception in verification without approving them.
+            // 未发布的旧卡片保持不动：计为“已扫描并跳过”，不在已发布卡片的时间覆盖范围内；校验时同样保留这个例外，但不会批准它们。
             if (verify) missing = (legacy && !pendingLegacy) || (readableCardState(current) && dateMillis(current.publishedAt) === null);
             else if (legacy && historical && !pendingLegacy) {
               upsertRows(tx, [model('FoodCard', { ...current, ...derived(current), schemaVersion: 1, migrationSource: 'LEGACY',
@@ -674,8 +699,7 @@ function createStage1Services(ctx) {
               const actor = await txOne(tx, env, 'UserProfile', 'uid', current.actorUid);
               const reactions = await tx.executeQuery(collection(env, 'CardReaction').query().equalTo('cardId', current.cardId)
                 .equalTo('uid', current.actorUid).limit(1));
-              // Preserve an existing DISLIKE and never rebuild a deleted NONE:
-              // user mutation deletes the source LIKE in the same transaction.
+              // 保留已有的 DISLIKE，绝不重建已删除的 NONE：用户操作会在同一事务中删除源 LIKE。
               if (!reactions[0] && card && isAccountActive(actor)) {
                 const created = Number(current.createdAt || 0);
                 if (!Number.isSafeInteger(created) || created < 0) throw accessError('旧互动时间无效。', 'INVALID_STATE');
@@ -727,7 +751,7 @@ function createStage1Services(ctx) {
       if (!committed || !finalJob) throw new Error('迁移批次未完成。');
       return { job: jobView(finalJob, true) };
     } catch (error) {
-      // A failed row never advances its cursor. The next retry sees it again.
+      // 失败的行绝不推进游标，下次重试会再次处理它。
       await collection(env, 'MaintenanceJob').runTransaction({ apply: async (tx) => {
         const job = await txOne(tx, env, 'MaintenanceJob', 'jobId', jobId);
         if (!job || job.status !== 'RUNNING' || job.leaseOwner !== claimed.leaseOwner) return true;

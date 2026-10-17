@@ -1,10 +1,17 @@
+/**
+ * 【文件职责】登录 / 注册界面（在“我的”页弹出）。支持：昵称+密码登录（PASSWORD）、邮箱验证码登录（CODE）、
+ * 邮箱注册（REGISTER）、找回密码（RESET）、首次设置昵称密码（SETUP）以及华为账号登录入口。
+ * 所有实际逻辑在 AuthService 中，本组件只负责表单、校验提示、验证码倒计时与视图切换。
+ */
 import { common } from '@kit.AbilityKit';
 import { PasswordAccountStatus, UserProfile } from '../model/CloudContracts';
 import { AuthService, PasswordSavedError } from '../service/AuthService';
 import { AuthSessionStore } from '../service/AuthSessionStore';
 
+// 登录界面的几种视图。
 type LoginView = 'PASSWORD' | 'CODE' | 'REGISTER' | 'RESET' | 'SETUP' | 'VERIFIED';
 
+// 登录 / 注册组件。
 @Component
 export struct EmailLoginPage {
   onAuthenticated: (profile: UserProfile) => void = (_profile: UserProfile): void => {};
@@ -32,30 +39,37 @@ export struct EmailLoginPage {
   private verifiedProfile: UserProfile | undefined = undefined;
   private recovering: boolean = false;
 
+  // 组件显示时标记为活动。
   aboutToAppear(): void { this.active = true; }
+  // 组件销毁时停止验证码倒计时。
   aboutToDisappear(): void {
     this.active = false;
     if (this.timer !== undefined) clearTimeout(this.timer);
     this.timer = undefined;
   }
 
+  // 取得 UIAbility 上下文。
   private context(): common.UIAbilityContext {
     return this.getUIContext().getHostContext() as common.UIAbilityContext;
   }
 
+  // 处理返回键：忙碌时忽略；不在“昵称密码登录”视图时退回该视图，否则关闭登录界面。
   private onBackRequest(): void {
     if (this.busy || this.sending) return;
     if (this.view !== 'PASSWORD') void this.changeView('PASSWORD');
     else void this.close();
   }
 
+  // 设置忙碌状态并通知父组件。
   private setBusy(value: boolean): void { this.busy = value; this.onBusyChanged(value); }
 
+  // 已完成邮箱/华为验证但未设置昵称密码时取消：退出该会话。
   private async cancelVerified(): Promise<void> {
     await AuthService.cancelAuthentication(this.context());
     this.verifiedProfile = undefined;
   }
 
+  // 关闭登录界面。
   private async close(): Promise<void> {
     if (this.busy || this.sending) return;
     this.setBusy(true);
@@ -68,6 +82,7 @@ export struct EmailLoginPage {
     } finally { if (this.active) this.setBusy(false); }
   }
 
+  // 切换视图并清空相关输入与错误提示。
   private async changeView(view: LoginView): Promise<void> {
     if (this.busy || this.sending) return;
     this.setBusy(true);
@@ -82,6 +97,7 @@ export struct EmailLoginPage {
     } finally { if (this.active) this.setBusy(false); }
   }
 
+  // 当前视图的标题。
   private title(): string {
     if (this.view === 'REGISTER') return '注册';
     if (this.view === 'RESET') return '找回密码';
@@ -90,6 +106,7 @@ export struct EmailLoginPage {
     return '登录';
   }
 
+  // 当前视图主按钮的文字。
   private actionLabel(): string {
     if (this.busy) return this.view === 'SETUP' ? '保存中…' : '处理中…';
     if (this.view === 'SETUP') return '保存并登录';
@@ -97,11 +114,13 @@ export struct EmailLoginPage {
     return '登录';
   }
 
+  // 校验邮箱格式。
   private validateEmail(): boolean {
     try { AuthSessionStore.normalizeEmail(this.email); this.emailError = ''; return true; }
     catch (_error) { this.emailError = '请输入有效的邮箱地址'; return false; }
   }
 
+  // 校验当前视图的表单字段。
   private validateForm(): boolean {
     this.nicknameError = ''; this.passwordError = ''; this.codeError = '';
     if (this.view === 'VERIFIED') return true;
@@ -119,6 +138,7 @@ export struct EmailLoginPage {
     return emailValid && this.codeError.length === 0;
   }
 
+  // 验证码重发倒计时（每秒更新）。
   private updateCountdown(): void {
     if (this.timer !== undefined) clearTimeout(this.timer);
     this.timer = undefined;
@@ -126,6 +146,7 @@ export struct EmailLoginPage {
     if (this.countdown > 0 && this.active) this.timer = setTimeout((): void => this.updateCountdown(), 1000);
   }
 
+  // 发送邮箱验证码（找回密码或注册/登录）。
   private async sendCode(): Promise<void> {
     if (this.busy || this.sending || Date.now() < this.resendAt || !this.validateEmail()) return;
     this.sending = true; this.onBusyChanged(true); this.message = ''; this.failed = false;
@@ -138,11 +159,13 @@ export struct EmailLoginPage {
     } finally { if (this.active) { this.sending = false; this.onBusyChanged(false); } }
   }
 
+  // 登录完成：通知父组件并关闭。
   private finish(profile: UserProfile): void {
     this.password = ''; this.code = ''; this.verifiedProfile = undefined;
     this.huaweiBusy = false; this.setBusy(false); this.onAuthenticated(profile);
   }
 
+  // 邮箱/华为验证成功后：账号已设置昵称密码（且不是找回密码流程）则直接完成登录，否则进入 SETUP 设置昵称密码。
   private async continueVerified(): Promise<void> {
     const profile: UserProfile | undefined = this.verifiedProfile;
     if (profile === undefined) throw new Error('请先验证邮箱或华为账号。');
@@ -153,11 +176,13 @@ export struct EmailLoginPage {
     this.view = 'SETUP'; this.password = ''; this.code = '';
   }
 
+  // 记录验证得到的资料并进入 VERIFIED 视图，然后继续后续步骤。
   private async acceptProvider(profile: UserProfile): Promise<void> {
     this.verifiedProfile = profile; this.view = 'VERIFIED'; this.code = '';
     await this.continueVerified();
   }
 
+  // 提交当前视图的表单（调用 AuthService 对应方法）。
   private async submit(): Promise<void> {
     if (this.busy || this.sending || !this.validateForm()) return;
     this.setBusy(true); this.message = ''; this.failed = false;
@@ -188,6 +213,7 @@ export struct EmailLoginPage {
     } finally { if (this.active) this.setBusy(false); }
   }
 
+  // 华为账号登录入口。
   private async huaweiLogin(): Promise<void> {
     if (this.busy || this.sending) return;
     this.setBusy(true); this.huaweiBusy = true; this.message = ''; this.failed = false;
@@ -199,6 +225,7 @@ export struct EmailLoginPage {
     } finally { if (this.active) { this.huaweiBusy = false; this.setBusy(false); } }
   }
 
+  // 显示字段错误提示。
   @Builder
   private fieldError(message: string): void {
     if (message.length > 0) {
@@ -206,6 +233,7 @@ export struct EmailLoginPage {
     }
   }
 
+  // 表单区域（按视图显示不同输入框）。
   @Builder
   private form(): void {
     Column() {
@@ -272,6 +300,7 @@ export struct EmailLoginPage {
     }.width('100%').alignItems(HorizontalAlign.Start)
   }
 
+  // 整体布局。
   build() {
     Scroll() {
       Column() {

@@ -1,9 +1,11 @@
+/**
+ * 【文件职责】群聊页面：群资料与成员（get-group-chat）、消息分页与发送（list/send-group-message）、群主移除成员、退出群聊、
+ * 发起和查看“一起选餐”投票（MealPollPage）。新消息获取方式与私信相同（退避轮询 + IM 推送即时刷新）。
+ */
 import { PagePaletteName, pageColor } from '../common/PagePaletteUi';
 import { NoteInputStyle, WarmNoteBackdrop } from '../common/WarmNoteUi';
 import { AppDestinationStyle } from '../common/AppPageUi';
 import { SecondaryActionStyle } from '../common/Stage47Ui';
-import { PersonalCollectionRepository } from '../repository/PersonalCollectionRepository';
-import { PersonalCollectionPage } from '../model/PersonalCollectionModels';
 import { AccountRequestGuard } from '../service/AccountRequestGuard';
 import { MealPollPage } from './MealPollPage';
 import { common } from '@kit.AbilityKit';
@@ -20,18 +22,24 @@ import { coverFor } from '../components/FoodCover';
 import { ErrorDetail, errorText } from '../common/ErrorKit';
 import { PollBackoff } from '../service/PollBackoff';
 import { StateView } from '../common/StateViewUi';
-import { chatBubbleRadius, chatClock, chatSeparator, chatSeparatorLabel, chatShowsSeparator } from '../common/ChatUi';
+import {
+  ShareableCards, chatBubbleRadius, chatClock, chatSeparator, chatSeparatorLabel, chatShowsSeparator, loadShareableCards
+} from '../common/ChatUi';
+import { legacyPriceText } from '../model/CardPrice';
 import { DiffDataSource } from '../service/PagedDataSource';
 
 const GROUP_MESSAGE_PAGE_SIZE = 50;
 
+// 群聊页面。
 @Component
 export struct GroupChatPage {
   @Prop palette: PagePaletteName = 'SOCIAL';
   @State contentWidth: number = 320;
+  // 消息气泡最大宽度。
   private messageWidth(): number { return Math.max(120, Math.min(286, this.contentWidth - 76)); }
   @StorageLink('stage47AppActive') @Watch('onAppActiveChanged') appActive: boolean = true;
   private destinationVisible: boolean = true;
+  // App 前后台切换时暂停 / 恢复。
   private onAppActiveChanged(): void { if (!this.appActive) this.aboutToDisappear(); else if (this.destinationVisible) this.aboutToAppear(); }
 
   @Prop group: GroupConversationSummary = emptyGroupConversation();
@@ -42,18 +50,20 @@ export struct GroupChatPage {
   @State showMealPoll: boolean = false;
   @State selectedPollId: string = '';
   @State detail: GroupChatDetailResponse | undefined = undefined;
-  // Pack 4.3: messages render through LazyForEach; the source receives minimal ADD/CHANGE notifications.
+  // 消息通过 LazyForEach 渲染，数据源只接收最小的 ADD / CHANGE 通知。
   @State @Watch('syncMessageSource') messages: Array<GroupMessage> = [];
   private messageSource: DiffDataSource<GroupMessage> = new DiffDataSource<GroupMessage>(
     (message: GroupMessage): string => message.id,
     (message: GroupMessage, index: number, all: Array<GroupMessage>): string => message.id + ':' + (index > 0 ? all[index - 1].id : ''));
   private previousMessage: Map<string, GroupMessage> = new Map<string, GroupMessage>();
+  // 把当前消息数组同步到 LazyForEach 数据源。
   private syncMessageSource(): void {
     const previous: Map<string, GroupMessage> = new Map<string, GroupMessage>();
     for (let index = 1; index < this.messages.length; index++) previous.set(this.messages[index].id, this.messages[index - 1]);
     this.previousMessage = previous;
     this.messageSource.update(this.messages);
   }
+  // 上一条消息的时间（用于时间分隔条）。
   private previousCreatedAt(message: GroupMessage): number | undefined {
     const previous: GroupMessage | undefined = this.previousMessage.get(message.id);
     return previous === undefined ? undefined : previous.createdAt;
@@ -77,6 +87,7 @@ export struct GroupChatPage {
   private cardRepository: CardRepository = new CardRepository();
   private poller: PollBackoff = new PollBackoff((): Promise<boolean> => this.pollMessages());
 
+  // 出现时加载群资料与消息并开始轮询。
   aboutToAppear(): void {
     this.detail = undefined; this.detailLoading = false; this.pageGeneration++; this.messages = []; this.cardCandidates = []; this.loading = false; this.loadingOlder = false;
     this.loadDetail();
@@ -84,11 +95,13 @@ export struct GroupChatPage {
     this.poller.start();
   }
 
+  // 消失时停止轮询并清空。
   aboutToDisappear(): void {
     this.detail = undefined; this.detailLoading = false; this.pageGeneration++; this.messages = []; this.cardCandidates = []; this.cardPickerVisible = false; this.favoriteCursor = ''; this.loading = false; this.loadingOlder = false; this.cardsLoading = false; this.sending = false;
     this.poller.stop();
   }
 
+  // 收到 IM 推送或回到前台时立即刷新。
   private onSocialForegroundChanged(): void {
     if (!this.destinationVisible || !this.appActive) return;
     if (this.socialForegroundRevision > 0) {
@@ -98,30 +111,31 @@ export struct GroupChatPage {
     }
   }
 
+  // 最新一条消息的 id。
   private newestMessageId(): string {
     return this.messages.length > 0 ? this.messages[this.messages.length - 1].id : '';
   }
 
-  // One background poll; reports whether the newest message changed so the poller can back off.
+  // 后台轮询一次；返回最新消息是否变化，以便轮询器决定是否放慢间隔。
   private async pollMessages(): Promise<boolean> {
     const before: string = this.newestMessageId();
     await this.loadMessages(true);
     return this.newestMessageId() !== before;
   }
 
+  // 当前用户是否为群主。
   private isOwner(): boolean {
     const profile = AuthService.profile();
     return profile !== undefined && this.detail !== undefined && this.detail.group.ownerUid === profile.uid;
   }
 
+  // 群成员数。
   private memberCount(): number {
     return this.detail === undefined ? this.group.memberCount : this.detail.members.length;
   }
 
-  private containsCard(cards: Array<FoodCard>, cardId: string): boolean {
-    return cards.some((card: FoodCard): boolean => card.id === cardId);
-  }
 
+  // 读取群资料与成员。
   private async loadDetail(): Promise<void> {
     if (this.detailLoading) return;
     const generation: number = this.pageGeneration; const owner: string = AccountRequestGuard.owner(); this.detailLoading = true;
@@ -138,6 +152,7 @@ export struct GroupChatPage {
     }
   }
 
+  // 加载消息（reset=true 从最新一页开始）。
   private async loadMessages(reset: boolean): Promise<void> {
     if (this.loading || this.loadingOlder) return;
     if (!reset && this.nextBeforeToken.length === 0) return;
@@ -163,20 +178,20 @@ export struct GroupChatPage {
     }
   }
 
+  // 加载可分享的卡片候选。
   private async loadCardCandidates(more: boolean = false): Promise<void> {
     if (this.cardsLoading) return; const generation: number = this.pageGeneration; this.cardsLoading = true;
     try { const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      const page: PersonalCollectionPage = await new PersonalCollectionRepository().list('FAVORITE', more ? this.favoriteCursor : '');
-      if (generation !== this.pageGeneration) return;
-      const combined: Array<FoodCard> = more ? this.cardCandidates.slice() : [];
-      for (const item of page.items) { const card: FoodCard | null = item.card; if (card !== null && !this.containsCard(combined, card.id)) combined.push(card); }
-      if (!more) { const own: Array<FoodCard> = await this.cardRepository.myCards(context); if (generation !== this.pageGeneration) return; for (const card of own) if (card.status === 'APPROVED' && !this.containsCard(combined, card.id)) combined.push(card); }
-      this.cardCandidates = combined; this.favoriteCursor = page.nextCursor;
-      if (page.migration !== undefined && !page.migration.collectionReady) this.status = '收藏尚未整理，请先在我的收藏中继续；当前可分享自己发布的卡片。';
+      const loaded: ShareableCards | undefined = await loadShareableCards(context, this.cardRepository, this.cardCandidates,
+        this.favoriteCursor, more, (): boolean => generation === this.pageGeneration);
+      if (loaded === undefined) return;
+      this.cardCandidates = loaded.cards; this.favoriteCursor = loaded.nextCursor;
+      if (loaded.collectionPending) this.status = '收藏尚未整理，请先在我的收藏中继续；当前可分享自己发布的卡片。';
     } catch (error) { if (generation === this.pageGeneration) this.status = `卡片加载失败：${errorText(error as ErrorDetail)}`; }
     finally { if (generation === this.pageGeneration) this.cardsLoading = false; }
   }
 
+  // 发送一条群消息。
   private async sendRequest(request: SendGroupMessageRequest): Promise<void> {
     if (this.sending) return;
     const generation: number = this.pageGeneration; const owner: string = AccountRequestGuard.owner(); this.sending = true;
@@ -196,6 +211,7 @@ export struct GroupChatPage {
     }
   }
 
+  // 发送文字。
   private sendText(): void {
     const value = this.textDraft.trim();
     if (value.length === 0) {
@@ -209,11 +225,13 @@ export struct GroupChatPage {
     this.sendRequest({ groupId: this.group.id, kind: 'TEXT', text: value, cardId: '' });
   }
 
+  // 发送卡片。
   private sendCard(card: FoodCard): void {
     this.sendRequest({ groupId: this.group.id, kind: 'CARD', text: '', cardId: card.id });
     this.cardPickerVisible = false;
   }
 
+  // 群主移除成员。
   private async removeMember(member: GroupMemberProfile): Promise<void> {
     if (this.memberActionUid.length > 0 || member.role === 'OWNER') return;
     this.memberActionUid = member.user.uid;
@@ -230,6 +248,7 @@ export struct GroupChatPage {
     }
   }
 
+  // 退出群聊。
   private async leaveGroup(): Promise<void> {
     if (this.leaving) return;
     this.leaving = true;
@@ -246,10 +265,8 @@ export struct GroupChatPage {
     }
   }
 
-  private priceText(card: FoodCard): string {
-    return card.priceFen > 0 ? `¥${(card.priceFen / 100).toFixed(2)}` : '价格待补充';
-  }
 
+  // 顶部栏（群名、成员数）。
   @Builder
   private header(): void {
     Row({ space: 8 }) {
@@ -275,6 +292,7 @@ export struct GroupChatPage {
     .border({ width: { bottom: 1.2 }, color: pageColor(this.palette, 'line'), style: BorderStyle.Dashed });
   }
 
+  // 卡片消息气泡。
   @Builder
   private sharedCard(card: FoodCard, mine: boolean): void {
     Row({ space: 10 }) {
@@ -283,15 +301,16 @@ export struct GroupChatPage {
       Column({ space: 3 }) {
         Text(card.productName || '食刻卡片').fontSize(14).fontWeight(FontWeight.Bold).fontColor(pageColor(this.palette, 'ink'))
           .width('100%').maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis });
-        Text(`${this.priceText(card)} · 查看卡片 ›`).fontSize(12).fontColor(pageColor(this.palette, 'action')).width('100%').maxLines(1);
+        Text(`${legacyPriceText(card)} · 查看卡片 ›`).fontSize(12).fontColor(pageColor(this.palette, 'action')).width('100%').maxLines(1);
       }.layoutWeight(1).alignItems(HorizontalAlign.Start);
     }
     .width(Math.min(this.messageWidth(), 250)).padding(8).backgroundColor(pageColor(this.palette, 'surface'))
     .borderRadius(chatBubbleRadius(mine)).border({ width: 1, color: pageColor(this.palette, 'line') })
-    .accessibilityGroup(true).accessibilityText(`${card.productName || '食刻卡片'}，${this.priceText(card)}，查看卡片`)
+    .accessibilityGroup(true).accessibilityText(`${card.productName || '食刻卡片'}，${legacyPriceText(card)}，查看卡片`)
     .onClick((): void => this.onOpenCard(card));
   }
 
+  // 投票消息卡片（点击打开投票页）。
   @Builder
   private pollCard(message: GroupMessage): void {
     Column({ space: 8 }) {
@@ -317,6 +336,7 @@ export struct GroupChatPage {
     .borderRadius(18).border({ width: 1.4, color: pageColor(this.palette, 'action'), style: BorderStyle.Dashed });
   }
 
+  // 文字消息气泡。
   @Builder
   private textBubble(text: string, mine: boolean): void {
     Text(text).fontSize(15).lineHeight(22)
@@ -328,6 +348,7 @@ export struct GroupChatPage {
       .copyOption(CopyOptions.LocalDevice);
   }
 
+  // 按消息类型渲染内容。
   @Builder
   private messageContent(message: GroupMessage): void {
     if (message.kind === 'MEAL_POLL') {
@@ -344,6 +365,7 @@ export struct GroupChatPage {
     }
   }
 
+  // 一行消息。
   @Builder
   private messageRow(message: GroupMessage): void {
     Column({ space: 4 }) {
@@ -370,6 +392,7 @@ export struct GroupChatPage {
     }.width('100%');
   }
 
+  // 卡片候选中的一项。
   @Builder
   private cardChoice(card: FoodCard): void {
     Row({ space: 8 }) {
@@ -383,7 +406,7 @@ export struct GroupChatPage {
       Column({ space: 4 }) {
         Text(card.productName || '食刻卡片').fontSize(13).fontWeight(FontWeight.Medium).fontColor(pageColor(this.palette, 'ink'))
           .width(118).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis });
-        Text(this.priceText(card)).fontSize(12).fontColor(pageColor(this.palette, 'action'));
+        Text(legacyPriceText(card)).fontSize(12).fontColor(pageColor(this.palette, 'action'));
       }.alignItems(HorizontalAlign.Start);
       Button(this.sending ? '发送中' : '发送').height(48).fontSize(12).enabled(!this.sending)
         .backgroundColor(pageColor(this.palette, 'gold')).fontColor(pageColor(this.palette, 'on_gold'))
@@ -395,6 +418,7 @@ export struct GroupChatPage {
     .border({ width: 1, color: pageColor(this.palette, 'line') });
   }
 
+  // 底部输入区域。
   @Builder
   private composer(): void {
     Column({ space: 8 }) {
@@ -448,6 +472,7 @@ export struct GroupChatPage {
     .border({ width: { top: 1.2 }, color: pageColor(this.palette, 'line'), style: BorderStyle.Dashed });
   }
 
+  // 成员列表面板。
   @Builder
   private membersSheet(): void {
     Column({ space: 12 }) {
@@ -498,6 +523,7 @@ export struct GroupChatPage {
     .borderRadius(24).border({ width: 1, color: pageColor(this.palette, 'line') }).alignItems(HorizontalAlign.Start);
   }
 
+  // 页面布局。
   build() {
     NavDestination() {
       if (this.showMealPoll) { MealPollPage({ groupId: this.group.id, pollId: this.selectedPollId, onDone: (): void => { this.showMealPoll = false; void this.loadMessages(true); }, onOpenCard: (card: FoodCard): void => this.onOpenCard(card) }) } else {

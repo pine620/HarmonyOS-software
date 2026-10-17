@@ -1,3 +1,9 @@
+/**
+ * 【文件职责】图片读取的唯一实现（shike-image 批量读图、service 的审核/修订读图、media 的游客读图共用）。
+ * 流程：校验请求（最多若干项、mediaId 为 UUID）→ 批量读取 CardMedia 与相关卡片 / 资料 → 按模式校验权限
+ * （PUBLIC 公开、REVIEW 审核、REVISION 作者修订、REPORT 举报）→ 从 Cloud Storage 读取字节并按描述符校验 → 返回 Base64。
+ * 整批响应有字节预算（封面合计不超过 512KB，单张不超过 2MB），超出的项返回需要单独读取。
+ */
 'use strict';
 const crypto = require('node:crypto');
 const { createContentPolicy, policyModels, accessError, cardContentRevision, readableCardState } = require('./content-policy');
@@ -6,16 +12,19 @@ const { CardMedia } = require('./image-models');
 const { mediaVariant, sameMediaSource, verifyMediaBytes } = require('./media-descriptor');
 const { errorCode, shouldReadMetrics } = require('./read-errors');
 const { buildInfo } = require('./release-info');
+// UUID / sha256 格式与字节上限（单张 2MB、封面预算 512KB）。
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SHA = /^[a-f0-9]{64}$/;
 const MAX_BYTES = 2097152, COVER_BUDGET = 524288;
 
+// 某个尺寸对应的存储路径（封面为 *.cover-v1.jpg）。
 function objectKey(media, variant) {
   const uid = String(media.storageUid || media.ownerUid || '');
   if (!uid || /[/\\]/.test(uid) || !UUID.test(String(media.id))) throw accessError('图片不可访问。');
   return `public/approved/${uid}/${media.id}${variant === 'COVER_480' ? '.cover-v1' : ''}.jpg`;
 }
 
+// 规范化并校验批量读图请求。
 function normalize(input) {
   if (Buffer.byteLength(JSON.stringify(input || {})) > 65536) throw accessError('图片请求过大。', 'VALIDATION_ERROR');
   if (!input || input.protocolVersion !== 'image-read-v1' || !Array.isArray(input.items) || input.items.length < 1 || input.items.length > 20)
@@ -36,10 +45,11 @@ function normalize(input) {
   });
 }
 
-// Injected storage/data boundary keeps the contracts testable without a cloud account.
+// 把存储与数据访问作为依赖注入，这样无需云账号也能用契约测试验证逻辑。
 function createImageReader(deps) {
   const bytesCache = new Map(), storageInFlight = new Map();
   let cachedBytes = 0;
+  // 在一次请求内缓存已读的字节（同一张图被多次请求时只读一次）。
   function remember(key, bytes) {
     const old = bytesCache.get(key); if (old) cachedBytes -= old.length;
     bytesCache.delete(key); bytesCache.set(key, bytes); cachedBytes += bytes.length;
@@ -48,6 +58,7 @@ function createImageReader(deps) {
       cachedBytes -= bytesCache.get(first).length; bytesCache.delete(first);
     }
   }
+  // 从存储读取一张图片的字节并按描述符校验。
   async function load(media, descriptor, metrics) {
     const cacheKey = descriptor.sha256 ? [media.id, descriptor.variant, descriptor.sha256, media.coverRecipeVersion || 0].join(':') : '';
     if (cacheKey && bytesCache.has(cacheKey)) {
@@ -65,6 +76,7 @@ function createImageReader(deps) {
     if (cacheKey) storageInFlight.set(cacheKey, task);
     try { return await task; } finally { if (cacheKey && storageInFlight.get(cacheKey) === task) storageInFlight.delete(cacheKey); }
   }
+  // 按字段批量读取多行（分批 in 查询）。
   async function batchRows(name, field, keys, metrics) {
     const unique = [...new Set(keys.filter(Boolean))];
     if (!unique.length) return [];
@@ -72,6 +84,7 @@ function createImageReader(deps) {
     try { return await deps.collection(name).query().in(field, unique).limit(unique.length).get(); }
     catch (error) { metrics.failureCollection = name; throw error; }
   }
+  // 读取本批请求涉及的卡片、资料、修订等权威数据。
   async function authority(viewerUid, items, metrics) {
     const media = await batchRows('CardMedia', 'id', items.map(item => item.mediaId), metrics);
     const cardIds = media.map(row => row.cardId).filter(id => id && !id.startsWith('profile:') && !id.startsWith('profile-cover:') && !id.startsWith('revision:'));
@@ -82,7 +95,7 @@ function createImageReader(deps) {
     if (missingCards.length) cards.push(...await batchRows('FoodCard', 'id', missingCards, metrics));
     const collection = name => {
       const target = deps.collection(name);
-      // Profile images and private revisions can also query profile state.
+      // 资料图片与私有修订也可能需要查询资料状态。
       function wrap(query) {
         return new Proxy(query, { get(target, property) {
           if (property === 'get') return async () => {
@@ -101,6 +114,7 @@ function createImageReader(deps) {
     if (viewerUid && items.some(item => item.mode !== 'PUBLIC')) await policy.assertAccountActive(viewerUid, true);
     return { reports: new Map(reports.map(row => [String(row.id), row])), media: new Map(media.map(row => [String(row.id), row])), cards: new Map(cards.map(row => [String(row.id), row])), policy };
   }
+  // 判断某一项是否允许读取。
   async function allowed(state, viewerUid, item, media) {
     if (!media) return false;
     if (item.mode === 'REPORT') {
@@ -114,9 +128,11 @@ function createImageReader(deps) {
     if (item.mode === 'REVISION') return state.policy.canReadRevisionMedia(viewerUid, media, item.revisionId);
     return state.policy.canReadMedia(viewerUid, media);
   }
+  // 处理一批读取（trustedViewer 为服务端已验证的查看者 UID）。
   async function read(input, trustedViewer) {
     const items = normalize(input), metrics = { dbGet: 0, byObject: {}, storageDownloads: 0, authVerify: 0, byteCacheHits: 0, failureCollection: '', phase: 'authentication', phaseMs: {}, responseBytes: 0, wireImageBytes: 0 };
     const started = Date.now(); let phaseStarted = started;
+    // 切换读取阶段并累计上一阶段的耗时（用于读取指标）。
     function phase(next) { const now = Date.now(); metrics.phaseMs[metrics.phase] = (metrics.phaseMs[metrics.phase] || 0) + now - phaseStarted; metrics.phase = next; phaseStarted = now; }
     let viewerUid = '', outcome = 'error', failure = '';
     const results = [];
@@ -172,7 +188,7 @@ function createImageReader(deps) {
         if (item.mode !== 'PUBLIC') downloaded.push({ index, media, descriptor });
         remaining = original ? 0 : remaining - bytes.length;
       }
-      // Only private review/revision reads need a second authorization check.
+      // 只有私有的审核 / 修订读取需要第二次授权检查。
       if (downloaded.length) {
         phase('final-check');
         const fresh = await authority(viewerUid, downloaded.map(entry => items[entry.index]), metrics);
@@ -199,6 +215,7 @@ function createImageReader(deps) {
 }
 
 let defaultReader;
+// 用真实的 Cloud DB / Storage 依赖创建读取器。
 function reader(env) {
   if (!defaultReader) {
     const { cloud } = require('@hw-agconnect/cloud-server');
@@ -207,7 +224,7 @@ function reader(env) {
     const models = { ...policyModels, CardMedia }; let storageReady = false;
     defaultReader = createImageReader({
       isCardReviewer: uid => isCardReviewer(uid, env),
-      // Keep existing full metrics by default; explicit flags enable sampling or silence success.
+      // 默认保留完整的读取指标；通过显式开关可以改为抽样或不记录成功的读取。
       shouldLogMetrics: id => shouldReadMetrics({ ...env,
         SHIKE_READ_METRICS_ENABLED: env.SHIKE_READ_METRICS_ENABLED === undefined ? 'true' : env.SHIKE_READ_METRICS_ENABLED }, id),
       collection: name => cloud.database({ zoneName: env.SHIKE_DB_ZONE || 'shike' }).collection(models[name]),
@@ -235,7 +252,9 @@ function reader(env) {
   }
   return defaultReader;
 }
+// 批量读图入口（shike-image 使用，会先校验 accessToken）。
 async function readBatch(input, env) { return reader(env).readBatch(input); }
+// 旧接口兼容：读取单张图片（get-public-media 等使用）。
 async function readLegacy(payload, env, accessToken) {
   const item = { mediaId: payload.mediaId, mode: payload.mode || 'PUBLIC', revisionId: payload.revisionId || '', variant: payload.variant || 'ORIGINAL', knownSha256: payload.knownSha256 || '', knownByteSize: payload.knownByteSize || 0, wantBytes: !payload.metadataOnly };
   const input = { protocolVersion: 'image-read-v1', accessToken: accessToken || '', items: [item], expectedKey: payload.key || '', readRequestId: payload.readRequestId || '' };

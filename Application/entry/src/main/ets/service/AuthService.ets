@@ -1,3 +1,15 @@
+/**
+ * 【文件职责】登录与账号流程的编排者（静态类）。负责“谁在登录、用哪种方式、资料是否已加载”，
+ * 并在登录 / 退出 / 换号 / 注销时统一清理本机状态（图片缓存归属、草稿归属、推荐流状态、Push 与桌面卡片登记）。
+ * 【支持的登录方式】
+ *   - 昵称 + 密码（主方式）：login-with-nickname → 云端签发 AGC Token（只放内存）；
+ *   - 邮箱验证码：直接使用 AGC Auth SDK（AuthSessionStore），注册/登录后调用 upsert-profile 读取资料；
+ *   - 华为账号（兼容入口）：Account Kit 授权码 → exchange-huawei-account（shike-auth）→ complete-legacy-login 完成迁移。
+ * 新账号或旧账号在首次使用前需要设置唯一昵称与密码（configure-password-account）。
+ * 【关键机制】intent（操作意图计数）：每次用户发起新的登录类操作都 +1，旧流程在每个 await 之后用 assertIntent 检查，
+ * 发现已被新操作取代就中止，防止“连点两次登录”时旧流程覆盖新状态。
+ * 【链路位置】EmailLoginPage / ProfileSettingsPage / Index → 本文件 → AuthSessionStore + CloudGateway → shike-account / shike-auth。
+ */
 import { RandomFoodRoundStore } from './RandomFoodRoundStore';
 import { DraftStore } from './DraftStore';
 import { common } from '@kit.AbilityKit';
@@ -27,17 +39,21 @@ import { ServiceCardRemoteSyncService } from './ServiceCardRemoteSyncService';
 import { DiscoveryFeedState } from './DiscoveryFeedState';
 import { SessionRestoreStore, SessionProviderHint } from './SessionRestoreStore';
 
+// 当前会话的登录方式：none 未登录 / email 邮箱原生 / huawei 华为兼容 / nickname 昵称密码。
 type AuthMode = 'none' | 'email' | 'huawei' | 'nickname';
 
+// 设置或修改密码后，云端已保存成功但本机切换会话失败时抛出：提示用户用新密码重新登录。
 export class PasswordSavedError extends Error {
   constructor() { super('密码已保存，请使用昵称和新密码登录。'); this.name = 'PasswordSavedError'; }
 }
 
+// 认证类错误对象中可能包含的字段。
 interface AuthErrorDetail {
   code?: number | string;
   message?: string;
 }
 
+// 把认证错误转成可读文本（错误码 + 消息），用于界面提示。
 function authErrorText(error: Object): string {
   const detail: AuthErrorDetail = error as AuthErrorDetail;
   const code: string = detail.code === undefined ? '' : `错误码：${detail.code}`;
@@ -48,33 +64,46 @@ function authErrorText(error: Object): string {
   return '认证服务暂时不可用。';
 }
 
+// 取出认证错误的错误码（字符串），没有时返回空串。
 function authErrorCode(error: Object): string {
   const detail: AuthErrorDetail = error as AuthErrorDetail;
   return detail.code === undefined ? '' : String(detail.code);
 }
 
+// 登录与账号流程编排（静态类，全局唯一）。
 export class AuthService {
+  // 当前登录用户的资料、登录方式与操作意图计数。
   private static currentProfile: UserProfile | undefined = undefined;
   private static authMode: AuthMode = 'none';
   private static intent: number = 0;
+  // 当前操作意图计数（页面用它判断某个登录流程是否仍是最新的）。
   static sessionIntent(): number { return AuthService.intent; }
+  // 检查意图：若期间用户已发起新的账号操作，就抛错中止当前流程。
   private static assertIntent(intent: number): void { if (intent !== AuthService.intent) throw new Error('登录操作已被新的账号操作取代。'); }
 
+  // 当前已加载的用户资料；未登录为 undefined。
   static profile(): UserProfile | undefined {
     return AuthService.currentProfile;
   }
 
+  // 当前是否为昵称密码会话。
   static isNicknameSession(): boolean { return AuthService.authMode === 'nickname'; }
 
+  // 当前是否为邮箱原生会话（以 AuthSessionStore 的判断为准）。
   static isEmailSession(): boolean {
     return AuthService.authMode === 'email' && AuthSessionStore.isNativeEmailSession();
   }
 
+  // 发送邮箱验证码（注册/登录或找回密码）。
   static async requestEmailCode(context: common.Context, rawEmail: string, resetPassword: boolean = false): Promise<void> {
     AuthSessionStore.initialize(context);
     await AuthSessionStore.requestEmailVerifyCode(rawEmail, resetPassword);
   }
 
+  /**
+   * 昵称 + 密码登录：先退出任何旧会话，再调用 login-with-nickname 取得云端签发的 AGC Token，
+   * 保存为 legacy Token 后加载资料；任何一步失败都会清理本机会话。
+   */
   static async nicknameLogin(context: common.Context, nickname: string, password: string): Promise<UserProfile> {
     const intent: number = ++AuthService.intent;
     AuthSessionStore.initialize(context);
@@ -99,6 +128,7 @@ export class AuthService {
     }
   }
 
+  // 校验昵称登录返回的会话：必须有 Token 且到期时间在未来。
   private static validateNicknameSession(session: NicknameAuthSession): void {
     if (session === undefined || session === null || typeof session.accessToken !== 'string' || session.accessToken.length === 0 ||
       !Number.isFinite(session.expiresAt) || session.expiresAt <= Date.now()) {
@@ -106,6 +136,7 @@ export class AuthService {
     }
   }
 
+  // 用户取消登录：意图 +1（中止进行中的流程），退出并清理本机会话。
   static async cancelAuthentication(context: common.Context): Promise<void> {
     AuthService.intent++;
     await SessionRestoreStore.save(context, 'SIGNED_OUT');
@@ -113,11 +144,13 @@ export class AuthService {
     finally { AuthService.clearLocalSession(); }
   }
 
+  // 查询当前账号是否已设置昵称密码（未设置的账号恢复会话后会被要求先设置）。
   static async passwordAccountStatus(): Promise<PasswordAccountStatus> {
     const request: EmptyRequest = {};
     return CloudGateway.callAuthenticated<PasswordAccountStatus>('get-password-account', request);
   }
 
+  // 为当前账号设置唯一昵称与密码（首次设置）；成功后切换为昵称会话。
   static async configurePasswordAccount(context: common.Context, nickname: string, password: string): Promise<UserProfile> {
     const intent: number = AuthService.intent;
     AuthSessionStore.validateNewPassword(password);
@@ -127,6 +160,7 @@ export class AuthService {
     return AuthService.finishPasswordUpdate(context, result, expectedUid, intent);
   }
 
+  // 修改密码：本地先做格式与一致性检查，再调用 change-password-account；成功后切换为新签发的昵称会话。
   static async changePassword(context: common.Context, currentPassword: string, newPassword: string): Promise<UserProfile> {
     const intent: number = AuthService.intent;
     const expectedUid: string = AuthService.currentProfile?.uid || '';
@@ -144,6 +178,10 @@ export class AuthService {
     return AuthService.finishPasswordUpdate(context, result, expectedUid, intent);
   }
 
+  /**
+   * 设置/修改密码成功后的统一收尾：校验返回的账号与当前一致，退出旧会话，保存新 Token 并切换为昵称会话；
+   * 新旧资料是同一账号时沿用已加载的头像/背景地址，避免闪烁。切换失败时抛出 PasswordSavedError 提示用新密码登录。
+   */
   private static async finishPasswordUpdate(context: common.Context, result: PasswordAccountSetupResponse,
     expectedUid: string, intent: number): Promise<UserProfile> {
     AuthService.assertIntent(intent);
@@ -185,6 +223,7 @@ export class AuthService {
     return profile;
   }
 
+  // 用邮箱验证码注册新账号（已注册的邮箱提示改用验证码登录），成功后加载资料。
   static async registerVerifiedEmail(context: common.Context, email: string, code: string): Promise<UserProfile> {
     const intent: number = ++AuthService.intent;
     AuthSessionStore.initialize(context);
@@ -201,6 +240,7 @@ export class AuthService {
     return AuthService.loadProfile(context, intent);
   }
 
+  // 把云端认证错误码翻译成中文提示；未知错误码附在提示末尾，方便反馈问题。
   static credentialError(error: Object, fallback: string): string {
     const code: string = authErrorCode(error);
     switch (code) {
@@ -228,6 +268,7 @@ export class AuthService {
     return fallback;
   }
 
+  // 邮箱验证码登录或注册：register=true 时先尝试注册，邮箱已存在（203818130）则改为登录。
   static async emailLogin(
     context: common.Context,
     rawEmail: string,
@@ -245,9 +286,7 @@ export class AuthService {
         try {
           await AuthSessionStore.registerEmail(rawEmail, verifyCode);
         } catch (error) {
-          // AGC rejects createEmailUser when this address already exists.
-          // REGISTER_LOGIN codes are valid for the corresponding sign-in
-          // flow, so continue without creating a duplicate identity.
+          // 邮箱已存在时 AGC 会拒绝注册；REGISTER_LOGIN 类型的验证码同样可用于登录，所以直接改为登录，不会产生重复身份。
           if (authErrorCode(error as Object) !== '203818130') {
             throw new Error(authErrorText(error as Object));
           }
@@ -269,12 +308,17 @@ export class AuthService {
     }
   }
 
+  /**
+   * 华为账号登录（兼容入口）。
+   * interactive=true：用户主动登录，会先清除旧会话并弹出华为授权；false：冷启动静默恢复。
+   * 流程：Account Kit 取一次性授权码（state/nonce 防重放）→ exchange-huawei-account 换取 AGC Token 与迁移票据
+   * → complete-legacy-login 用票据完成账号迁移/绑定 → 加载资料。registerOnly=true 表示只允许新注册。
+   */
   static async login(context: common.Context, interactive: boolean = true, registerOnly: boolean = false): Promise<UserProfile> {
     if (interactive) { AuthService.intent++; AppStorage.setOrCreate('sessionRestoreMessage', ''); }
     const intent: number = AuthService.intent;
     AuthSessionStore.initialize(context);
-    // Never let a native email user or an expired legacy AGC token become the
-    // credential for the next Huawei compatibility exchange.
+    // 绝不能让邮箱原生会话或已过期的 legacy Token 成为下一次华为账号交换的凭据，所以先清理。
     if (interactive) {
       await SessionRestoreStore.save(context, 'SIGNED_OUT');
       await AuthSessionStore.signOut();
@@ -283,8 +327,7 @@ export class AuthService {
     }
     const state: string = util.generateRandomUUID();
     const nonce: string = util.generateRandomUUID();
-    // Huawei ID remains a compatibility entry point. It is exchanged for an
-    // AGC session and never becomes a normal business credential itself.
+    // 华为账号只是兼容入口：它会被交换成 AGC 会话，本身永远不作为普通业务凭据。
     const request = new authentication.HuaweiIDProvider().createLoginWithHuaweiIDRequest();
     request.forceLogin = interactive;
     request.state = state;
@@ -343,9 +386,8 @@ export class AuthService {
   }
 
   /**
-   * Associates a never-used email provider with the current Huawei-backed
-   * food-clock account. The email credential is created by native AGC Auth;
-   * the cloud service receives only the resulting AGC access token.
+   * 为当前的华为账号关联一个从未使用过的邮箱：邮箱身份由本机 AGC Auth 创建，
+   * 云端只收到创建后得到的 AGC Token（验证码不会传给云函数）。绑定失败时删除刚创建的邮箱身份。
    */
   static async linkEmailToHuawei(
     context: common.Context,
@@ -371,8 +413,7 @@ export class AuthService {
       if (ticketResponse.ticket.length === 0) {
         throw new Error('邮箱关联凭证缺失，请重新操作。');
       }
-      // This creates the provider through native AGC Auth. The verification
-      // code never crosses the cloud-function boundary.
+      // 通过本机 AGC Auth 创建邮箱身份；验证码不会经过云函数。
       await AuthSessionStore.registerEmail(email, code);
       emailCreated = true;
       const completionRequest: MigrationTicketRequest = { ticket: ticketResponse.ticket };
@@ -383,14 +424,12 @@ export class AuthService {
       AuthService.authMode = 'email';
       return await AuthService.loadProfile(context);
     } catch (error) {
-      // Do not leave a newly created but unbound email identity behind. If
-      // rollback itself fails, the original error remains the useful signal.
+      // 不能留下“已创建但未绑定”的邮箱身份；如果回滚本身也失败，仍以最初的错误为准。
       if (emailCreated && !bindingCompleted) {
         try {
           await AuthSessionStore.deleteUser();
         } catch (_rollbackError) {
-          // The app still clears its local session below; no credential is
-          // persisted or logged.
+          // 后面仍会清理本机会话；整个过程不保存、不记录任何凭据。
         }
       }
       AuthService.clearLocalSession();
@@ -399,9 +438,7 @@ export class AuthService {
   }
 
   /**
-   * Associates a Huawei credential with the current native AGC email user.
-   * The native session remains active, so this operation never forces an
-   * email user to be re-created or re-signed-in.
+   * 为当前的邮箱原生用户关联华为账号：邮箱会话保持有效，不需要重新创建或重新登录邮箱用户。
    */
   static async linkHuaweiToEmail(context: common.Context): Promise<UserProfile> {
     AuthSessionStore.initialize(context);
@@ -439,6 +476,10 @@ export class AuthService {
     }
   }
 
+  /**
+   * 确保当前会话可用（各 Repository 在写操作前调用）：
+   * 有 Token 直接返回；华为会话 Token 过期时静默重新登录一次；其他情况清除本机会话并提示重新登录。
+   */
   static async ensureSession(context: common.Context): Promise<void> {
     AuthSessionStore.initialize(context);
     if (AuthService.currentProfile === undefined) {
@@ -458,6 +499,12 @@ export class AuthService {
     throw new Error('登录状态已失效，请重新登录。');
   }
 
+  /**
+   * 冷启动恢复会话：依据 SessionRestoreStore 记录的上次登录方式决定如何恢复。
+   * NICKNAME：内存 Token 已丢失，需要用户重新输入密码；SIGNED_OUT：保持未登录；
+   * 邮箱：SDK 中仍有当前用户则加载资料（若尚未设置昵称密码则要求先设置）；HUAWEI：静默华为登录。
+   * 网络或资料读取失败不会让 SDK 用户退出，只提示“可重试”。
+   */
   static async restore(context: common.Context, allowHuaweiRestore: boolean = true): Promise<UserProfile | undefined> {
     const intent: number = AuthService.intent;
     const hadProfile: boolean = AuthService.currentProfile !== undefined;
@@ -492,7 +539,7 @@ export class AuthService {
         return profile;
       }
       if (hint === 'EMAIL') {
-        // Pack 3.1: the new AGC Auth SDK cannot see sessions saved by the old SDK. Ask once, then forget the hint.
+        // 新版 AGC Auth SDK 看不到旧 SDK 保存的会话：提示用户重新登录一次，然后清除这个提示标记。
         AuthService.clearLocalSession();
         AppStorage.setOrCreate('sessionRestoreMessage', '登录服务已升级，请用邮箱验证码重新登录一次。');
         await SessionRestoreStore.save(context, 'SIGNED_OUT');
@@ -518,13 +565,14 @@ export class AuthService {
         AuthService.clearLocalSession();
         AppStorage.setOrCreate('sessionRestoreMessage', '账号需要重新认证，请继续登录。');
       } else {
-        // A failed network/profile request must not sign the SDK user out.
+        // 网络或资料请求失败时不能让 SDK 用户退出登录。
         AppStorage.setOrCreate('sessionRestoreMessage', '会话暂未恢复，可重试或继续登录。');
       }
       return undefined;
     }
   }
 
+  // 更新资料（昵称、头像、主页背景等）并刷新本机缓存的资料。
   static async updateProfile(context: common.Context, request: UpdateProfileRequest): Promise<UserProfile> {
     await AuthService.ensureSession(context);
     const profile = await CloudGateway.callAuthenticated<UserProfile>('upsert-profile', request);
@@ -533,6 +581,10 @@ export class AuthService {
     return resolvedProfile;
   }
 
+  /**
+   * 加载当前账号资料：以 readOnly 方式调用 upsert-profile，得到业务 UID 后设置图片缓存、草稿的归属账号；
+   * 头像地址在后台补全，不阻塞登录完成。
+   */
   private static async loadProfile(context: common.Context, expectedIntent: number = AuthService.intent): Promise<UserProfile> {
     const intent: number = expectedIntent;
     AuthService.assertIntent(intent);
@@ -552,6 +604,7 @@ export class AuthService {
     return storedProfile;
   }
 
+  // 补全头像与主页背景的本地图片地址；临时下载失败不影响登录。
   private static async resolveAvatar(context: common.Context, profile: UserProfile,
     priority: MediaPriority = 'normal'): Promise<UserProfile> {
     if (profile.avatarPath !== undefined && profile.avatarPath.length > 0 &&
@@ -560,7 +613,7 @@ export class AuthService {
         profile.avatarUrl = await ImageRepository.getDownloadUrl(context, profile.avatarBucket,
           profile.avatarPath, priority);
       } catch (_error) {
-        // A temporary download URL failure should not block the signed-in profile.
+        // 临时的图片地址获取失败不应阻塞登录后的资料显示。
         profile.avatarUrl = '';
       }
     }
@@ -576,6 +629,7 @@ export class AuthService {
     return profile;
   }
 
+  // 清理本机会话状态：推荐流缓存、Token、业务 UID、图片缓存归属、草稿归属、资料与登录方式。
   private static clearLocalSession(): void {
     DiscoveryFeedState.clear();
     AuthSessionStore.clearLegacyAccessToken();
@@ -586,6 +640,10 @@ export class AuthService {
     AuthService.authMode = 'none';
   }
 
+  /**
+   * 退出登录：先保存草稿，再关闭桌面卡片远程同步与 Push 登记（需要云端确认），
+   * 昵称会话额外通知云端注销该会话，最后退出 SDK 并清理本机状态（finally 保证一定清理）。
+   */
   static async logout(context: common.Context): Promise<void> {
     AuthService.intent++; AppStorage.setOrCreate('sessionRestoreMessage', '');
     await SessionRestoreStore.save(context, 'SIGNED_OUT');
@@ -607,6 +665,14 @@ export class AuthService {
     }
   }
 
+  /**
+   * 注销账号（不可恢复）。
+   * 1. 二次验证：邮箱用户输入验证码重新认证；华为用户重新授权；昵称会话需先换成邮箱/华为方式登录；
+   * 2. 确认重新验证的仍是同一个账号；
+   * 3. 关闭桌面卡片同步与 Push（失败则记为待清理）；
+   * 4. 调用 delete-account-data：云端立即停用账号并创建后台清理任务（数据与认证身份由云端生命周期任务清理）；
+   * 5. 清理本机草稿、今日吃什么轮次等，返回给用户的结果说明。
+   */
   static async deleteAccount(
     context: common.Context,
     emailAddress: string = '',
@@ -622,8 +688,7 @@ export class AuthService {
       await AuthService.ensureSession(context);
       await AuthSessionStore.reauthenticateEmail(emailAddress, verifyCode);
     } else {
-      // Destructive legacy-account deletion requires a fresh interactive
-      // Huawei authorization before the cloud cleanup starts.
+      // 旧账号（华为）注销属于破坏性操作，云端清理开始前必须重新进行一次交互式华为授权。
       await AuthService.login(context, true);
     }
     if (expectedUid.length === 0 || AuthService.currentProfile === undefined || AuthService.currentProfile.uid !== expectedUid) {
@@ -676,8 +741,7 @@ export class AuthService {
         localPushCleanupPending = true;
       }
     }
-    // Keep provider identity until the durable server task has cleaned all
-    // related records. A client must not delete credentials ahead of that job.
+    // 认证身份要保留到云端持久任务清理完所有相关数据之后再删除；客户端不能抢先删除凭据。
     await SessionRestoreStore.save(context, 'SIGNED_OUT');
     AuthService.clearLocalSession();
     const accountMessage: string = result.cleanupPending

@@ -1,10 +1,12 @@
 'use strict';
-// Pack 4.1 (2026-10-15): Cloud Foundation Kit prefetch target (install + periodic prefetch, configured in AGC).
-// It only returns the published home snapshot from Cloud Storage: no Cloud DB reads, no identity, no writes,
-// so prefetch traffic from many devices does not consume the Cloud DB quota.
+/**
+ * 【文件职责】事件函数 shike-prefetch（handler：shikePrefetch.handler）：Cloud Foundation 预取的目标函数（安装预取与周期预取在 AGC 控制台配置）。
+ * 只从 Cloud Storage 读取已发布的首页快照并返回：不读 Cloud DB、不校验身份、不写入，所以大量设备的预取请求不会消耗 Cloud DB 读额度。
+ */
 const { readSnapshot } = require('./shared/public-snapshot');
 const { buildInfo } = require('./shared/release-info');
 
+// 预取入口：成功返回快照数据，失败返回 SNAPSHOT_UNAVAILABLE（客户端随后改为正常查询）。
 exports.handler = async (event, context, callback) => {
   let response;
   try {

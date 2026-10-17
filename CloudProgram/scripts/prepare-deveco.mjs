@@ -5,8 +5,13 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { functionDefinitions, generatedDirectories, localDependency, moduleDestination } from './function-layout.mjs';
 
-// User-run source synchronization only: no npm install, compilation, ZIP,
-// handler execution, credentials, network or deployment.
+/**
+ * 【文件职责】npm run prepare:deveco：为 DevEco 右键部署生成函数内依赖副本（shared/、service/、media/）与源码清单
+ * shared/deveco-source-manifest.json；npm run check:deveco 只检查副本是否与源码同步。
+ * 只做源码同步：不安装依赖、不编译、不打包、不执行 handler、不接触凭据或网络、不部署。
+ * 【新人注意】修改 shared/ 或 shike-service/、shike-media/ 后，DevEco 部署前必须重新运行本脚本，否则会部署旧代码。
+ */
+// 路径、哈希函数、Node 内置模块列表、require 匹配正则与清单文件名。
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const functions = join(root, 'cloudfunctions');
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -14,6 +19,7 @@ const builtins = new Set(builtinModules.flatMap(name => [name, 'node:' + name]))
 const requires = /\brequire\(\s*(['"])([^'"]+)\1\s*\)/g;
 const manifestName = 'shared/deveco-source-manifest.json';
 
+// 为一个函数计算需要生成的文件（递归跟踪 require）与清单。
 function planFunction(name) {
   const definition = functionDefinitions[name], sourceRoot = join(functions, name);
   const files = new Map(), generated = new Map(), sources = {};
@@ -22,6 +28,7 @@ function planFunction(name) {
     sources[relative(root, path).split(sep).join('/')] = hash(bytes);
     return bytes;
   };
+  // 递归访问一个源文件及其 require 的本地依赖，计算它在目标函数中的位置与改写后的内容。
   function visit(source) {
     const destination = moduleDestination(functions, name, source);
     if (files.has(destination)) return;
@@ -32,8 +39,7 @@ function planFunction(name) {
       if (!request.startsWith('.')) return whole;
       const dependency = localDependency(functions, source, request);
       visit(dependency);
-      // Maintained files already use function-owned paths. Only derived copies
-      // (service/media/shared subtrees) need their relative imports rebased.
+      // 维护的源文件本身已经使用函数内的路径；只有派生副本（service / media / shared 子目录）需要改写相对 require。
       if (source.startsWith(sourceRoot + sep)) return whole;
       let rebased = relative(dirname(destination), moduleDestination(functions, name, dependency)).split(sep).join('/');
       if (!rebased.startsWith('.')) rebased = './' + rebased;
@@ -46,7 +52,7 @@ function planFunction(name) {
   visit(join(sourceRoot, entry));
   for (const extra of definition.extra || []) visit(join(sourceRoot, extra));
   if (definition.extraMedia) visit(join(functions, 'shike-media', 'cover-worker.js'));
-  // release-info reads content-policy through fs rather than a literal require.
+  // release-info 通过 fs 读取 content-policy，而不是字面的 require，所以要显式加入。
   visit(join(functions, 'shared', 'release-info.js'));
   visit(join(functions, 'shared', 'content-policy.js'));
   for (const file of ['package.json', 'package-lock.json', 'function-config.json', 'tsconfig.json', 'timer-contract.json', 'gateway-contract.json']) {
@@ -94,12 +100,14 @@ function planFunction(name) {
   return { name, sourceRoot, generated, release };
 }
 
+// 递归遍历目录。
 function walk(directory, prefix) {
   return readdirSync(directory).sort().flatMap(name => {
     const path = join(directory, name), next = prefix + '/' + name;
     return statSync(path).isDirectory() ? walk(path, next) : [next];
   });
 }
+// 检查函数内已有的生成副本与计划完全一致（--check 模式）。
 function checkPlan(plan) {
   for (const folder of generatedDirectories(plan.name)) {
     const path = join(plan.sourceRoot, folder);

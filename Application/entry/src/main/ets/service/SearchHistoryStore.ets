@@ -1,8 +1,13 @@
+/**
+ * 【文件职责】本机搜索记录（Preferences，按账号隔离）：只记录成功的搜索，去重后最多保留 20 条，最新在前；不上传云端。
+ */
 import { common } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
 import { normalizeSearch } from '../model/DiscoveryModels';
 
+// 搜索记录存储（静态类）。
 export class SearchHistoryStore {
+  // 读取某账号的搜索记录。
   static read(context: common.Context, uid: string): Array<string> {
     const store: preferences.Preferences = preferences.getPreferencesSync(context, { name: 'shike_search_history' });
     const raw: preferences.ValueType = store.getSync('search_history_' + uid, '');
@@ -20,6 +25,7 @@ export class SearchHistoryStore {
       return result;
     } catch (_error) { return []; }
   }
+  // 记录一次成功的搜索，返回更新后的列表。
   static record(context: common.Context, uid: string, keyword: string): Array<string> {
     const normalized: string = normalizeSearch(keyword);
     if (normalized.length === 0 || normalized.length > 50) return SearchHistoryStore.read(context, uid);
@@ -30,6 +36,7 @@ export class SearchHistoryStore {
     store.putSync('search_history_' + uid, JSON.stringify(limited)); store.flushSync();
     return limited;
   }
+  // 清空搜索记录。
   static clear(context: common.Context, uid: string): void {
     const store: preferences.Preferences = preferences.getPreferencesSync(context, { name: 'shike_search_history' });
     store.deleteSync('search_history_' + uid); store.flushSync();

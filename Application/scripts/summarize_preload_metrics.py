@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Summarize user-exported preload logs offline; never contact a device or AGC."""
+"""离线汇总用户导出的预加载性能日志（preload.trace / preload.metric 行）；绝不连接设备或 AGC。
+
+用法：临时把 NearbyPerformanceTrace.ets 中的 PRELOAD_METRICS_ENABLED 改为 true，采集 HiLog 后导出，
+运行本脚本并指定 phase（baseline/cache/rollback）、scenario（cold/warm/refresh/paging/detail/offline/fault/isolation）、
+network（wifi/cellular/offline/other），按分组输出 P50 / P95。验收结束后恢复开关。
+"""
 
 import argparse
 from collections import Counter, defaultdict

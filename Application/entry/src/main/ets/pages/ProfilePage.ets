@@ -1,7 +1,11 @@
+/**
+ * 【文件职责】“我的”页签首页：资料头部（头像、昵称、食刻号、主页背景）、快捷入口（我的卡片 / 收藏 / 浏览记录 / 选择记录等）与功能列表入口，点击后由 Index 打开对应子页面。
+ */
 import { PagePaletteRoute } from '../common/PagePaletteUi';
 import { UserProfile } from '../model/CloudContracts';
 import { AuthService } from '../service/AuthService';
 
+// 由 UID 生成打码后的食刻号显示形式：SK-••••-后四位。
 function maskedFoodId(uid: string): string {
   const normalized = uid.replace(/[^0-9A-Za-z]/g, '').toUpperCase();
   if (normalized.length === 0) return 'SK-••••';
@@ -9,6 +13,7 @@ function maskedFoodId(uid: string): string {
   return `SK-••••-${suffix}`;
 }
 
+// “我的”首页组件。
 @Component
 export struct ProfilePage {
   @Consume('pathStack') pathStack: NavPathStack;
@@ -17,14 +22,17 @@ export struct ProfilePage {
   @State profile: UserProfile | undefined = undefined;
   @StorageProp('appSystemTopPx') systemTopPx: number = 0;
 
+  // 出现时读取资料。
   aboutToAppear(): void {
     this.onAvatarRevisionChanged();
   }
 
+  // 资料变化时刷新。
   private onRevisionChanged(): void {
     this.onAvatarRevisionChanged();
   }
 
+  // 头像变化时刷新。
   private onAvatarRevisionChanged(): void {
     const profile: UserProfile | undefined = AuthService.profile();
     if (profile === undefined) return;
@@ -35,24 +43,28 @@ export struct ProfilePage {
       accountStatus: profile.accountStatus, publishCount: profile.publishCount,
       createdAt: profile.createdAt, updatedAt: profile.updatedAt
     };
-    // Index paints the status-bar slice of the same cover so the background reaches the top edge.
+    // Index 据此把“我的”页签标记为沉浸式（状态栏文字改为白色）。
     AppStorage.setOrCreate('profileCoverUrl', profile.coverUrl || '');
   }
 
+  // 是否设置了主页背景。
   private hasCover(): boolean {
     return (this.profile?.coverUrl || '').length > 0;
   }
 
+  // 顶部安全区高度。
   private topInset(): number {
     return this.getUIContext().px2vp(this.systemTopPx);
   }
 
+  // 食刻号显示文本。
   private foodId(): string {
     const friendCode = this.profile?.friendCode;
     if (typeof friendCode === 'string' && friendCode.length > 0) return friendCode;
     return maskedFoodId(this.profile?.uid || '');
   }
 
+  // 资料头部区域。
   @Builder
   private profileHero() {
     Stack({ alignContent: Alignment.TopStart }) {
@@ -121,6 +133,7 @@ export struct ProfilePage {
     .width('100%').height(220).clip(false);
   }
 
+  // 一个快捷入口按钮。
   @Builder
   private shortcut(label: string, icon: Resource, route: string) {
     Button() {
@@ -137,6 +150,7 @@ export struct ProfilePage {
     });
   }
 
+  // 快捷入口区域。
   @Builder
   private shortcuts() {
     Column({ space: 10 }) {
@@ -153,12 +167,14 @@ export struct ProfilePage {
     .border({ width: 1.2, color: $r('app.color.personal_line'), style: BorderStyle.Dashed });
   }
 
+  // 打开某个功能页面。
   private openPlanningPage(route: string): void {
     const paletteRoute: PagePaletteRoute = { palette: 'PERSONAL' };
     this.pathStack.pushPathByName(route,
       route === 'random-food' || route === 'food-choice-history' ? paletteRoute : null);
   }
 
+  // 功能列表中的一行。
   @Builder
   private planningRow(label: string, icon: Resource, route: string, divider: boolean) {
     Column({ space: 0 }) {
@@ -186,6 +202,7 @@ export struct ProfilePage {
     }.width('100%')
   }
 
+  // 功能列表区域。
   @Builder
   private planningEntries() {
     Column({ space: 10 }) {
@@ -220,15 +237,18 @@ export struct ProfilePage {
         .border({ width: 1.2, color: $r('app.color.personal_line'), style: BorderStyle.Dashed })
     }.width('100%').alignItems(HorizontalAlign.Start)
   }
+  // 页面布局。
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
       if (this.hasCover()) {
-        // Same size as the status-bar slice drawn by Index (top inset + 360), shifted up by the inset,
-        // so both halves of the cover line up into one continuous image.
+        // 背景高度 = 顶部安全区 + 360，并向上偏移安全区高度，画进 Index 为本页签留出的状态栏区域，随页签一起滑动。
         Image(this.profile?.coverUrl || '').width('100%').height(360 + this.topInset()).objectFit(ImageFit.Cover)
           .translate({ y: -this.topInset() })
           .accessibilityText('我的主页背景')
           .expandSafeArea([], []);
+        // 状态栏区域的 20% 遮罩，保证白色状态栏文字可读。
+        Column().width('100%').height(this.topInset()).backgroundColor('#33000000').translate({ y: -this.topInset() })
+          .hitTestBehavior(HitTestMode.None).accessibilityLevel('no');
         Column() {}.width('100%').height(72)
           .linearGradient({ direction: GradientDirection.Bottom, colors: [
             ['#33000000', 0], ['#00000000', 1]

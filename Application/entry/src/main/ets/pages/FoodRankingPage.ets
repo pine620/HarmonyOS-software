@@ -1,3 +1,7 @@
+/**
+ * 【文件职责】“榜单”页签：高分榜 / 好友榜两个标签，分页读取（list-food-rankings），可见窗口懒加载封面；
+ * 服务端快照生成中时显示“准备中”，并在页签切换时复用最近的数据（FoodRankingSnapshot）。
+ */
 import { common } from '@kit.AbilityKit';
 import { FoodCard } from '../model/CloudContracts';
 import { FoodRankingItem, FoodRankingKind, FoodRankingRequest, FoodRankingResponse,
@@ -14,6 +18,7 @@ import { stage47ErrorText } from '../common/Stage47Ui';
 
 const RESULT_REUSE_MS: number = 5 * 60 * 1000;
 
+// 榜单页面。
 @Component
 export struct FoodRankingPage {
   @Prop @Watch('onActiveChanged') pageActive: boolean = true;
@@ -57,25 +62,34 @@ export struct FoodRankingPage {
   private previews: PersonalPreviewLoader = new PersonalPreviewLoader(this.source, true);
   private repository: FoodRankingRepository = new FoodRankingRepository();
   private cards: CardRepository = new CardRepository();
+  // 取得 UIAbility 上下文。
   private context(): common.UIAbilityContext { return this.getUIContext().getHostContext() as common.UIAbilityContext; }
+  // 异步结果是否仍有效。
   private valid(generation: number): boolean {
     return this.active && this.pageActive && this.appActive && generation === this.generation &&
       this.owner === (AuthService.profile()?.uid || '') && this.session === AuthSessionStore.generation();
   }
+  // 页面激活状态变化。
   private onActiveChanged(): void { if (this.pageActive && this.appActive && this.visibleLifecycle) this.resume(); else this.pause(); }
+  // App 前后台切换。
   private onAppActiveChanged(): void { if (this.appActive && this.pageActive && this.visibleLifecycle) this.resume(); else this.pause(); }
+  // 页面可见性变化。
   private onVisibleChanged(visible: boolean): void {
     if (visible === this.visibleLifecycle) return;
     this.visibleLifecycle = visible; if (visible) this.onActiveChanged(); else this.pause();
   }
+  // 账号内容变化时清空并重新加载。
   private onRevisionChanged(): void {
     this.snapshots.clear(); this.generation++; this.busy = false; this.opening = false;
     this.owner = AuthService.profile()?.uid || ''; this.session = AuthSessionStore.generation();
     this.clearRows();
     if (this.active) void this.load();
   }
+  // 出现时恢复。
   aboutToAppear(): void { this.resume(); }
+  // 消失时暂停。
   aboutToDisappear(): void { this.pause(); }
+  // 恢复：复用缓存或加载第一页。
   private resume(): void {
     if (this.active || !this.pageActive || !this.appActive || !this.visibleLifecycle) return;
     this.updateTextScale();
@@ -90,16 +104,19 @@ export struct FoodRankingPage {
     }
     void this.load();
   }
+  // 暂停：作废进行中的加载。
   private pause(): void {
     if (!this.active) return;
     this.active = false; this.generation++; this.busy = false; this.opening = false;
     this.previews.reset(false); ReadScheduler.subscriptionsChanged();
   }
+  // 清空列表。
   private clearRows(): void {
     this.previews.reset(this.active); this.source.setRows([]); this.items = []; this.count = 0;
     this.firstVisible = 0; this.lastVisible = 5;
     this.cursor = ''; this.totalCount = 0; this.updatedAt = 0; this.message = ''; this.failed = false;
   }
+  // 应用一份榜单数据到界面。
   private apply(snapshot: FoodRankingSnapshot): void {
     this.items = snapshot.items.slice(); this.count = this.items.length; this.cursor = snapshot.cursor;
     this.totalCount = snapshot.totalCount; this.updatedAt = snapshot.updatedAt;
@@ -111,10 +128,12 @@ export struct FoodRankingPage {
     });
     this.source.setRows(rows); this.window(this.firstVisible, this.lastVisible);
   }
+  // 可见范围变化时更新懒加载窗口。
   private window(first: number, last: number): void {
     this.firstVisible = first; this.lastVisible = last;
     if (this.active) this.previews.window(this.context(), first, last, false);
   }
+  // 切换高分榜 / 好友榜（好友榜需要登录）。
   private switchKind(kind: FoodRankingKind): void {
     if (this.kind === kind || this.busy || this.opening) return;
     this.generation++; this.kind = kind; this.clearRows();
@@ -124,6 +143,7 @@ export struct FoodRankingPage {
     if (cached !== undefined && Date.now() - cached.updatedAt < RESULT_REUSE_MS) this.apply(cached);
     else void this.load();
   }
+  // 加载一页榜单。
   private async load(more: boolean = false): Promise<void> {
     if (!this.active || !this.pageActive || !this.appActive || this.busy) return;
     this.loginRequired = this.kind === 'FRIENDS' && this.owner.length === 0;
@@ -165,13 +185,16 @@ export struct FoodRankingPage {
       }
     } finally { if (this.valid(generation)) this.busy = false; }
   }
+  // 下拉刷新。
   private refresh(): void {
     if (this.busy || this.opening) return;
     this.snapshots.clear(); void this.load();
   }
+  // 按卡片 id 找到榜单项。
   private entry(cardId: string): FoodRankingItem | undefined {
     return this.items.find((item: FoodRankingItem): boolean => item.card.id === cardId);
   }
+  // 打开卡片详情。
   private async open(cardId: string): Promise<void> {
     if (this.busy || this.opening || !this.active) return;
     const generation: number = this.generation; this.opening = true;
@@ -186,15 +209,19 @@ export struct FoodRankingPage {
       }
     } finally { if (this.valid(generation)) this.opening = false; }
   }
+  // 封面尺寸（窄屏更小）。
   private photoSize(): number { return this.pageWidth < 360 ? 72 : 84; }
+  // 根据系统字体缩放调整布局。
   private updateTextScale(): void {
     const large: boolean = (this.context().config.fontSizeScale || 1) > 1.3;
     if (large !== this.largeText) this.largeText = large;
   }
+  // 榜单更新时间文字。
   private updateTime(): string {
     const date: Date = new Date(this.updatedAt);
     return date.getHours().toString().padStart(2, '0') + ':' + date.getMinutes().toString().padStart(2, '0');
   }
+  // 错误提示文字。
   private userMessage(error: Object, fallback: string): string {
     const code: string = error instanceof CloudBusinessError ? error.code : '';
     const detail: string = stage47ErrorText(error, fallback);
@@ -204,6 +231,7 @@ export struct FoodRankingPage {
     if (detail === '服务繁忙，请稍后再试。') return detail;
     return fallback;
   }
+  // 一个标签按钮。
   @Builder private tab(kind: FoodRankingKind, label: string) {
     Button({ type: ButtonType.Normal, stateEffect: true }) {
       Text(label).fontSize(16).maxFontScale(2).fontWeight(this.kind === kind ? FontWeight.Bold : FontWeight.Medium)
@@ -217,6 +245,7 @@ export struct FoodRankingPage {
       .accessibilitySelected(this.kind === kind)
       .onClick((): void => this.switchKind(kind));
   }
+  // 顶部渐变。
   private headerGradient(): LinearGradient {
     const colors: Array<[ResourceColor, number]> = [
       [$r('app.color.food_ranking_header'), 0], [$r('app.color.food_ranking_canvas'), 1]
@@ -224,10 +253,12 @@ export struct FoodRankingPage {
     const gradient: LinearGradient = { angle: 180, colors };
     return gradient;
   }
+  // 顶部背景。
   @Builder private headerBackdrop(): void {
     Column() {}.width('100%').height('100%').linearGradient(this.headerGradient())
       .hitTestBehavior(HitTestMode.None).accessibilityLevel('no');
   }
+  // 顶部区域（标题 + 标签）。
   @Builder private header() {
     Stack({ alignContent: Alignment.TopEnd }) {
       Image($r('app.media.food_ranking_steam')).width(112).height(112).objectFit(ImageFit.Contain)
@@ -259,6 +290,7 @@ export struct FoodRankingPage {
       }.width('100%').padding({ left: 16, right: 16, top: 4 });
     }.width('100%').background(this.headerBackdrop, this.headerBackgroundOptions);
   }
+  // 加载中状态。
   @Builder private loadingState() {
     List({ space: 8 }) {
       ForEach(this.skeletonRows, (_index: number): void => {
@@ -281,6 +313,7 @@ export struct FoodRankingPage {
     }.width('100%').layoutWeight(1).padding({ left: 16, right: 16 })
       .scrollBar(BarState.Off).enabled(false).accessibilityLevel('no-hide-descendants');
   }
+  // 空状态 / 准备中状态。
   @Builder private emptyState() {
     Scroll() {
       Column({ space: 12 }) {
@@ -310,6 +343,7 @@ export struct FoodRankingPage {
         if (Number.isFinite(height) && height >= 0 && height !== this.emptyHeight) this.emptyHeight = height;
       });
   }
+  // 页面布局。
   build() {
     Column({ space: 0 }) {
       this.header();

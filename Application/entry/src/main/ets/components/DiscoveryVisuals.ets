@@ -1,6 +1,11 @@
+/**
+ * 【文件职责】推荐页视觉元素：分类快捷入口图标、面板转场、按钮样式、页面背景与加载标记。
+ */
 import { FoodCategoryV2 } from '../model/CloudContracts';
 
+// 分类快捷入口的键（含“全部”“更多”）。
 export type DiscoveryCategoryKey = FoodCategoryV2 | 'ALL' | 'MORE';
+// 分类快捷入口。
 export interface DiscoveryShortcut { key: DiscoveryCategoryKey; label: string; }
 export const DISCOVERY_SHORTCUTS: Array<DiscoveryShortcut> = [
   { key: 'ALL', label: '全部' }, { key: 'NOODLES', label: '粉面' },
@@ -8,6 +13,7 @@ export const DISCOVERY_SHORTCUTS: Array<DiscoveryShortcut> = [
   { key: 'DRINK', label: '饮品' }, { key: 'MORE', label: '更多' }
 ];
 
+// 分类对应的图标资源。
 export function discoveryCategoryIcon(key: DiscoveryCategoryKey): Resource {
   if (key === 'ALL') return $r('app.media.ic_discovery_all');
   if (key === 'MORE') return $r('app.media.ic_discovery_more');
@@ -24,6 +30,7 @@ export function discoveryCategoryIcon(key: DiscoveryCategoryKey): Resource {
   return $r('app.media.ic_discovery_other');
 }
 
+// 面板转场（enabled=false 时不做动画）。
 export function discoveryPanelTransition(enabled: boolean): TransitionEffect {
   if (!enabled) return TransitionEffect.IDENTITY;
   const animation: AnimateParam = { duration: 180, curve: Curve.EaseOut };
@@ -32,9 +39,11 @@ export function discoveryPanelTransition(enabled: boolean): TransitionEffect {
     .animation(animation), TransitionEffect.opacity(0).animation(animation));
 }
 
+// 发现页按钮样式（primary 为主要按钮）。
 export class DiscoveryActionStyle implements AttributeModifier<ButtonAttribute> {
   private primary: boolean;
   constructor(primary: boolean = false) { this.primary = primary; }
+  // 正常状态下的按钮样式（颜色、圆角、内边距、字号等）。
   applyNormalAttribute(button: ButtonAttribute): void {
     const label: LabelStyle = { maxLines: 2, overflow: TextOverflow.Ellipsis };
     button.type(ButtonType.Normal).constraintSize({ minHeight: 48 }).fontSize(14).fontWeight(FontWeight.Medium)
@@ -47,9 +56,11 @@ export class DiscoveryActionStyle implements AttributeModifier<ButtonAttribute> 
   applyPressedAttribute(button: ButtonAttribute): void { button.opacity(0.85); }
 }
 
+// 发现页筛选项样式（selected 表示选中）。
 export class DiscoveryChoiceStyle implements AttributeModifier<ButtonAttribute> {
   private selected: boolean;
   constructor(selected: boolean) { this.selected = selected; }
+  // 正常状态下的按钮样式（颜色、圆角、内边距、字号等）。
   applyNormalAttribute(button: ButtonAttribute): void {
     const label: LabelStyle = { maxLines: 2, overflow: TextOverflow.Ellipsis };
     button.type(ButtonType.Normal).constraintSize({ minHeight: 48 }).fontSize(13).labelStyle(label)
@@ -62,8 +73,10 @@ export class DiscoveryChoiceStyle implements AttributeModifier<ButtonAttribute> 
   applyPressedAttribute(button: ButtonAttribute): void { button.opacity(0.85); }
 }
 
+// 发现页顶部背景。
 @Component
 export struct DiscoveryBackdrop {
+  // 背景渐变色（随色板变化）。
   private gradient(): LinearGradient {
     const colors: Array<[ResourceColor, number]> = [
       [$r('app.color.discovery_header'), 0], [$r('app.color.discovery_header_fade'), 0.72],
@@ -76,8 +89,7 @@ export struct DiscoveryBackdrop {
     Stack({ alignContent: Alignment.TopEnd }) {
       Column() {}.width('100%').height(330).linearGradient(this.gradient())
         .expandSafeArea([], [])
-      // The glow circle and arc were clipped at the content top, leaving a visible seam under the
-      // flat-coloured status bar (most obvious in dark mode). The header keeps only its gradient and dots.
+      // 原先的光晕圆和弧线会在内容顶部被裁切，在纯色状态栏下形成明显接缝（暗色模式尤其明显），所以顶部只保留渐变和圆点。
       Column({ space: 10 }) {
         ForEach([0, 1, 2, 3, 4], (row: number) => {
           Row({ space: 10 }) {
@@ -94,12 +106,14 @@ export struct DiscoveryBackdrop {
   }
 }
 
+// 加载中的动态标记（遵循系统“减弱动态效果”设置）。
 @Component
 export struct DiscoveryLoadingMark {
   @Prop @Watch('syncMotion') motionEnabled: boolean = false;
   @Prop markSize: number = 32;
   @State angle: number = 0;
   private mounted: boolean = false;
+  // 同步动画开关。
   private syncMotion(): void {
     if (!this.mounted) return;
     const options: AnimateParam = this.motionEnabled

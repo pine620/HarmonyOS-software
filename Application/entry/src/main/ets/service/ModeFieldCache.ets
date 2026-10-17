@@ -1,7 +1,13 @@
+/**
+ * 【文件职责】发布页“外卖 / 到店”两种模式各自填写过的字段缓存（Preferences，按账号与卡片区分，保留 30 天）。
+ * 用户在两种模式间切换时，不兼容的字段（如外卖平台、配送费 vs 到店人均）会被暂存，切回时恢复；
+ * 它不是草稿，也不保存请求或照片。
+ */
 import { common } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
 import { FoodConsumptionMode } from '../model/CloudContracts';
 
+// 某种模式下暂存的字段。
 export interface ModeFields {
   savedAt: number;
   dineInSavedAt?: number;
@@ -17,8 +23,9 @@ export interface ModeFields {
 const RETENTION: number = 30 * 24 * 60 * 60 * 1000;
 const STORE_NAME: string = 'shike_mode_fields';
 
-/** Only incompatible mode fields, not a publication draft, request or photo. */
+// 只保存两种模式之间不兼容的字段，不是发布草稿，也不包含请求或照片。
 export class ModeFieldCache {
+  // 读取某账号某卡片（新建为空串）暂存的模式字段；超过 30 天的丢弃。
   static read(context: common.Context, uid: string, cardId: string): ModeFields | undefined {
     if (uid.length === 0) return undefined;
     const store: preferences.Preferences = preferences.getPreferencesSync(context, { name: STORE_NAME });
@@ -43,6 +50,7 @@ export class ModeFieldCache {
       return value;
     } catch (_error) { store.deleteSync(key); store.flushSync(); return undefined; }
   }
+  // 保存当前模式的字段。
   static save(context: common.Context, uid: string, cardId: string, fields: ModeFields, mode: FoodConsumptionMode): void {
     if (uid.length === 0 || mode === 'UNSPECIFIED') return;
     const previous: ModeFields | undefined = ModeFieldCache.read(context, uid, cardId);
@@ -60,10 +68,12 @@ export class ModeFieldCache {
     store.putSync(uid + ':' + (cardId.length > 0 ? cardId : 'new'), JSON.stringify(merged));
     store.flushSync();
   }
+  // 清除某卡片的暂存字段（发布成功后）。
   static clear(context: common.Context, uid: string, cardId: string): void {
     const store: preferences.Preferences = preferences.getPreferencesSync(context, { name: STORE_NAME });
     store.deleteSync(uid + ':' + (cardId.length > 0 ? cardId : 'new')); store.flushSync();
   }
+  // 清除某账号的全部暂存字段。
   static clearAccount(context: common.Context, uid: string): void {
     if (uid.length === 0) return;
     const store: preferences.Preferences = preferences.getPreferencesSync(context, { name: STORE_NAME });

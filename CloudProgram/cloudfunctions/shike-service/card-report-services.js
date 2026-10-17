@@ -1,3 +1,6 @@
+/**
+ * 【文件职责】卡片举报与审核（shike-governance 的 8 个操作）：权限探测、举报上下文、提交举报、我的举报 / 审核列表、详情、管理员处理（保留或下架）。审核员身份由 shared/card-review-access.js 的白名单决定。
+ */
 'use strict';
 const { dateMillis, cardContentRevision, readableCardState, isAccountActive } = require('./shared/content-policy');
 const { isCardReviewer } = require('./shared/card-review-access');
@@ -7,23 +10,27 @@ const isCardReport = row => !!row && (row.targetType === 'CARD' || !row.targetTy
 const target = row => String(row.cardId || row.targetId || '');
 const pending = row => row.status === 'PENDING';
 const version = row => dateMillis(row.updatedAt) || dateMillis(row.createdAt) || 0;
+// 创建模块：ctx 由 runtime.js 注入（含生命周期相关函数）。
 function createCardReportServices(ctx) {
   const { collection, one, models } = ctx;
   const read = (name, field, value, env) => one(collection(env, name).query().equalTo(field, value));
   const txOne = (...args) => ctx.stage1().txOne(...args);
   const model = (name, values) => Object.assign(new models[name](), values);
+  // 当前用户是否允许访问（required=true 时无权限直接抛错）。
   async function access(uid, env, required = true) {
     await ctx.contentPolicy(env).assertAccountActive(uid);
     const allowed = isCardReviewer(uid, env);
     if (required && !allowed) throw fail('当前账号没有卡片审核权限。', 'ADMIN_REQUIRED');
     return { allowed };
   }
+  // 举报记录的返回视图（管理员可见更多字段）。
   function view(row, admin = false) {
     return { id: String(row.id), cardId: target(row), cardTitle: String(row.cardTitle || '卡片'), status: pending(row) ? 'PENDING' : 'RESOLVED',
       reasonType: String(row.reasonType || 'OTHER'), reasonLabel: Object.hasOwn(REASONS,row.reasonType) ? REASONS[row.reasonType] : '历史举报', description: Object.hasOwn(REASONS,row.reasonType) ? String(row.description || '') : String(row.reason || '历史举报未保留可读取说明，请核对原记录。'),
       createdAt: dateMillis(row.createdAt) || 0, updatedAt: version(row), reportedRevision: String(row.reportedRevision || ''),
       resolutionAction: String(row.resolutionAction || ''), resolutionReason: String(row.resolutionReason || ''), resolvedAt: dateMillis(row.resolvedAt) || 0, ...(admin ? {reviewerUid: String(row.resolvedByUid || '')} : {}) };
   }
+  // 举报中的卡片视图（含图片引用，管理员可看已下架卡片）。
   async function cardView(cardId, uid, env, admin = false) {
     const card = await read('FoodCard', 'id', cardId, env);
     const owner = card ? await read('UserProfile', 'uid', card.ownerUid, env) : null;
@@ -47,6 +54,7 @@ function createCardReportServices(ctx) {
       sellingPoints: arrayText(card.sellingPointsJson), offers: arrayText(card.publicOffersJson), reviewText: String(card.reviewText || ''), tasteScore: Number(card.tasteScore || 0),
       sourceLink: String(card.sourceLink || ''), category: String(card.categoryV2 || card.category || ''), photos };
   }
+  // 举报上下文：卡片摘要与是否已举报。
   async function context(uid, payload, env) {
     await ctx.contentPolicy(env).assertAccountActive(uid);
     const card = await cardView(id(payload.cardId), uid, env);
@@ -54,6 +62,7 @@ function createCardReportServices(ctx) {
     if (!card.available) throw fail('卡片已不可举报。', 'CONTENT_UNAVAILABLE');
     return { card };
   }
+  // 提交举报（同一用户对同一卡片同一版本只记一次）。
   async function submit(uid, payload, env) {
     const cardId = id(payload.cardId || payload.targetId), requestId = uuid(payload.requestId), reasonType = String(payload.reasonType || '');
     const description = String(payload.description || '').trim();
@@ -80,12 +89,13 @@ function createCardReportServices(ctx) {
     }});
     if (!committed || !result) throw fail('举报未确认，请重试。','CONFLICT'); return result;
   }
+  // 分页列出举报（admin=true 为审核列表）。
   async function list(uid,payload,env,admin=false) {
     if (admin) await access(uid,env); else await ctx.contentPolicy(env).assertAccountActive(uid);
     const status = payload.status === 'RESOLVED' ? 'RESOLVED' : 'PENDING';
     const signature = hash(['card-report-list-v2',uid,admin,status]), saved = token(payload.cursor,signature), at=saved?saved.at:Date.now();
     let continuation = saved, next = null; const items=[];
-    // Bound legacy filtering work. A nonempty cursor remains available even on an empty page.
+    // 限制旧数据过滤的工作量；即使这一页为空，也会保留非空的游标供继续翻页。
     for (let scan=0;scan<4 && items.length<12;scan++) {
       const query = admin ? collection(env,'Report').query().equalTo('status',status).orderByDesc('createdAt') : collection(env,'Report').query().equalTo('reporterUid',uid).orderByDesc('createdAt');
       const page = await timestampPage(query,continuation,at,12-items.length,'id','createdAt');
@@ -110,6 +120,7 @@ function createCardReportServices(ctx) {
     if (admin) await access(uid,env); else await ctx.contentPolicy(env).assertAccountActive(uid);
     return {items,nextCursor:next?encode(signature,at,next):''};
   }
+  // 举报详情（含卡片在举报后是否已变化）。
   async function detail(uid,payload,env,admin=false) {
     if (admin) await access(uid,env); else await ctx.contentPolicy(env).assertAccountActive(uid);
     const row = await read('Report','id',id(payload.reportId),env);
@@ -118,6 +129,7 @@ function createCardReportServices(ctx) {
     if (admin) await access(uid,env); else await ctx.contentPolicy(env).assertAccountActive(uid);
     return {report:view(row,admin),card,cardChanged:!!row.reportedRevision && row.reportedRevision !== card.revision};
   }
+  // 管理员处理举报：KEEP 保留 / TAKE_DOWN 下架（事务中同时更新卡片与举报）。
   async function resolve(uid,payload,env) {
     await access(uid,env);
     const reportId=id(payload.reportId),requestId=uuid(payload.requestId), action=String(payload.action || ''),reason=String(payload.reason || '').trim();

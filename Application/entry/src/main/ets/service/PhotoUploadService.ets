@@ -1,3 +1,12 @@
+/**
+ * 【文件职责】实拍图上传（发布流程第 2 步）。只负责上传，下载与缓存在 ImageRepository。
+ * 【两条上传路径】
+ *   1. 直传：邮箱原生登录 + CLIENT_DIRECT_UPLOAD_ENABLED=true 时，先把 JPEG 上传到 Cloud Storage 的
+ *      private/pending/{uid}/{mediaId}.jpg（安全规则只允许本人写），再调用 confirm-card-photo-upload，
+ *      由 shike-media 读回、核对大小与 sha256 后写入公开路径；
+ *   2. 函数上传：其余情况，或直传连续失败 2 次后，把图片转成 Base64 调用 upload-card-photo，由 shike-media 写入。
+ * 【链路位置】CreateCardPage / ProfileEditPage → 本文件 → CloudGateway → shike-media（以及 Cloud Storage 直传）。
+ */
 import { common } from '@kit.AbilityKit';
 import util from '@ohos.util';
 import { request } from '@kit.BasicServicesKit';
@@ -11,9 +20,16 @@ import { CLIENT_DIRECT_UPLOAD_ENABLED } from './ImageReadConfig';
 const DIRECT_UPLOAD_TIMEOUT_MS: number = 60000;
 const DIRECT_FAILURES_BEFORE_PAUSE: number = 2;
 
+// 实拍图上传（静态类）。
 export class PhotoUploadService {
+  // 本进程内直传连续失败的次数；达到 2 次后不再尝试直传，直接走函数上传。
   private static directFailures: number = 0;
 
+  /**
+   * 上传一张已经准备好的 JPEG。
+   * bucketName / cloudPath 来自 prepare-card-photo 的返回值；cloudPath 必须形如 public/approved/{storageUid}/{mediaId}.jpg，
+   * sha256 是本机计算的摘要，云端会用它校验上传内容。任何一步不符合都抛错，由发布页提示用户重试。
+   */
   static async upload(context: common.UIAbilityContext, bucketName: string, cloudPath: string,
     data: ArrayBuffer, sha256: string): Promise<void> {
     const storageBucketName: string = bucketName.trim();
@@ -30,7 +46,7 @@ export class PhotoUploadService {
     }
     const storageUid: string = matchedMediaId[1];
     const mediaId: string = matchedMediaId[2];
-    // Pack 3.3: native email users upload straight to Cloud Storage; any failure falls back to the function upload.
+    // 邮箱原生会话优先直传 Cloud Storage；任何失败都会回落到函数上传。
     if (CLIENT_DIRECT_UPLOAD_ENABLED && AuthSessionStore.isNativeEmailSession() &&
       PhotoUploadService.directFailures < DIRECT_FAILURES_BEFORE_PAUSE) {
       try {
@@ -58,7 +74,7 @@ export class PhotoUploadService {
     if (!response.success) throw new Error('云端未确认图片上传。');
   }
 
-  // Writes the bytes to the cache directory, then uploads them to private/pending/{uid}/{mediaId}.jpg.
+  // 把字节写到缓存目录的临时文件，再上传到 private/pending/{uid}/{mediaId}.jpg；60 秒超时，结束后删除临时文件。
   private static async uploadDirect(context: common.UIAbilityContext, bucketName: string, storageUid: string,
     mediaId: string, data: ArrayBuffer): Promise<void> {
     CloudGateway.ensureReady();

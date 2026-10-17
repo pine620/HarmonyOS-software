@@ -9,6 +9,7 @@ const jpeg = Buffer.from([255,216,255,224,255,217]);
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const id = number => '00000000-0000-4000-8000-' + String(number).padStart(12, '0');
 const relationshipId = (a,b) => digest('friend:' + [a,b].sort().join(':'));
+// 公开读取每批固定 3 次查询：CardMedia、FoodCard，以及作者资料（作者停用后图片立即不可读，见 optimization-contracts）。
 function fixture(count = 4, cover = true, overrides = {}) {
   const db = { IdentityBinding: [], CardMedia: [], FoodCard: [], FoodCardRevision: [],
     UserProfile: [{uid:'viewer',accountStatus:'ACTIVE'},{uid:'author',accountStatus:'ACTIVE'}], Friendship: [] };
@@ -26,19 +27,19 @@ function fixture(count = 4, cover = true, overrides = {}) {
   const read = (items, token='token') => reader.readBatch({protocolVersion:'image-read-v1',accessToken:token,items});
   return {db,calls,hook,read,item};
 }
-test('warm four-cover version check uses two DB gets, no auth and zero bytes',async()=>{
+test('warm four-cover version check uses three DB gets (media, card, author state), no auth and zero bytes',async()=>{
   const f=fixture();const response=await f.read([1,2,3,4].map(n=>f.item(n,{knownSha256:digest(jpeg),knownByteSize:jpeg.length})));
   assert.deepEqual(response.items.map(row=>row.status),['CACHE_OK','CACHE_OK','CACHE_OK','CACHE_OK']);
-  assert.deepEqual(f.calls,{db:2,storage:0,auth:0});assert.equal(response.buildId,buildInfo.buildId);
+  assert.deepEqual(f.calls,{db:3,storage:0,auth:0});assert.equal(response.buildId,buildInfo.buildId);
 });
-test('cold public cover batch uses two DB gets without repeated authority checks',async()=>{
+test('cold public cover batch uses three DB gets (media, card, author state) without repeated authority checks',async()=>{
   const f=fixture();const response=await f.read([1,2,3,4].map(n=>f.item(n)));
   assert.ok(response.items.every(row=>row.status==='BYTES'&&Buffer.from(row.dataBase64,'base64').equals(jpeg)));
-  assert.deepEqual(f.calls,{db:2,storage:4,auth:0});
+  assert.deepEqual(f.calls,{db:3,storage:4,auth:0});
 });
-test('byte LRU rechecks published state without repeating Storage downloads',async()=>{
+test('byte LRU rechecks published state and author status without repeating Storage downloads',async()=>{
   const f=fixture(1);await f.read([f.item(1)]);const before={...f.calls};await f.read([f.item(1)]);
-  assert.equal(f.calls.storage,before.storage);assert.equal(f.calls.db-before.db,2);
+  assert.equal(f.calls.storage,before.storage);assert.equal(f.calls.db-before.db,3);
   f.db.Friendship.push({id:relationshipId('viewer','author'),status:'BLOCKED'});
   const response=await f.read([f.item(1,{knownSha256:digest(jpeg),knownByteSize:jpeg.length})]);assert.equal(response.items[0].status,'CACHE_OK');
 });
@@ -95,9 +96,9 @@ test('revision media binds actor, revision status and manifest membership',async
   assert.equal((await f.read([f.item(1,{mode:'REVISION',revisionId:'revision-1'})])).items[0].status,'BYTES');
   f.db.FoodCardRevision[0].mediaManifestJson='[]';assert.equal((await f.read([f.item(1,{mode:'REVISION',revisionId:'revision-1'})])).items[0].status,'DENIED');
 });
-test('twenty metadata items remain one bounded authority batch',async()=>{
+test('twenty metadata items remain one bounded authority batch (media, card, author state)',async()=>{
   const f=fixture(20);const response=await f.read(Array.from({length:20},(_,n)=>f.item(n+1,{knownSha256:digest(jpeg),knownByteSize:jpeg.length,wantBytes:false})));
-  assert.equal(response.items.length,20);assert.ok(response.items.every(row=>row.status==='CACHE_OK'));assert.equal(f.calls.db,2);assert.equal(f.calls.storage,0);
+  assert.equal(response.items.length,20);assert.ok(response.items.every(row=>row.status==='CACHE_OK'));assert.equal(f.calls.db,3);assert.equal(f.calls.storage,0);
 });
 test('fifth cover is deferred without replaying four completed results',async()=>{
   const f=fixture(5);const response=await f.read([1,2,3,4,5].map(n=>f.item(n)));

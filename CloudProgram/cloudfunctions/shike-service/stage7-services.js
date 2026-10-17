@@ -1,7 +1,12 @@
+/**
+ * 【文件职责】用户主页（get-user-page：资料 + 公开卡片分页 + 与查看者的关系）与赞 / 踩 v2（set-card-reaction-v2）。
+ */
 'use strict';
 const {fail,hash,id,int,token,encode,flag,timestampPage}=require('./stages47-common');
+// 创建模块：ctx 由 runtime.js 注入公共函数与配置。
 function createStage7Services(ctx){
  const {collection,one}=ctx;
+ // 读取用户主页。
  async function userPage(uid,p,env){
   const target=id(p.userUid);
   await ctx.contentPolicy(env).assertProfileReadable(uid,target);
@@ -26,9 +31,9 @@ function createStage7Services(ctx){
    cards:fresh,
    nextCursor:next?encode(sig,at,next):''};
  }
+ // 设置赞 / 踩。
  async function reaction(uid,p,env){
-  // A write needs only its own verified history. Search/map/ranking readiness
-  // belongs to their respective entry points, not to the reaction critical path.
+  // 写入只需要校验自身的历史数据；搜索 / 地图 / 榜单的就绪状态属于它们各自的入口，不放在反应写入的关键路径上。
   if(!flag(env,'SHIKE_REACTION_VERIFIED'))throw fail('赞踩尚未完成上线验证。','FEATURE_NOT_READY');
   const history=await ctx.stage1().reactionHistoryMaintenance({mode:'status'},env);
   if(!history.ready)throw fail('赞踩历史整理尚未完成。','FEATURE_NOT_READY');

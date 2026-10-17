@@ -1,16 +1,26 @@
+/**
+ * 【文件职责】内容与账号的生命周期：删除记录列表与恢复（30 天内），以及持久化的后台清理任务（MaintenanceJob）：
+ *   PURGE_CARD 彻底删除卡片及图片、DELETE_ACCOUNT 注销后清理账号的全部数据与认证身份、PURGE_GROUP 清理群聊。
+ * 任务由 shike-maintenance 定时调用 tick() 执行：每次取少量到期任务，用“租约”防止多个实例同时处理同一任务，
+ * 进度保存在 checkpointJson 中，失败可以从断点继续。受 SHIKE_LIFECYCLE_VERIFIED 与 SHIKE_MAINTENANCE_ENABLED 开关控制。
+ */
 'use strict';
 const crypto=require('crypto');
 const {errorCode}=require('./shared/read-errors');
 const maintenanceCode=error=>{const code=errorCode(error);return code==='REQUEST_FAILED'?'MAINTENANCE_FAILED':code;};
 const {dateMillis,isAccountActive,readableCardState}=require('./shared/content-policy');
 const {fail,hash,id,uuid,int,token,encode,flag,timestampPage}=require('./stages47-common');
+// 每批处理行数、租约时长（5 分钟）、一天的毫秒数、任务类型。
 const BATCH=10,LEASE_MS=300000,DAY=86400000;
 const TYPES=['PURGE_CARD','DELETE_ACCOUNT','PURGE_GROUP'];
 const LEGACY_TYPES=['PURGE_CONVERSATION','BACKFILL_CARD','MIGRATE_REACTION'];
+// 创建模块：ctx 由 runtime.js 注入。
 function createLifecycleServices(ctx){
   const {collection,one,models}=ctx;const model=(name,row)=>Object.assign(new models[name](),row);
   const txOne=(...args)=>ctx.stage1().txOne(...args),save=(tx,rows)=>ctx.stage1().upsertRows(tx,rows);
+  // 生命周期功能是否开放（SHIKE_LIFECYCLE_VERIFIED）。
   function enabled(env){if(!flag(env,'SHIKE_LIFECYCLE_VERIFIED'))throw fail('生命周期服务尚未就绪。','FEATURE_NOT_READY');}
+  // 任务失败原因分类。
   function errorCategory(job){
     const code=String(job.lastErrorCode||'');
     if(!code)return 'NONE';
@@ -18,6 +28,7 @@ function createLifecycleServices(ctx){
     if(['AUTH_ACTION_REQUIRED','CHILD_CLEANUP_REQUIRED','CONFIGURATION_REQUIRED'].includes(code)||job.status==='FAILED')return 'MANUAL';
     return 'RETRYABLE';
   }
+  // 任务的返回视图。
   function view(job){
     let cp;try{cp=progress(job);}catch(_){cp={phase:'INVALID_CHECKPOINT'};}
     const created=dateMillis(job.createdAt)||0,deadline=job.jobType==='DELETE_ACCOUNT'&&created>0?created+7*DAY:0;
@@ -32,7 +43,9 @@ function createLifecycleServices(ctx){
       stalled:!terminal&&(dateMillis(job.runAfterAt)||0)<=Date.now()&&lastProgress>0&&Date.now()-lastProgress>1800000,
       errorCategory:cp.phase==='INVALID_CHECKPOINT'?'PERMANENT':errorCategory(job)};
   }
+  // 解析任务进度。
   function progress(job){let value;try{value=JSON.parse(job.checkpointJson||'{}');}catch(_){throw fail('任务检查点无效。','INVALID_STATE');}if(!value||typeof value!=='object'||Array.isArray(value))throw fail('任务检查点无效。','INVALID_STATE');return value;}
+  // 分页列出自己的删除记录。
   async function deleted(uid,payload,env){
     await ctx.contentPolicy(env).assertAccountActive(uid);const signature=hash(['deleted',uid]),saved=token(payload.cursor,signature),at=saved?saved.at:Date.now();
     const page=await timestampPage(collection(env,'FoodCard').query().equalTo('ownerUid',uid).orderByDesc('createdAt'),saved,at,12,'id','createdAt');
@@ -46,6 +59,7 @@ function createLifecycleServices(ctx){
     return {items,nextCursor:page.next?encode(signature,at,page.next):'',lifecycleEnabled:flag(env,'SHIKE_LIFECYCLE_VERIFIED')};
   }
 
+  // 恢复一张已删除的卡片（版本与 requestId 校验）。
   async function restore(uid,payload,env){enabled(env);const cardId=id(payload.cardId),requestId=uuid(payload.requestId),expected=int(payload.expectedVersion,0,Number.MAX_SAFE_INTEGER),receiptId=hash(['restore',uid,requestId]),payloadHash=hash([cardId,expected]);let result;
     const committed=await collection(env,'FoodCard').runTransaction({apply:async tx=>{const owner=await ctx.stage1().activeProfile(tx,uid,env),receipt=await txOne(tx,env,'PublishRequestRecord','requestId',receiptId);
       if(receipt){if(receipt.uid!==uid||receipt.operationType!=='RESTORE_CARD'||receipt.payloadHash!==payloadHash)throw fail('请求标识已使用。','CONFLICT');result={success:true,alreadyProcessed:true};return true;}
@@ -57,6 +71,7 @@ function createLifecycleServices(ctx){
       const counters=await ctx.stage2().prepareCounterTransition(tx,card,next,owner,env,now);save(tx,[next,...counters,ctx.profileForWrite(owner,now),model('MaintenanceJob',{...job,status:'CANCELLED',leaseOwner:'',leaseUntilAt:null,updatedAt:new Date(now),lastErrorCode:'RESTORED'}),
         model('PublishRequestRecord',{requestId:receiptId,uid,operationType:'RESTORE_CARD',payloadHash,resultEntityId:cardId,status:'COMMITTED',createdAt:new Date(now),expiresAt:new Date(now+30*DAY)})]);result={success:true,alreadyProcessed:false};return true;
     }});if(!committed||!result)throw fail('恢复未保存，请用同一请求重试。','CONFLICT');await ctx.refreshPublishCount(uid,env);return result;}
+  // 领取任务（写入租约）。
   async function claim(jobId,env){const lease=crypto.randomUUID();let claimed=null;
     const ok=await collection(env,'MaintenanceJob').runTransaction({apply:async tx=>{const job=await txOne(tx,env,'MaintenanceJob','jobId',jobId);if(!job||!TYPES.includes(job.jobType)||!['PENDING','RETRY_WAIT','RUNNING'].includes(job.status))return true;
       if(job.status==='RUNNING'&&dateMillis(job.leaseUntilAt)>Date.now())return true;if(dateMillis(job.runAfterAt)>Date.now())return true;
@@ -67,12 +82,15 @@ function createLifecycleServices(ctx){
       if(job.jobType==='PURGE_GROUP')cp.phase=cp.phase||'MESSAGES';
       claimed=model('MaintenanceJob',{...job,status:'RUNNING',leaseOwner:lease,leaseUntilAt:new Date(now+LEASE_MS),attemptCount:Number(job.attemptCount||0)+1,checkpointJson:JSON.stringify(cp),updatedAt:new Date(now),lastErrorCode:''});save(tx,[claimed]);return true;
     }});return ok?claimed:null;}
+  // 在事务中确认自己仍持有该任务的租约。
   async function locked(tx,job,env){const fresh=await txOne(tx,env,'MaintenanceJob','jobId',job.jobId);if(!fresh||fresh.status!=='RUNNING'||fresh.leaseOwner!==job.leaseOwner||dateMillis(fresh.leaseUntilAt)<=Date.now())throw fail('任务租约已变化。','LEASE_LOST');
     if(fresh.jobType==='PURGE_CARD'){const card=await txOne(tx,env,'FoodCard','id',fresh.entityId);if(card&&(card.deletedAt==null||dateMillis(card.purgeAt)>Date.now()||Number(card.lifecycleGeneration||0)!==Number(fresh.generation)))throw fail('卡片清理资格已变化。','STALE_GENERATION');}
     if(fresh.jobType==='DELETE_ACCOUNT'){const owner=await txOne(tx,env,'UserProfile','uid',fresh.entityId);if(owner&&isAccountActive(owner))throw fail('账号仍活跃。','INVALID_STATE');if(owner&&owner.deletionJobId&&owner.deletionJobId!==fresh.jobId)throw fail('注销版本已变化。','CONFLICT');}
     if(fresh.jobType==='PURGE_GROUP'&&await txOne(tx,env,'GroupConversation','id',fresh.entityId))throw fail('群仍存在，拒绝清理。','INVALID_STATE');
     return fresh;}
+  // 生成更新后的任务行。
   function changed(job,cp,status='RUNNING'){return model('MaintenanceJob',{...job,status,checkpointJson:JSON.stringify(cp),updatedAt:new Date(ctx.logicalWriteTime(dateMillis(job.updatedAt))),leaseUntilAt:new Date(Date.now()+LEASE_MS)});}
+  // 在持有租约的前提下更新任务。
   async function transition(job,env,mutate){
     let next=null;const ok=await collection(env,'MaintenanceJob').runTransaction({apply:async tx=>{
       const fresh=await locked(tx,job,env),cp=progress(fresh);
@@ -82,35 +100,39 @@ function createLifecycleServices(ctx){
       next=changed(fresh,cp,cp.complete?'DONE':'RUNNING');save(tx,[next]);return true;
     }});if(!ok||!next)throw fail('任务进度未保存。','CONFLICT');return next;
   }
-  // Drain retired comment reactions before deleting their parent IDs. Each
-  // transaction remains bounded and resumes on the same comments until drained.
+  // 删除父评论之前先清空已退役的评论反应；每个事务都有上限，未清完会在同一批评论上继续。
+  // 删除旧评论及其反应。
   async function deleteLegacyComments(tx,rows,env){
     if(!rows.length)return {deleted:0,drained:true};
     const reactions=await tx.executeQuery(collection(env,'CommentReaction').query().in('commentId',rows.map(row=>row.id)).limit(BATCH));
     if(reactions.length){tx.executeDelete(reactions);return {deleted:reactions.length,drained:false};}
     tx.executeDelete(rows);return {deleted:rows.length,drained:true};
   }
+  // 按条件分批删除某张表的行，完成后进入下一阶段。
   async function deleteRows(job,env,name,field,value,nextPhase,extra=null){return transition(job,env,async(tx,cp)=>{let query=collection(env,name).query().equalTo(field,value);if(extra)query=query.equalTo(extra[0],extra[1]);const rows=await tx.executeQuery(query.limit(BATCH));
     const result=name==='CardComment'?await deleteLegacyComments(tx,rows,env):{deleted:rows.length,drained:true};
     if(name!=='CardComment'&&rows.length)tx.executeDelete(rows);cp.processed=Number(cp.processed||0)+result.deleted;if(result.drained&&rows.length<BATCH)cp.phase=nextPhase;});}
+  // 分批删除图片（先删存储文件，再删记录）。
   async function mediaBatch(job,env,field,value,nextPhase,deadline){const fresh=await one(collection(env,'MaintenanceJob').query().equalTo('jobId',job.jobId));if(!fresh||fresh.leaseOwner!==job.leaseOwner)throw fail('租约已变化。','LEASE_LOST');
     const rows=await collection(env,'CardMedia').query().equalTo(field,value).limit(BATCH).get();
     for(const row of rows){if(Date.now()+20000>=deadline)return job;if(row.ownerUid!==job.ownerUid)throw fail('媒体归属无效。','INVALID_STATE');await transition(job,env,async()=>{});
-      // Storage is not transactional: delete bytes first, retaining the DB row until a fenced commit.
+      // 存储不支持事务：先删除文件字节，保留数据库记录，直到受租约保护的提交完成。
       await ctx.removeMediaFiles(row,env);job=await transition(job,env,async(tx,cp)=>{const current=await txOne(tx,env,'CardMedia','id',row.id);if(current){if(current.ownerUid!==row.ownerUid||current.cardId!==row.cardId)throw fail('媒体归属已变化。','CONFLICT');tx.executeDelete([current]);cp.processed=Number(cp.processed||0)+1;}});}
     if(rows.length<BATCH)job=await transition(job,env,async(_tx,cp)=>{cp.phase=nextPhase;});return job;}
+  // 彻底删除一张卡片：图片 → 互动 → 修订 → 卡片本身。
   async function purgeCard(job,env,deadline){const cp=progress(job),cardId=job.entityId;
     if(cp.phase==='MEDIA')return mediaBatch(job,env,'cardId',cardId,'REVISIONS',deadline);
     if(cp.phase==='REVISIONS'){const rows=await collection(env,'FoodCardRevision').query().equalTo('cardId',cardId).limit(1).get();if(!rows.length)return transition(job,env,async(_tx,c)=>{c.phase='REACTIONS';});
       const media=await collection(env,'CardMedia').query().equalTo('cardId','revision:'+rows[0].revisionId).limit(BATCH).get();for(const row of media){if(Date.now()+20000>=deadline)return job;await transition(job,env,async()=>{});if(row.ownerUid!==job.ownerUid)throw fail('媒体归属无效。','INVALID_STATE');await ctx.removeMediaFiles(row,env);job=await transition(job,env,async(tx,c)=>{const current=await txOne(tx,env,'CardMedia','id',row.id);if(current&&current.ownerUid!==job.ownerUid)throw fail('媒体归属已变化。','CONFLICT');if(current&&current.cardId==='revision:'+rows[0].revisionId){tx.executeDelete([current]);c.processed=Number(c.processed||0)+1;}});}
       if(!media.length)return transition(job,env,async(tx,c)=>{const revision=await txOne(tx,env,'FoodCardRevision','revisionId',rows[0].revisionId);if(revision&&revision.cardId===cardId)tx.executeDelete([revision]);c.processed=Number(c.processed||0)+1;});return job;}
     const steps={REACTIONS:['CardReaction','cardId',cardId,'LIKES'],LIKES:['CardAction','cardId',cardId,'COMMENTS',['kind','LIKE']],COMMENTS:['CardComment','cardId',cardId,'REPORTS']};
-    // Retain card report receipts after card purge. Account deletion still clears the reporter's records.
+    // 卡片彻底删除后保留举报回执；注销账号时仍会清除举报人自己的记录。
     if(cp.phase==='REPORTS')return transition(job,env,async(_tx,c)=>{c.phase='FINISH';});
     if(steps[cp.phase])return deleteRows(job,env,...steps[cp.phase]);
     if(cp.phase==='FINISH')return transition(job,env,async(tx,c)=>{const card=await txOne(tx,env,'FoodCard','id',cardId);if(card)tx.executeDelete([card]);c.complete=true;c.phase='DONE';});throw fail('卡片任务阶段无效。','INVALID_STATE');}
-  // Append cleanup steps so persisted numeric checkpoints keep their original meaning.
+  // 清理步骤只在末尾追加，保证已保存的数字进度含义不变。
   const accountSteps=[['FoodCardRevision','authorUid'],['PublishRequestRecord','uid'],['CardAction','actorUid'],['CardReaction','uid'],['FoodListItem','ownerUid'],['FoodList','ownerUid'],['PersonalFoodState','ownerUid'],['TastePreference','uid'],['CardComment','authorUid'],['Report','reporterUid'],['FriendReport','reporterUid'],['FriendReport','targetUid'],['Friendship','memberAUid'],['Friendship','memberBUid'],['ChatMessage','senderUid'],['ChatMessage','recipientUid'],['Conversation','memberAUid'],['Conversation','memberBUid'],['NotificationEvent','recipientUid'],['NotificationEvent','actorUid'],['PushRegistration','ownerUid'],['WidgetRegistration','ownerUid'],['AuthMigrationTicket','canonicalUid'],['MealPollVote','voterUid'],['MealPollOption','addedByUid'],['GroupMessage','senderUid'],['CommentReaction','actorUid'],['MealChoiceHistory','uid'],['PasswordCredential','uid'],['NicknameClaim','ownerUid']];
+  // 注销账号清理：卡片、图片、好友关系、消息、群、个人数据、身份绑定，最后删除 AGC 认证用户。
   async function account(job,env,deadline){const cp=progress(job),uid=job.entityId;
     if(cp.phase==='CARDS'){const rows=await collection(env,'FoodCard').query().equalTo('ownerUid',uid).limit(1).get();if(!rows.length)return transition(job,env,async(_tx,c)=>{c.phase='MEDIA';});
       const card=rows[0];return transition(job,env,async(tx,c,fresh)=>{const current=await txOne(tx,env,'FoodCard','id',card.id),owner=await txOne(tx,env,'UserProfile','uid',uid);if(!current)return;
@@ -134,10 +156,12 @@ function createLifecycleServices(ctx){
       for(const binding of bindings){if(Date.now()+35000>=deadline)return job;if(binding.provider==='AGC'&&cp.authConfirmed!==true){if(binding.providerUid!==job.authProviderUid||!job.authCredentialCiphertext)throw fail('需要在 AGC 核实并完成认证身份清理。','AUTH_ACTION_REQUIRED');await ctx.deleteAuthentication(job,binding,env);}
         job=await transition(job,env,async(tx,c,fresh)=>{const current=await txOne(tx,env,'IdentityBinding','id',binding.id);if(current&&current.canonicalUid===uid){tx.executeDelete([current]);c.processed=Number(c.processed||0)+1;}if(binding.provider==='AGC')fresh.authCredentialCiphertext='';});}return job;}
     if(cp.phase==='PROFILE')return transition(job,env,async(tx,c,fresh)=>{const owner=await txOne(tx,env,'UserProfile','uid',uid);if(owner){if(isAccountActive(owner))throw fail('账号重新活跃，拒绝清理。','INVALID_STATE');save(tx,[model('UserProfile',{uid,accountStatus:'DELETED',deletionJobId:fresh.jobId,nickname:'已注销用户',nicknameValue:'已注销用户',avatarUrl:'',avatarMediaId:'',avatarStorageUid:'',coverMediaId:'',coverStorageUid:'',friendCode:'',publishCount:0,createdAt:0,updatedAt:Date.now(),contentSequence:Number(owner.contentSequence||0)+1})]);}c.phase='DONE';c.complete=true;fresh.authCredentialCiphertext='';});throw fail('账号任务阶段无效。','INVALID_STATE');}
+  // 清理群聊。
   async function group(job,env){const cp=progress(job),groupId=job.entityId;
     if(cp.phase==='MESSAGES')return deleteRows(job,env,'GroupMessage','groupId',groupId,'POLLS');
     if(cp.phase==='POLLS'){const polls=await collection(env,'MealPoll').query().equalTo('groupId',groupId).limit(1).get();if(!polls.length)return transition(job,env,async(_tx,c)=>{c.phase='DONE';c.complete=true;});
       const poll=polls[0],votes=await collection(env,'MealPollVote').query().equalTo('pollId',poll.pollId).limit(BATCH).get();if(votes.length)return transition(job,env,async(tx,c)=>{tx.executeDelete(votes);c.processed=Number(c.processed||0)+votes.length;});const options=await collection(env,'MealPollOption').query().equalTo('pollId',poll.pollId).limit(BATCH).get();if(options.length)return transition(job,env,async(tx,c)=>{tx.executeDelete(options);c.processed=Number(c.processed||0)+options.length;});return transition(job,env,async(tx,c)=>{const current=await txOne(tx,env,'MealPoll','pollId',poll.pollId);if(current&&current.groupId===groupId){tx.executeDelete([current]);c.processed=Number(c.processed||0)+1;}});}throw fail('群任务阶段无效。','INVALID_STATE');}
+  // 执行一个任务直到完成或到达截止时间。
   async function process(jobId,env,deadline=Date.now()+45000){enabled(env);if(!flag(env,'SHIKE_MAINTENANCE_ENABLED'))throw fail('清理执行开关尚未开启。','FEATURE_NOT_READY');const initial=await one(collection(env,'MaintenanceJob').query().equalTo('jobId',id(jobId)));
     if(initial && LEGACY_TYPES.includes(initial.jobType)){try{await ctx.processLegacyJob(initial,env);return {processed:true};}catch(error){await collection(env,'MaintenanceJob').runTransaction({apply:async tx=>{const fresh=await txOne(tx,env,'MaintenanceJob','jobId',initial.jobId);if(!fresh||!['PENDING','RETRY_WAIT'].includes(fresh.status)||dateMillis(fresh.updatedAt)!==dateMillis(initial.updatedAt))return true;const attempts=Number(fresh.attemptCount||0)+1;save(tx,[model('MaintenanceJob',{...fresh,status:attempts>=8?'FAILED':'RETRY_WAIT',attemptCount:attempts,lastErrorCode:maintenanceCode(error),runAfterAt:new Date(Date.now()+Math.min(3600000,30000*2**Math.min(6,attempts))),updatedAt:new Date(ctx.logicalWriteTime(dateMillis(fresh.updatedAt)))})]);return true;}});throw error;}}
     let job;
@@ -148,6 +172,7 @@ function createLifecycleServices(ctx){
       if(job.status!=='DONE')job=await transition(job,env,async(_tx,cp)=>{delete cp.waitForChild;if(Number(cp.progressVersion||0)===initialProgress)cp.noProgressRuns=Number(cp.noProgressRuns||0)+1;});await collection(env,'MaintenanceJob').runTransaction({apply:async tx=>{const fresh=await txOne(tx,env,'MaintenanceJob','jobId',job.jobId);if(fresh&&fresh.leaseOwner===job.leaseOwner)save(tx,[model('MaintenanceJob',{...fresh,status:fresh.status==='DONE'?'DONE':'PENDING',attemptCount:0,runAfterAt:new Date(Date.now()+1000),leaseOwner:'',leaseUntilAt:null,updatedAt:new Date(ctx.logicalWriteTime(dateMillis(fresh.updatedAt)))})]);return true;}});return {processed:true};
     }catch(error){await collection(env,'MaintenanceJob').runTransaction({apply:async tx=>{const fresh=await txOne(tx,env,'MaintenanceJob','jobId',job.jobId);if(!fresh||fresh.leaseOwner!==job.leaseOwner||['DONE','CANCELLED'].includes(fresh.status))return true;const code=maintenanceCode(error),cp=progress(fresh);if(code==='AUTH_ACTION_REQUIRED'&&!cp.authActionRequiredAt)cp.authActionRequiredAt=Date.now();cp.noProgressRuns=Number(cp.noProgressRuns||0)+1;const failed=Number(fresh.attemptCount||0)>=8||code==='AUTH_ACTION_REQUIRED'||code==='INVALID_STATE'||code==='CHILD_CLEANUP_REQUIRED'||code==='CONFIGURATION_REQUIRED';
       save(tx,[model('MaintenanceJob',{...fresh,status:failed?'FAILED':'RETRY_WAIT',lastErrorCode:code,checkpointJson:JSON.stringify(cp),leaseOwner:'',leaseUntilAt:null,runAfterAt:new Date(Date.now()+Math.min(3600000,30000*2**Math.min(6,Number(fresh.attemptCount||0)))),updatedAt:new Date(ctx.logicalWriteTime(dateMillis(fresh.updatedAt)))})]);return true;}});throw error;}}
+  // 定时入口：取一批到期任务依次执行，返回处理数量。
   async function tick(env){
     enabled(env);if(!flag(env,'SHIKE_MAINTENANCE_ENABLED'))return {enabled:false,processed:0};
     let processed=0,failed=0,observed=0,oldestWaitMs=0,stalled=0,overdue=0,failedObserved=0,oldestFailedAgeMs=0,authAwaitingObserved=0;const started=Date.now(),deadline=started+45000;
@@ -173,7 +198,7 @@ function createLifecycleServices(ctx){
       }
       return {enabled:true,processed};
     }finally{
-      // Bounded due-task sample, not a global queue count or cross-instance rate limit.
+      // 这是有上限的到期任务抽样，不是全局队列计数，也不是跨实例的限流。
       console.info('maintenance.metrics '+JSON.stringify({metricsVersion:'o6-20261008-v1',processed,failed,observed,
         oldestDueWaitMs:oldestWaitMs,stalledObserved:stalled,overdueObserved:overdue,failedObserved,oldestFailedAgeMs,authAwaitingObserved,elapsedMs:Date.now()-started,sampleScope:'due-and-failed-samples-no-global-count'}));
     }

@@ -1,8 +1,12 @@
+/**
+ * 【文件职责】卡片详情中的互动按钮（赞 / 踩 / 收藏）：图标、计数、选中与忙碌状态；点击事件由页面交给 CardInteractionController。
+ */
 import { PagePaletteName, pageColor } from '../common/PagePaletteUi';
 
+// 按钮类型。
 export type CardInteractionIcon = 'like' | 'dislike' | 'favorite';
 
-/** Reactive inputs keep async interaction updates out of by-value Builder parameters. */
+// 使用响应式属性（@Prop）接收状态，避免异步更新时 @Builder 按值传参拿不到最新值。
 @Component
 export struct CardInteractionButton {
   @Prop icon: CardInteractionIcon = 'like';
@@ -13,13 +17,15 @@ export struct CardInteractionButton {
   @Prop reducedMotion: boolean = true;
   onActivate: () => void = (): void => {};
 
+  // 按钮颜色：选中时使用强调色。
   private tint(): Resource {
     return this.selected ? pageColor(this.palette, 'action') : pageColor(this.palette, 'ink');
   }
 
+  // 绘制线条图标（随主题着色）。
   @Builder
   private glyph() {
-    // Pack 2: theme-tinted line symbols replace the old emoji (which ignored light/dark and read poorly).
+    // 随主题着色的线条图标，替换了原来的 emoji（emoji 不随亮/暗色变化且辨识度差）。
     if (this.icon === 'like') {
       SymbolGlyph(this.selected ? $r('sys.symbol.hand_thumbsup_fill') : $r('sys.symbol.hand_thumbsup'))
         .fontSize(21).fontColor([this.tint()]).accessibilityLevel('no')
@@ -32,6 +38,7 @@ export struct CardInteractionButton {
     }
   }
 
+  // 按钮布局：图标 + 计数，忙碌时禁用。
   build() {
     Button() {
       Column({ space: 3 }) {

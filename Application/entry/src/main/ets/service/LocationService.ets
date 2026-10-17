@@ -7,9 +7,11 @@ const LOCATION_PERMISSIONS: Array<Permissions> = [
   'ohos.permission.LOCATION'
 ];
 
-// Location is read only for the map "locate me" action and the permission summary. No coordinate is cached
-// or persisted on the device.
+/**
+ * 【文件职责】定位能力。只在地图“定位到我”和权限说明页使用；设备上不缓存、不持久化任何坐标。
+ */
 export class LocationService {
+  // 是否同时拥有模糊定位与精确定位权限。
   static async hasFullLocationPermission(context: common.UIAbilityContext): Promise<boolean> {
     const manager = abilityAccessCtrl.createAtManager();
     const tokenId = context.applicationInfo.accessTokenId;
@@ -19,6 +21,7 @@ export class LocationService {
       precise === abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED;
   }
 
+  // 缺少权限时向用户申请（用户拒绝则抛错）。
   private static async ensureFullLocationPermission(context: common.UIAbilityContext): Promise<void> {
     if (await LocationService.hasFullLocationPermission(context)) return;
     const manager = abilityAccessCtrl.createAtManager();
@@ -29,7 +32,7 @@ export class LocationService {
     }
   }
 
-  /** Called only after the user confirms the map location action. No cloud write or persistent location cache. */
+  // 用户确认“定位到我”后才调用：申请权限 → 单次定位 → 转换为地图坐标。不写云端，也不缓存位置。
   static async getMapLocation(context: common.UIAbilityContext): Promise<mapCommon.LatLng> {
     await LocationService.ensureFullLocationPermission(context);
     if (!geoLocationManager.isLocationEnabled()) throw new Error('定位服务未开启，仍可手动浏览地图。');
@@ -46,6 +49,7 @@ export class LocationService {
     return adapted[0].location;
   }
 
+  // 生成权限说明页上的定位权限状态文字。
   static async permissionSummary(context: common.UIAbilityContext): Promise<string> {
     const authorized: boolean = await LocationService.hasFullLocationPermission(context);
     return authorized

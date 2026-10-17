@@ -1,3 +1,15 @@
+/**
+ * 【文件职责】全 App 唯一的图片任务中心：页面需要显示一张图片时向这里“订阅”，拿到本机 file:// 地址。
+ * 【查找顺序】
+ *   1. ImageDescriptors：本会话是否允许显示这张图、它的 sha256 与大小是多少；
+ *   2. ImageDiskCache：磁盘缓存命中且摘要校验通过则直接返回；
+ *   3. PublicCoverDirectReader：公开的 480px 封面直接从 Cloud Storage 读；
+ *   4. image-read-batch：调用 shike-image 批量读取（封面最多 4 张、总计不超过 512KB 一批），
+ *      读到的 Base64 写入磁盘缓存后返回地址；IMAGE_TRANSPORT=LEGACY 时改为逐张读取旧接口。
+ * 【调度】同一张图（同账号 + mediaId + 模式 + 尺寸 + 修订号）只会有一个任务，多个页面共享；
+ * 按优先级 high > normal > prefetch > low 出队；页面离开（守卫返回 false）后，无人需要的任务会被取消。
+ * 【新人注意】账号切换时 setCacheOwner 会撤销全部图片授权并切换磁盘缓存索引，旧账号的私有图片不会被新账号看到。
+ */
 import { common } from '@kit.AbilityKit';
 import { CardPhoto, FoodCard } from '../model/CloudContracts';
 import { ImageBatchResponse, ImageCacheEntry, ImageDescriptor, ImageMode, ImageReadItem, ImageReadRequest, ImageReadResult, ImageVariant, LegacyImageRequest, LegacyImageResponse, MediaPriority, MediaRequestGuard } from '../model/ImageModels';
@@ -11,8 +23,13 @@ import { ImageDiskCache } from './ImageDiskCache';
 import { PublicCoverDirectReader } from './PublicCoverDirectReader';
 export { MediaPriority, MediaRequestGuard } from '../model/ImageModels';
 
+// 图片任务可能的失败类型。
 type ImageTaskError = Error | ReadCancelledError | CloudBusinessError;
 
+/**
+ * 一张图片的读取任务。key 唯一标识“谁的哪张图的哪个版本”；
+ * session / epoch 记录创建时的会话代次与图片授权版本，变化后任务作废；guards 是各订阅页面的“是否还需要”回调。
+ */
 class ImageTask {
   key: string;
   mediaId: string;
@@ -38,17 +55,21 @@ class ImageTask {
     this.key = key; this.mediaId = mediaId; this.mode = mode; this.variant = variant; this.revisionId = revisionId; this.priority = priority; this.force = force;
     this.promise = new Promise<string>((resolve: (url: string) => void, reject: (error: ImageTaskError) => void): void => { this.resolve = resolve; this.reject = reject; });
   }
+  // 是否仍需要这个任务：会话和授权版本未变化，且至少有一个订阅者仍然需要。
   async needed(): Promise<boolean> {
     if (this.session !== AuthSessionStore.generation() || this.epoch !== ImageDescriptors.epoch() || AppStorage.get<boolean>('stage47AppActive') === false) return false;
     for (const guard of this.guards) try { if (await guard()) return true; } catch (_error) { }
     return false;
   }
+  // 以失败结束任务（只结束一次）。
   fail(error: ImageTaskError): void { if (!this.settled) { this.settled = true; this.reject(error); } }
+  // 以成功结束任务，返回本机图片地址（只结束一次）。
   finish(url: string): void { if (!this.settled) { this.settled = true; this.resolve(url); } }
 }
 
-/** One app-wide owner of image tasks. Pages subscribe; SDK calls retain their real scheduler slots. */
+// 全 App 唯一的图片任务管理者：页面只是订阅者；真正的云调用仍要占用 ReadScheduler 的槽位。
 export class ImageRepository {
+  // 任务表（去重）、等待队列、是否正在出队、读图方式、是否已确认服务端不支持新协议、当前缓存所属账号。
   private static tasks: Map<string, ImageTask> = new Map<string, ImageTask>();
   private static pending: Array<ImageTask> = [];
   private static running: boolean = false;
@@ -58,6 +79,7 @@ export class ImageRepository {
   private static owner: string = '';
   private static readCycle: number = 0;
   private static ownerSession: number = -1;
+  // 切换图片缓存所属账号：撤销全部图片授权、切换磁盘缓存索引、取消所有排队中的旧账号任务。
   static setCacheOwner(owner: string): void {
     if (ImageRepository.owner === owner && ImageRepository.ownerSession === AuthSessionStore.generation()) return;
     ImageRepository.owner = owner; ImageRepository.ownerSession = AuthSessionStore.generation();
@@ -68,7 +90,9 @@ export class ImageRepository {
     }
     ImageRepository.pending = [];
   }
+  // 页面订阅变化时调用：异步清理没有订阅者的任务。
   static subscriptionsChanged(): void { void ImageRepository.pruneUnused(); }
+  // 取消已经没有人需要的排队任务。
   private static async pruneUnused(): Promise<void> {
     for (const task of ImageRepository.pending.slice()) if (!await task.needed()) {
       if (!ImageRepository.pending.includes(task)) continue;
@@ -77,27 +101,34 @@ export class ImageRepository {
       task.fail(new ReadCancelledError());
     }
   }
+  // 用户点“重试”时调用：清除“服务端不支持”的标记，下次重新尝试新协议。
   static retryUnavailableService(): void { ImageRepository.unsupported = false; }
+  // 服务端是否尚未启用图片新协议（界面据此显示可重试占位）。
   static isMediaServiceUnavailable(): boolean { return ImageRepository.unsupported; }
+  // 清空本机图片缓存，并撤销所有图片授权（设置页“清除缓存”使用）。
   static async clearCachedMedia(context: common.Context): Promise<void> { ImageDescriptors.revoke(); await ImageDiskCache.clear(context); }
+  // 图片解码失败时调用：删除这张图的缓存文件，下次重新从云端读取。
   static async reportDecodeFailure(context: common.Context, mediaId: string, variant: ImageVariant = 'ORIGINAL', mode: ImageMode = 'PUBLIC', revisionId: string = ''): Promise<void> { ImageDescriptors.remove(mediaId); await ImageDiskCache.evict(context, mediaId, variant, mode, revisionId); }
+  // 按本地地址报告解码失败（只知道 file:// 地址时使用）。
   static async reportDecodeFailureByUrl(context: common.Context, url: string): Promise<void> {
     const session: number = AuthSessionStore.generation();
     const mediaId: string = await ImageDiskCache.evictUrl(context, url);
     if (session === AuthSessionStore.generation() && mediaId.length > 0) ImageDescriptors.remove(mediaId);
   }
+  // 这张卡片的封面是否已有可复用的授权与缓存（用于决定能否先显示缓存封面）。
   static canReuseCover(card: FoodCard): boolean {
     const id: string = card.photos?.[0]?.id || card.photoPath.split('/').pop()?.replace('.jpg', '') || '';
     const descriptor: ImageDescriptor | undefined = ImageDescriptors.read(id, 'PUBLIC', 'COVER_480') || ImageDescriptors.read(id, 'PUBLIC', 'ORIGINAL');
     return descriptor !== undefined && card.photoUrl.length > 0 &&
       (!card.contentRevision || descriptor.cardRevision === card.contentRevision);
   }
-  /** Local-only lookup of the current content version. */
+  // 只在本机查询当前内容版本对应的缓存。
   static async cachedPhotoUrl(context: common.Context, photo: CardPhoto, cover: boolean, cardRevision: string = ''): Promise<string> {
     const id: string = photo.id || photo.path.split('/').pop()?.replace('.jpg', '') || '';
     const url: string = await ImageRepository.cachedUrl(context, id, 'PUBLIC', cover ? 'COVER_480' : 'ORIGINAL', '', cardRevision);
     return cover && url.length === 0 ? ImageRepository.cachedUrl(context, id, 'PUBLIC', 'ORIGINAL', '', cardRevision) : url;
   }
+  // 只查本机：授权表中有描述符且磁盘缓存校验通过时返回地址，否则返回空串。
   private static async cachedUrl(context: common.Context, mediaId: string, mode: ImageMode, variant: ImageVariant,
     revisionId: string, cardRevision: string = ''): Promise<string> {
     const session: number = AuthSessionStore.generation(); const epoch: number = ImageDescriptors.epoch();
@@ -110,6 +141,11 @@ export class ImageRepository {
       cached.descriptor.byteSize !== current.byteSize || cached.descriptor.variant !== current.variant) return '';
     return ImageDiskCache.url(context, cached);
   }
+  /**
+   * 获取一张卡片图片 / 头像的本机地址（最常用的入口）。
+   * bucket + path 是卡片数据里的存储位置；cover=true 时优先取 480px 封面；revalidate=true 时即使有缓存也重新确认授权。
+   * mayContinue 返回 false 时取消订阅（页面已离开）。
+   */
   static async getDownloadUrl(context: common.Context, bucket: string, path: string, priority: MediaPriority = 'normal', mayContinue?: MediaRequestGuard,
     photo?: CardPhoto, cover: boolean = false, revalidate: boolean = false, readCycle: number = 0): Promise<string> {
     if (bucket.trim().length === 0) return '';
@@ -118,12 +154,15 @@ export class ImageRepository {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(mediaId)) return '';
     return ImageRepository.subscribe(context, mediaId, 'PUBLIC', cover ? 'COVER_480' : 'ORIGINAL', '', priority, mayContinue, revalidate, bucket, path, readCycle);
   }
+  // 获取“修订版本”中的图片（作者修改未生效时预览用）。
   static getRevisionDownloadUrl(context: common.Context, revisionId: string, mediaId: string, mayContinue?: MediaRequestGuard): Promise<string> {
     return ImageRepository.subscribe(context, mediaId, 'REVISION', 'ORIGINAL', revisionId, 'high', mayContinue, true);
   }
+  // 获取举报 / 审核页面中的图片：admin=true 走审核模式（仅审核员可读）。
   static getCardReportPhotoUrl(context: common.Context, mediaId: string, reportId: string, admin: boolean, cover: boolean, mayContinue: MediaRequestGuard): Promise<string> {
     return ImageRepository.subscribe(context, mediaId, admin ? 'REPORT' : 'PUBLIC', cover ? 'COVER_480' : 'ORIGINAL', admin ? reportId : '', 'high', mayContinue, true);
   }
+  // 订阅一张图片：已有同 key 任务则加入订阅，否则新建任务入队；被取消的预取在重新可见时允许重新加入一次。
   private static async subscribe(context: common.Context, mediaId: string, mode: ImageMode, variant: ImageVariant, revisionId: string,
     priority: MediaPriority, mayContinue: MediaRequestGuard | undefined, force: boolean, bucket: string = '', path: string = '', readCycle: number = 0): Promise<string> {
     const session: number = AuthSessionStore.generation(); const epoch: number = ImageDescriptors.epoch();
@@ -131,8 +170,7 @@ export class ImageRepository {
     if (ImageRepository.isForeground(priority)) ReadScheduler.beginImageWork();
     try { return await ImageRepository.subscribeImage(context, mediaId, mode, variant, revisionId, priority, mayContinue, force, bucket, path, readCycle); }
     catch (error) {
-      // A queued prefetch can be cancelled just as it becomes visible. Rejoin
-      // once only if this is still the same live foreground subscription.
+      // 排队中的预取任务可能在刚变为可见时被取消；如果仍是同一个活跃的前台订阅，允许重新加入一次。
       if (error instanceof ReadCancelledError && ImageRepository.isForeground(priority) &&
         (mayContinue === undefined || await mayContinue()) && session === AuthSessionStore.generation() &&
         epoch === ImageDescriptors.epoch() && lifecycle === ReadScheduler.lifecycleRevision() && AppStorage.get<boolean>('stage47AppActive') !== false)
@@ -141,6 +179,7 @@ export class ImageRepository {
     }
     finally { if (ImageRepository.isForeground(priority)) ReadScheduler.endImageWork(); }
   }
+  // 订阅的具体实现：先查授权与磁盘缓存，未命中再创建任务并触发出队。
   private static async subscribeImage(context: common.Context, mediaId: string, mode: ImageMode, variant: ImageVariant, revisionId: string,
     priority: MediaPriority, mayContinue: MediaRequestGuard | undefined, force: boolean, bucket: string, path: string, readCycle: number): Promise<string> {
     const guard: MediaRequestGuard = mayContinue === undefined ? async (): Promise<boolean> => true : mayContinue;
@@ -174,8 +213,14 @@ export class ImageRepository {
     if (!await guard() || task.session !== AuthSessionStore.generation() || task.epoch !== ImageDescriptors.epoch()) throw new ReadCancelledError();
     return result;
   }
+  // 是否为前台优先级（high / normal）。
   private static isForeground(priority: MediaPriority): boolean { return priority === 'high' || priority === 'normal'; }
+  // 优先级排序值（越小越优先）。
   private static rank(priority: MediaPriority): number { return priority === 'high' ? 0 : priority === 'normal' ? 1 : priority === 'prefetch' ? 2 : 3; }
+  /**
+   * 出队循环（同一时间只运行一个）：按优先级取出任务，能合并时把最多 4 张、总大小不超过 512KB 的封面合成一批，
+   * 交给 load()；服务端返回 NOT_SUPPORTED 时把剩余任务全部以“图片服务尚未启用”结束。
+   */
   private static async pump(context: common.Context): Promise<void> {
     if (ImageRepository.running) return;
     ImageRepository.running = true;
@@ -210,6 +255,7 @@ export class ImageRepository {
       }
     } finally { ImageRepository.running = false; }
   }
+  // 处理一批任务：过滤已不需要的任务，先尝试公开封面直读，剩下的交给 fetch()（批量）或 fetchLegacy()（旧接口）。
   private static async load(context: common.Context, batch: Array<ImageTask>): Promise<void> {
     const needed: Array<ImageTask> = [];
     for (const task of batch) {
@@ -227,15 +273,15 @@ export class ImageRepository {
       } else needed.push(task);
     }
     if (needed.length === 0) return;
-    // Ask for all small covers in one bounded response. The server retains its
-    // byte budget and defers missing-cover original fallbacks to single reads.
+    // 所有小封面在一次有大小上限的响应中返回；服务端控制字节预算，缺失封面时改为单张读取原图。
     await ImageRepository.fetch(context, needed);
     const rest: Array<ImageTask> = needed.filter((task: ImageTask): boolean => !task.settled);
-    // A missing rendition is split once into a single-original request.
+    // 缺少某个尺寸时，拆分一次为“单张读原图”的请求。
     for (const task of rest) if (!task.settled) await ImageRepository.fetch(context, [task]);
     for (const task of batch) if (!task.settled) task.fail(new CloudBusinessError('图片暂未就绪，请单张重试。', 'MEDIA_DEFERRED'));
   }
-  // Pack 3.2: published covers with a known descriptor are fetched from Cloud Storage directly.
+  // 已发布且描述符已知的封面，直接从 Cloud Storage 读取。
+  // 公开封面直读：描述符已知的已发布封面直接从 Cloud Storage 读取，写入磁盘缓存时按描述符校验字节。
   private static async readDirectCovers(context: common.Context, tasks: Array<ImageTask>): Promise<void> {
     if (!PublicCoverDirectReader.available()) return;
     await Promise.all(tasks.map(async (task: ImageTask): Promise<void> => {
@@ -258,6 +304,7 @@ export class ImageRepository {
       }
     }));
   }
+  // 批量读图：调用 image-read-batch（shike-image），把返回的 Base64 写入磁盘缓存并完成任务。
   private static async fetch(context: common.Context, tasks: Array<ImageTask>): Promise<void> {
     const candidates: Array<ImageTask> = [];
     for (const task of tasks) if (await task.needed()) candidates.push(task); else task.fail(new ReadCancelledError());
@@ -271,7 +318,7 @@ export class ImageRepository {
         wantBytes: true };
       return item;
     });
-    // A new display confirmation must not join an RPC admitted before it was hidden/revoked.
+    // 新的显示确认不能加入在“隐藏/撤销授权”之前就已发出的云调用。
     let cycle: number = 0;
     for (const task of active) cycle = Math.max(cycle, task.readCycle);
     const request: ImageReadRequest = { protocolVersion: 'image-read-v1', items, readScope: active[0].epoch + ':' + cycle };
@@ -315,6 +362,7 @@ export class ImageRepository {
       }
     }
   }
+  // 旧接口逐张读图（get-public-media / get-review-media / get-revision-media），仅在 LEGACY 模式下使用。
   private static async fetchLegacy(context: common.Context, tasks: Array<ImageTask>): Promise<void> {
     for (const task of tasks) {
       if (task.mode === 'REPORT') { task.fail(new Error('审核图片需要新版 shike-image 云函数，请更新后重试。')); continue; }
@@ -339,6 +387,7 @@ export class ImageRepository {
       } catch (error) { task.fail(error instanceof Error ? error : new Error('兼容图片读取失败。')); }
     }
   }
+  // 为一组卡片批量加载封面（推荐流使用），每完成一张调用一次 onSettled，界面可逐张刷新。
   static async hydrateCovers(context: common.Context, cards: Array<FoodCard>, guard: MediaRequestGuard, onSettled: (card: FoodCard) => void,
     revalidate: boolean = false, priority: MediaPriority = 'normal', isCardNeeded?: (card: FoodCard) => boolean): Promise<void> {
     const cycle: number = revalidate ? ++ImageRepository.readCycle : 0;

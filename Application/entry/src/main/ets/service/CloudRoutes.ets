@@ -1,8 +1,16 @@
 import { INTERACTION_READ_TIMEOUT_MS, INTERACTION_WRITE_TIMEOUT_MS, NICKNAME_AUTH_TIMEOUT_MS } from './CloudTimeouts';
 
-// Pack 3.4 / 4.4 (2026-10-15): one table maps every shike-service operation to its cloud-object method and to the
-// domain function that serves it (shike-content / shike-social / shike-account / shike-governance). Generated from
-// CloudProgram/cloudfunctions/shike-service/shikeService.ts; keep both in step when adding an operation.
+/**
+ * 【文件职责】业务操作路由表：把每个操作名（如 'publish-card'）映射到云对象方法名（publishCard）、
+ * 负责它的领域云函数（shike-content / shike-social / shike-account / shike-governance）以及单独的超时时间。
+ * CloudGateway 收到普通业务操作时查这张表决定调用哪个云函数。
+ * 【新人注意】新增或删除操作时，要同时修改 4 处并保持一致：本表、云端 shike-service/runtime.js 的 operations 表、
+ * shikeService.ts、对应领域函数的 TS 文件；CloudProgram 下的 npm run check:release-source 会核对这几处。
+ * 媒体操作（图片准备/上传/直传确认）由 CloudGateway 直接交给 shike-media，不在本表中。
+ */
+/**
+ * 一条路由：operation 操作名；method 云对象方法名；domainFunction 负责的云函数；timeoutMs 超时（0 = 默认 70 秒）。
+ */
 export interface CloudRoute {
   operation: string;
   method: string;
@@ -10,12 +18,15 @@ export interface CloudRoute {
   timeoutMs: number;
 }
 
-// When false (or while a domain function is unreachable) every operation goes to the original shike-service.
+// 总开关：为 false 时（或某个领域函数暂时不可用时）所有操作都改走原来的 shike-service。
 export const CLOUD_SERVICE_SPLIT_ENABLED: boolean = true;
+// 兼容回落用的云函数：它包含全部操作的完整实现。
 export const LEGACY_SERVICE_FUNCTION: string = 'shike-service';
 
+// 路由表的一行：[操作名, 方法名, 领域函数, 超时]。
 type RouteRow = [string, string, string, number];
 
+// 全部业务操作。按领域分组：互动 / 昵称账号 / 举报治理 / 删除记录 / 收藏 / 群投票 / 发现与店铺 / 编辑 / 登录与资料 / 卡片 / 社交 / 推送与桌面卡片 / 今日吃什么。
 const ROUTE_ROWS: Array<RouteRow> = [
   ['get-card-interaction-state', 'getCardInteractionState', 'shike-content', INTERACTION_READ_TIMEOUT_MS],
   ['set-card-interaction', 'setCardInteraction', 'shike-content', INTERACTION_WRITE_TIMEOUT_MS],
@@ -71,9 +82,6 @@ const ROUTE_ROWS: Array<RouteRow> = [
   ['start-email-binding', 'startEmailBinding', 'shike-account', 0],
   ['complete-email-binding', 'completeEmailBinding', 'shike-account', 0],
   ['upsert-profile', 'upsertProfile', 'shike-account', 0],
-  // prepare/upload are served by shike-media (CloudGateway.invokeMedia); these two rows only mirror shikeService.ts.
-  ['prepare-card-photo', 'prepareCardPhoto', 'shike-content', 0],
-  ['upload-card-photo', 'uploadCardPhoto', 'shike-content', 0],
   ['get-public-media', 'getPublicMedia', 'shike-content', 0],
   ['publish-card', 'publishCard', 'shike-content', 0],
   ['list-nearby-cards', 'listNearbyCards', 'shike-content', 0],
@@ -113,17 +121,19 @@ const ROUTE_ROWS: Array<RouteRow> = [
   ['delete-food-choice', 'deleteFoodChoice', 'shike-content', 0],
 ];
 
+// 启动时把数组转成 Map，查询时 O(1)。
 const ROUTES: Map<string, CloudRoute> = new Map<string, CloudRoute>();
 for (const row of ROUTE_ROWS) {
   const route: CloudRoute = { operation: row[0], method: row[1], domainFunction: row[2], timeoutMs: row[3] };
   ROUTES.set(row[0], route);
 }
 
+// 按操作名查路由；查不到返回 undefined（CloudGateway 会提示“当前未开放接口”）。
 export function cloudRouteFor(operation: string): CloudRoute | undefined {
-  // Older installed packages still send the plural spelling.
-  return ROUTES.get(operation === 'publish-cards' ? 'publish-card' : operation);
+  return ROUTES.get(operation);
 }
 
+// 以 get- / list- / search- 开头的操作视为只读：领域函数故障时只读操作会自动在 shike-service 上重试。
 export function isReadOnlyOperation(operation: string): boolean {
   return /^(get|list|search)-/.test(operation);
 }

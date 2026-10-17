@@ -1,3 +1,7 @@
+/**
+ * 【文件职责】个人收藏：收藏 / 取消收藏（set-card-favorite）、收藏列表、卡片预览（get-card-previews，收藏、浏览记录、聊天卡片等共用），
+ * 以及旧收藏数据向 PersonalFoodState 的迁移任务（start / resume，带断点）。受 SHIKE_COLLECTIONS_VERIFIED 开关控制。
+ */
 'use strict';
 
 const { dateMillis, currentVisibility } = require('./shared/content-policy');
@@ -8,6 +12,7 @@ const BATCH = 10;
 const LEASE_MS = 120000;
 const KINDS = ['FAVORITE'];
 
+// 创建模块：ctx 由 runtime.js 注入。
 function createPersonalCollections(ctx) {
   const { collection, one, models } = ctx;
   const model = (name, row) => Object.assign(new models[name](), row);
@@ -15,9 +20,11 @@ function createPersonalCollections(ctx) {
   const txOne = (tx, env, name, field, value) => ctx.stage1().txOne(tx, env, name, field, value);
   const upsert = (tx, rows) => ctx.stage1().upsertRows(tx, rows);
   const enabled = env => flag(env, 'SHIKE_COLLECTIONS_VERIFIED');
+  // 收藏功能是否开放。
   function requireEnabled(env) {
     if (!enabled(env)) throw fail('收藏服务尚未就绪，请稍后再试。', 'FEATURE_NOT_READY');
   }
+  // 解析迁移任务进度。
   function checkpoint(job) {
     if (!job) return { phase: 'LISTS', listBoundary: null, activeList: null, itemBoundary: null,
       stateBoundary: null, wantedOrderVersion: 2, scanned: 0, createdFavorites: 0, createdWanted: 0, batches: 0 };
@@ -27,6 +34,7 @@ function createPersonalCollections(ctx) {
         (job.status === 'DONE' && saved.phase !== 'DONE')) throw fail('整理进度无效。', 'INVALID_STATE');
     return saved;
   }
+  // 迁移状态视图。
   function statusView(job, env) {
     const saved = checkpoint(job);
     return { schemaReady: enabled(env), status: job ? job.status : 'NOT_STARTED',
@@ -35,17 +43,20 @@ function createPersonalCollections(ctx) {
       phase: saved.phase, processed: saved.scanned, importedFavorites: saved.createdFavorites,
       importedWanted: saved.createdWanted, lastErrorCode: job ? String(job.lastErrorCode || '') : '' };
   }
+  // 查询迁移状态。
   async function status(uid, env) {
     await ctx.contentPolicy(env).assertAccountActive(uid);
     const job = await one(collection(env, 'MaintenanceJob').query().equalTo('jobId', jobId(uid)));
     await ctx.contentPolicy(env).assertAccountActive(uid);
     return statusView(job, env);
   }
+  // 在事务中确认当前用户的收藏可写（迁移完成或无需迁移）。
   async function assertWritable(tx, uid, env) {
     requireEnabled(env);
     const job = await txOne(tx, env, 'MaintenanceJob', 'jobId', jobId(uid));
     if (!job || job.status !== 'DONE') throw fail('收藏正在整理，请在我的收藏中继续。', 'COLLECTION_MIGRATING');
   }
+  // 开始迁移。
   async function start(uid, env) {
     requireEnabled(env);
     const committed = await collection(env, 'MaintenanceJob').runTransaction({ apply: async tx => {
@@ -67,6 +78,7 @@ function createPersonalCollections(ctx) {
     if (!committed) throw fail('收藏整理任务未保存，请重试。', 'CONFLICT');
     return status(uid, env);
   }
+  // 继续迁移（每次处理一批，可从断点恢复）。
   async function resume(uid, payload, env) {
     requireEnabled(env);
     const requestId = uuid(payload.requestId);
@@ -99,7 +111,7 @@ function createPersonalCollections(ctx) {
         const receipt = await txOne(tx, env, 'PublishRequestRecord', 'requestId', receiptId);
         if (receipt) {
           if (receipt.uid !== uid || receipt.operationType !== TYPE || receipt.status !== 'COMMITTED') throw fail('整理回执无效。', 'CONFLICT');
-          return true; // Same request never advances the checkpoint twice.
+          return true; // 同一个请求绝不会让断点前进两次。
         }
         const job = await txOne(tx, env, 'MaintenanceJob', 'jobId', parentId);
         if (!job) throw fail('整理任务不存在。', 'MIGRATION_REQUIRED');
@@ -117,7 +129,7 @@ function createPersonalCollections(ctx) {
           if (await txOne(tx, env, 'CardAction', 'id', key)) return;
           const row = model('CardAction', { id: key, actorUid: uid, cardId, kind,
             createdAt: dateMillis(createdAt) === null ? now : dateMillis(createdAt) });
-          // Invalid references are retained as private references, never exposed as card content.
+          // 无效的引用保留为私有引用，绝不作为卡片内容返回。
           upsert(tx, [row]); created.push({ id: key, cardId, kind, createdAt: row.createdAt, source });
           if (kind === 'FAVORITE') saved.createdFavorites++;
           else saved.createdWanted++;
@@ -152,8 +164,7 @@ function createPersonalCollections(ctx) {
           }
         }
         if (saved.phase === 'WANTED' && consumed < BATCH) {
-          // A checkpoint made with the previous DESC tie-breaker cannot safely
-          // resume in ASC order. Rescan only WANTED once; action IDs deduplicate.
+          // 用旧的降序并列规则保存的断点不能安全地按升序继续，所以只对“想吃”重新扫描一次；actionId 会去重。
           if (saved.wantedOrderVersion !== 2) { saved.stateBoundary = null; saved.wantedOrderVersion = 2; }
           let query = collection(env, 'PersonalFoodState').query().equalTo('ownerUid', uid)
             .equalTo('state', 'WANT_TO_EAT');
@@ -187,7 +198,7 @@ function createPersonalCollections(ctx) {
       }});
       if (!committed) throw fail('整理进度未保存，请继续整理。', 'CONFLICT');
     } catch (error) {
-      // Keep the committed checkpoint; a failed batch can be resumed explicitly.
+      // 保留已提交的断点，失败的批次可以显式继续。
       try {
         await collection(env, 'MaintenanceJob').runTransaction({ apply: async tx => {
           const job = await txOne(tx, env, 'MaintenanceJob', 'jobId', parentId);
@@ -196,11 +207,12 @@ function createPersonalCollections(ctx) {
             lastErrorCode: String(error.code || 'MIGRATION_FAILED').slice(0, 80) })]);
           return true;
         }});
-      } catch (_checkpointError) { /* An expired lease permits later recovery. */ }
+      } catch (_checkpointError) { /* 租约过期后允许之后恢复处理。 */ }
       throw error;
     }
     return status(uid, env);
   }
+  // 设置 / 取消收藏（requestId 幂等）。
   async function set(uid, payload, env, kind) {
     if (!KINDS.includes(kind)) throw fail('该标记功能已下线，请更新客户端。', 'CLIENT_UPDATE_REQUIRED');
     requireEnabled(env);
@@ -247,6 +259,7 @@ function createPersonalCollections(ctx) {
         !await ctx.contentPolicy(env).canReadCard(uid, fresh)) return result;
     return { ...result, ...summary, contentAvailable: true };
   }
+  // 某卡片对当前用户的收藏标记。
   async function flags(cardId, uid, env) {
     if (!uid) return { collectionReady: false, collectionStatus: 'GUEST' };
     const job = await one(collection(env, 'MaintenanceJob').query().equalTo('jobId', jobId(uid)));
@@ -254,6 +267,7 @@ function createPersonalCollections(ctx) {
     return { collectionReady: view.collectionReady,
       collectionStatus: enabled(env) ? view.status : 'FEATURE_NOT_READY', collectionReason: !enabled(env)?'收藏服务尚未完成上线验证':view.collectionReady?'':view.status==='FAILED'?'旧收藏整理失败，可继续整理':'旧收藏尚未整理完成' };
   }
+  // 组装一组卡片的预览。
   async function assemble(uid, ids, env, includeDetailPhotos = false) {
     const byId = await ctx.readCardRowsByIds(ids, env);
     const rows = ids.map(key => byId.get(key)).filter(row => row);
@@ -261,8 +275,7 @@ function createPersonalCollections(ctx) {
     const readable = await ctx.readableCardRows(rows, uid, env, false, context);
     await ctx.preparePrimaryPhotos(context, readable, env);
     const cards = readable.map(row => ctx.previewCard(row, context, env));
-    // Optional manifests omit detail fields/actions and retain the final access check.
-    // Serial queries bound DB concurrency; ordinary previews keep the primary-only path.
+    // 可选的清单会省略详情字段与互动，但保留最后的访问检查；串行查询控制数据库并发，普通预览只走首图路径。
     if (includeDetailPhotos) {
       for (let index = 0; index < readable.length; index++) {
         cards[index].photos = await ctx.publicPhotos(readable[index], env, true);
@@ -273,12 +286,14 @@ function createPersonalCollections(ctx) {
     if (uid) await ctx.contentPolicy(env).assertAccountActive(uid);
     return { items: ids.map(cardId => ({ cardId, accessible: allowed.has(cardId), card: allowed.get(cardId) || null })) };
   }
+  // 批量卡片预览。
   async function previews(uid, payload, env) {
     if (uid) await ctx.contentPolicy(env).assertAccountActive(uid);
     if (!Array.isArray(payload.cardIds) || payload.cardIds.length > BATCH) throw fail('预览每批最多 10 张。');
     const ids = [...new Set(payload.cardIds.map(value => id(value)))];
     return assemble(uid, ids, env, payload.includeDetailPhotos === true);
   }
+  // 分页读取收藏列表。
   async function list(uid, payload, env) {
     const migration = await status(uid, env);
     const kind = payload.kind;

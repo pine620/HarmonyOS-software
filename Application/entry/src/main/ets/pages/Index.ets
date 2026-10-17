@@ -1,3 +1,15 @@
+/**
+ * 【文件职责】App 唯一的 @Entry 页面，也是全局“路由器”和主容器。
+ * 【启动流程】aboutToAppear → restoreStartupState：读取隐私同意 → 未同意只显示隐私页（同意前不初始化任何 SDK）
+ * → 同意后 AuthService.restore 恢复会话 → 按登录状态显示页签：游客“推荐 · 榜单 · 我的”，登录“推荐 · 榜单 · 好友 · 我的”。
+ * 窄屏使用底部页签栏，宽屏（lg 断点）改为侧边导航栏；“推荐”页右下角悬浮按钮打开发布页。
+ * 【子页面导航】使用 Navigation + NavPathStack：pathStack.pushPathByName('路由名', 参数) 打开子页面，
+ * pathMap() 根据路由名渲染对应的 NavDestination。新增页面时：新建组件 → 在 pathMap 中加分支 → 用 pushPathByName 打开。
+ * 【系统入口】监听 CardDeepLink（碰一碰分享）与 ContinuationState（接续 / 通知 / 桌面卡片点击）写入的 AppStorage 键，
+ * 在隐私与登录就绪后打开对应卡片、私信或页签。
+ * 【窗口外观】统一预留左右与底部安全区并绘制底部手势区颜色；状态栏区域由首页各页签（homeTopStrip）与子页面自己绘制，
+ *   随页面一起滑动 / 转场。只有启动加载、隐私确认与登录界面由这里预留并着色。
+ */
 import { PagePaletteName, PagePaletteRoute, pageColor } from '../common/PagePaletteUi';
 import { EmailLoginPage } from '../components/EmailLoginPage';
 import { DeletedCardsPage } from './DeletedCardsPage';
@@ -45,15 +57,19 @@ import { ChatPage } from './ChatPage';
 import { GroupChatPage } from './GroupChatPage';
 import { ShareCardPage } from './ShareCardPage';
 import { BreakpointSystem, LayoutBreakpoint } from '../common/BreakpointSystem';
-import { AppDestinationStyle, AppPageSurface, HOME_BAR_OVERLAP } from '../common/AppPageUi';
+import { AppDestinationStyle, AppPageSurface, HOME_BAR_OVERLAP, TAB_SWITCH_MS } from '../common/AppPageUi';
 
+// 打开用户主页的路由参数。
 interface AuthorPageRoute { userUid: string; palette: PagePaletteName; }
+// 打开卡片详情的路由参数。
 interface CardDetailRoute { card: FoodCard; palette: PagePaletteName; }
 
+// 启动或系统入口出错时的提示信息。
 interface EntryErrorInfo {
   message?: string;
 }
 
+// 主容器页面。
 @Entry
 @Component
 struct Index {
@@ -82,6 +98,9 @@ struct Index {
   @StorageLink('contentMutationRevision') @Watch('onContentMutation') contentMutationRevision: number = 0;
   @StorageLink('friendRelationshipRevision') @Watch('onFriendRelationshipChanged') friendRelationshipRevision: number = 0;
   @State @Watch('onEntryAppearanceChanged') selectedTab: number = 0;
+  // 视觉页签：决定页签栏颜色与状态栏文字颜色。切换动画一开始就更新（selectedTab 要等动画结束才变），让它们与页面同时过渡。
+  // 状态栏区域本身由各页签自己绘制（homeTopStrip），随页面一起滑动。
+  @State visualTab: number = 0;
   @StorageLink('pageSurfaceRevision') pageSurfaceRevision: number = 0;
   @StorageLink('appSystemBarInk') systemBarInk: string = '#3D2A22';
   @StorageLink('appSystemTopPx') systemTopPx: number = 0;
@@ -108,23 +127,27 @@ struct Index {
   private friendRepository: FriendRepository = new FriendRepository();
   private tabsController: TabsController = new TabsController();
 
+  // 页面创建时恢复启动状态。
   aboutToAppear(): void {
     ContinuationState.showTab(this.selectedTab);
     this.restoreStartupState();
   }
 
+  // 系统返回键：登录界面打开时交给登录界面处理（返回 true 拦截），否则交给系统 / Navigation。
   onBackPress(): boolean {
     if (!this.loginRequested) return false;
     this.loginBackRequest += 1;
     return true;
   }
 
+  // 需要登录时显示登录界面，并给出提示文字（已登录时忽略）。
   private requestLogin(message: string = '登录后可发布、收藏和使用好友功能。'): void {
     if (this.loggedIn) return;
     this.loginMessage = message;
     this.loginRequested = true;
   }
 
+  // 关闭登录界面，继续以游客身份浏览。
   private continueBrowsing(): void {
     if (this.loginBusy) return;
     this.loginRequested = false;
@@ -133,6 +156,7 @@ struct Index {
 
   private restoreBusy: boolean = false;
   @StorageLink('sessionRestoreMessage') sessionRestoreMessage: string = '';
+  // 启动恢复：读取隐私同意 → 恢复会话 → 同步 Push 与桌面卡片 → 处理待打开的入口。
   private async restoreStartupState(): Promise<void> {
     if (this.restoreBusy) return;
     this.restoreBusy = true;
@@ -159,21 +183,21 @@ struct Index {
     }
   }
 
+  // 已开启通知时，同步一次 Push 登记（失败不影响启动）。
   private async syncPushIfEnabled(context: common.UIAbilityContext, profileId: string): Promise<void> {
     try {
       await PushNotificationService.syncIfEnabled(context, profileId);
     } catch (_error) {
-      // Login and startup must remain usable if Push Kit or the push service is
-      // temporarily unavailable. The permissions page exposes the retry path.
+      // 即使 Push Kit 或推送服务暂时不可用，登录和启动也必须能正常使用；“权限与隐私”页提供重试入口。
     }
     try {
       await ServiceCardRemoteSyncService.syncIfEnabled(context);
     } catch (_error) {
-      // Remote card registration never blocks account restoration. Its
-      // separate consent card retains a retry action and status explanation.
+      // 桌面卡片远程登记绝不阻塞账号恢复；它有单独的同意卡片，保留重试操作与状态说明。
     }
   }
 
+  // 用户同意隐私：保存同意并继续启动。
   private async acceptPrivacy(): Promise<void> {
     if (!this.privacyChecked) {
       this.loginMessage = '请先阅读并勾选隐私摘要。';
@@ -187,11 +211,13 @@ struct Index {
     this.openPendingSystemEntry();
   }
 
+  // 用户拒绝隐私：只保留隐私说明页。
   private async rejectPrivacy(): Promise<void> {
     const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     await context.terminateSelf();
   }
 
+  // 登录完成：刷新资料、同步 Push 与桌面卡片、处理待打开的入口。
   private finishLogin(context: common.UIAbilityContext, profile: UserProfile): void {
     this.profile = profile;
     this.loggedIn = true;
@@ -199,13 +225,13 @@ struct Index {
     ImageRepository.setCacheOwner(profile.uid);
     DiscoveryFeedState.clear();
     this.recommendationRevision += 1;
-    // Push and service-card registration are opt-in enhancements. They must
-    // never delay the post-authentication transition to the home page.
+    // Push 与桌面卡片登记都是可选增强，绝不能延迟登录后进入首页。
     void this.syncPushIfEnabled(context, profile.uid);
     this.openPendingSharedCard();
     this.openPendingSystemEntry();
   }
 
+  // 会话结束（退出、注销、会话失效）：清理状态并回到游客页签。
   private sessionEnded(message: string): void {
     this.sharedCardGeneration += 1;
     clearPendingSharedCard();
@@ -220,11 +246,13 @@ struct Index {
     this.profileCoverUrl = '';
     this.loginMessage = message;
     this.selectedTab = 0;
+    this.visualTab = 0;
     this.recommendationRevision += 1;
     ContinuationState.clearPending();
     ContinuationState.showTab(0);
   }
 
+  // 打开卡片详情。
   private openCard(card: FoodCard): void {
     this.selectedCard = card;
     ContinuationState.showCard(card.id);
@@ -233,16 +261,19 @@ struct Index {
   }
 
 
+  // 收到新的分享链接时尝试打开。
   private onPendingSharedCardChanged(): void {
     this.sharedCardGeneration += 1;
     this.sharedLinkMessage = '';
     void this.openPendingSharedCard();
   }
 
+  // 收到新的系统入口时尝试打开。
   private onPendingSystemEntryChanged(): void {
     this.openPendingSystemEntry();
   }
 
+  // 打开待处理的系统入口（页签 / 卡片 / 私信 / 群聊）。
   private async openPendingSystemEntry(): Promise<void> {
     const route: string = this.pendingSystemEntryRoute.trim();
     if (this.openingSystemEntry || route.length === 0 || !this.ready
@@ -259,7 +290,7 @@ struct Index {
           ? this.pendingSystemEntryTab : 0;
         ContinuationState.clearPending();
         if (tab === 3) {
-          // 制作 is no longer a tab; old continuation or card entries open it as a page.
+          // “制作”已不再是页签；旧的接续或卡片入口会把它作为子页面打开。
           this.selectTab(0);
           this.openCreateCard();
           return;
@@ -315,10 +346,9 @@ struct Index {
   }
 
   /**
-   * A knock deep link may wake the app before its consent gate and login restoration
-   * complete. Hold the opaque card ID in AppStorage, then load the same
-   * public detail surface used by every in-app card tap.
+   * 碰一碰分享链接可能在隐私同意与登录恢复完成之前就唤起 App：先把不透明的卡片 id 暂存在 AppStorage，就绪后再加载与普通点击相同的公开详情页。
    */
+  // 打开待处理的分享卡片。
   private async openPendingSharedCard(): Promise<void> {
     const cardId = this.pendingSharedCardId.trim();
     if (this.openingSharedCard || cardId.length === 0 || !this.ready
@@ -351,8 +381,7 @@ struct Index {
       }
     } finally {
       this.openingSharedCard = false;
-      // A newer link can arrive while the previous detail request is pending.
-      // Its @Watch callback was blocked by openingSharedCard; resume it now.
+      // 等待上一次详情请求时可能又收到了新链接：它的 @Watch 回调被 openingSharedCard 挡住了，这里继续处理。
       if (this.pendingSharedCardId.length > 0
         && (this.pendingSharedCardId !== cardId || generation !== this.sharedCardGeneration)) {
         void this.openPendingSharedCard();
@@ -360,30 +389,36 @@ struct Index {
     }
   }
 
+  // 打开私信。
   private openChat(friend: SocialUser): void {
     this.selectedFriend = friend;
     ContinuationState.showFriend(friend.uid);
     this.pathStack.pushPathByName('friend-chat', null);
   }
 
+  // 打开好友主页。
   private openFriendProfile(friend: SocialUser): void {
     this.pathStack.pushPathByName('friend-profile', friend);
   }
 
+  // 打开添加好友页。
   private openAddFriend(): void {
     this.pathStack.pushPathByName('add-friend', null);
   }
 
+  // 好友申请状态变化：通知好友页刷新。
   private friendRequestChanged(): void {
     AppStorage.setOrCreate('socialForegroundRevision',
       (AppStorage.get<number>('socialForegroundRevision') || 0) + 1);
   }
 
+  // 打开群聊。
   private openGroupChat(group: GroupConversationSummary): void {
     this.selectedGroup = group;
     this.pathStack.pushPathByName('group-chat', null);
   }
 
+  // 打开“发给好友”页。
   private shareCardToFriend(card: FoodCard): void {
     if (!this.loggedIn) {
       this.requestLogin('登录后可将卡片分享给食刻好友。');
@@ -394,43 +429,69 @@ struct Index {
     this.pathStack.pushPathByName('share-card', null);
   }
 
+  // 分享后直接进入与该好友的私信。
   private openChatAfterShare(friend: SocialUser): void {
     this.selectedFriend = friend;
     ContinuationState.showFriend(friend.uid);
     this.pathStack.replacePathByName('friend-chat', friend);
   }
 
+  // 我的卡片发生变化（删除等）。
   private profileCardsChanged(): void {
     this.profileRevision += 1;
   }
 
+  // 资料更新后刷新本页缓存的资料。
   private profileUpdated(profile: UserProfile): void {
     this.profile = profile;
     this.profileRevision += 1;
   }
 
+  // 发布成功：关闭发布页并刷新推荐与我的卡片。
   private cardPublished(): void {
     DiscoveryFeedState.clear();
     this.recommendationRevision += 1;
     this.profileRevision += 1;
   }
 
+  // 内容变化（修改生效等）时刷新推荐流状态。
   private onContentMutation(): void {
     DiscoveryFeedState.clear();
     this.recommendationRevision += 1; this.profileRevision += 1;
   }
 
+  // 好友关系变化时清除推荐流缓存（好友推荐可能变化）。
   private onFriendRelationshipChanged(): void { DiscoveryFeedState.clear(); }
 
-  // Logical tab ids stay 0 推荐 / 1 榜单 / 2 好友 / 4 我的; 3 (制作) is now a pushed page.
+  // 逻辑页签 id 固定为 0 推荐 / 1 榜单 / 2 好友 / 4 我的；3（制作）现在是子页面。
+  // 逻辑页签 id → Tabs 中的实际位置（游客没有“好友”页签）。
   private tabPosition(index: number): number {
     return this.loggedIn ? (index === 4 ? 3 : index) : index === 4 ? 2 : index === 1 ? 1 : 0;
   }
 
-  private onTabPositionChanged(position: number): void {
-    this.selectTab(this.loggedIn ? (position === 3 ? 4 : position) : position === 2 ? 4 : position === 1 ? 1 : 0);
+  // Tabs 中的实际位置 → 逻辑页签 id（tabPosition 的逆映射）。
+  private logicalTab(position: number): number {
+    return this.loggedIn ? (position === 3 ? 4 : position) : position === 2 ? 4 : position === 1 ? 1 : 0;
   }
 
+  // 用户滑动或点击切换页签。
+  private onTabPositionChanged(position: number): void {
+    this.selectTab(this.logicalTab(position));
+  }
+
+  // 切换动画开始（点击页签或松手后）：立即切换视觉页签，页签栏颜色在与 Tabs 相同的时长内渐变到目标页签。
+  private beginTabSwitch(targetPosition: number): void {
+    const target: number = this.logicalTab(targetPosition);
+    this.getUIContext().animateTo({ duration: TAB_SWITCH_MS, curve: Curve.Friction }, (): void => { this.visualTab = target; });
+  }
+
+  // 切换动画结束（包括拖动后弹回原页签）：视觉页签与实际页签对齐。
+  private endTabSwitch(position: number): void {
+    this.visualTab = this.logicalTab(position);
+  }
+
+
+  // 打开发布页（未登录时提示登录）。
   private openCreateCard(): void {
     if (!this.loggedIn) {
       this.requestLogin('登录后可发布推荐。');
@@ -439,10 +500,13 @@ struct Index {
     this.pathStack.pushPathByName('create-card', null);
   }
 
+  // 切换到某个页签。
   private selectTab(index: number): void {
     const safeIndex: number = this.loggedIn
       ? (index >= 0 && index <= 4 && index !== 3 ? index : 0) : (index === 4 ? 4 : index === 1 ? 1 : 0);
     this.selectedTab = safeIndex;
+    // 程序切换（深链、通知、退出登录等）没有拖动过程，直接对齐视觉页签。
+    if (this.visualTab !== safeIndex) this.visualTab = safeIndex;
     AppStorage.setOrCreate('discoveryVisible', this.navigationHomeVisible && safeIndex === 0);
     ContinuationState.showTab(safeIndex);
     if (safeIndex === 2) {
@@ -451,6 +515,7 @@ struct Index {
     }
   }
 
+  // 根据路由名渲染子页面（NavDestination）；所有子页面在这里集中注册。
   @Builder
   pathMap(routeName: string, routeParam: object) {
     if (routeName === 'card-detail' && routeParam !== null && routeParam !== undefined) {
@@ -575,6 +640,7 @@ struct Index {
     }
   }
 
+  // 隐私说明中的一行。
   @Builder
   private privacyNoticeRow(title: string, description: string) {
     Row({ space: 12 }) {
@@ -589,6 +655,7 @@ struct Index {
     }.width('100%').alignItems(VerticalAlign.Top)
   }
 
+  // 隐私同意页面。
   @Builder
   private privacyPage() {
     Scroll() {
@@ -668,6 +735,7 @@ struct Index {
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
   }
 
+  // 登录界面。
   @Builder
   private loginPage(): void {
     EmailLoginPage({
@@ -681,26 +749,28 @@ struct Index {
     })
   }
 
+  // 侧边导航栏中的一项（宽屏）。
   @Builder
   private navigationRailItem(index: number, label: string, icon: Resource): void {
     Button({ type: ButtonType.Normal }) {
       Column({ space: 6 }) {
         Image(icon).width(22).height(22).objectFit(ImageFit.Contain)
-          .fillColor(this.selectedTab === index ? this.tabAction() : $r('app.color.muted'))
+          .fillColor(this.visualTab === index ? this.tabAction() : $r('app.color.muted'))
           .accessibilityLevel('no');
         Text(label).fontSize(13)
-          .fontWeight(this.selectedTab === index ? FontWeight.Bold : FontWeight.Medium)
-          .fontColor(this.selectedTab === index ? this.tabAction() : $r('app.color.muted'));
+          .fontWeight(this.visualTab === index ? FontWeight.Bold : FontWeight.Medium)
+          .fontColor(this.visualTab === index ? this.tabAction() : $r('app.color.muted'));
       }.width('100%');
     }
     .width('100%').height(64).padding(6).borderRadius(16)
-    .backgroundColor(this.selectedTab === index ? this.tabHighlight() : $r('app.color.surface'))
+    .backgroundColor(this.visualTab === index ? this.tabHighlight() : $r('app.color.surface'))
     .accessibilityText(label).accessibilitySelected(this.selectedTab === index)
     .onClick((): void => {
       if (this.selectedTab !== index) this.tabsController.changeIndex(this.tabPosition(index));
     });
   }
 
+  // 侧边导航栏（宽屏）。
   @Builder
   private navigationRail(): void {
     Scroll() {
@@ -713,13 +783,14 @@ struct Index {
           this.navigationRailItem(2, '好友', $r('app.media.nav_friends'));
         }
         this.navigationRailItem(4, '我的', $r('app.media.nav_profile'));
-      }.width('100%').padding({ left: 10, right: 10, top: 22, bottom: 22 });
+      }.width('100%').padding({ left: 10, right: 10, top: 22 + (this.homeNoticeVisible() ? 0 : this.systemTopVp()), bottom: 22 });
     }
     .width(BreakpointSystem.NAV_RAIL_WIDTH).height('100%').scrollBar(BarState.Off)
     .align(Alignment.Top).backgroundColor($r('app.color.surface'))
     .border({ width: { right: 1 }, color: $r('app.color.line') });
   }
 
+  // 游客访问需要登录的页签时显示的提示页。
   @Builder
   private guestAccountPage(title: string, description: string) {
     Column({ space: 16 }) {
@@ -742,25 +813,27 @@ struct Index {
       .backgroundColor($r('app.color.personal_canvas'))
   }
 
+  // 底部页签按钮。
   @Builder
   private bottomTab(label: string, index: number, icon: Resource) {
     Column({ space: 2 }) {
       Image(icon).width(22).height(22).objectFit(ImageFit.Contain)
-        .fillColor(this.selectedTab === index ? this.tabAction() : $r('app.color.muted'))
+        .fillColor(this.visualTab === index ? this.tabAction() : $r('app.color.muted'))
         .accessibilityLevel('no')
       Text(label).fontSize(11)
-        .fontWeight(this.selectedTab === index ? FontWeight.Bold : FontWeight.Regular)
-        .fontColor(this.selectedTab === index ? this.tabAction() : $r('app.color.muted'))
+        .fontWeight(this.visualTab === index ? FontWeight.Bold : FontWeight.Regular)
+        .fontColor(this.visualTab === index ? this.tabAction() : $r('app.color.muted'))
       Column().width(5).height(5).borderRadius(3)
-        .backgroundColor(this.selectedTab === index ? this.tabHighlightDot() : Color.Transparent)
+        .backgroundColor(this.visualTab === index ? this.tabHighlightDot() : Color.Transparent)
     }
     .width('100%').height(58).justifyContent(FlexAlign.Center)
     .accessibilityText(label).accessibilitySelected(this.selectedTab === index)
   }
 
+  // 发布悬浮按钮。
   @Builder
   private publishFab() {
-    // System symbol instead of the stroke SVG: SVG strokes ignore fillColor, which left the plus invisible.
+    // 使用系统符号而不是线条 SVG：SVG 线条不受 fillColor 影响，会导致加号看不见。
     Button({ type: ButtonType.Circle, stateEffect: true }) {
       SymbolGlyph($r('sys.symbol.plus')).fontSize(28).fontWeight(FontWeight.Bold)
         .fontColor([$r('app.color.discovery_canvas')]).accessibilityLevel('no')
@@ -773,9 +846,27 @@ struct Index {
     .onClick((): void => this.openCreateCard())
   }
 
+  // 页签容器（窄屏底部页签 / 宽屏侧边栏共用同一个 Tabs）。
+  // 首页顶部是否显示了提示条（会话恢复失败 / 分享链接提示）：显示时提示条承担状态栏区域，页签内不再重复预留。
+  private homeNoticeVisible(): boolean {
+    return (!this.loggedIn && this.sessionRestoreMessage.length > 0) || this.sharedLinkMessage.length > 0;
+  }
+
+  // 某个页签自己的状态栏区域：放在页签内容里，随页签一起滑动，颜色与页面同步。
+  // “我的”页有主页背景时，ProfilePage 把背景图向上画进这一区域并盖住这里的颜色。
+  @Builder
+  private homeTopStrip(tab: number): void {
+    Column().width('100%').height(this.homeNoticeVisible() ? 0 : this.systemTopVp())
+      .backgroundColor(this.homeHeaderFor(tab)).hitTestBehavior(HitTestMode.None).accessibilityLevel('no');
+  }
+
   @Builder
   private mainTabs() {
     Column({ space: 0 }) {
+      if (this.homeNoticeVisible()) {
+        Column().width('100%').height(this.systemTopVp()).backgroundColor($r('app.color.accent_soft'))
+          .hitTestBehavior(HitTestMode.None).accessibilityLevel('no');
+      }
       if (!this.loggedIn && this.sessionRestoreMessage.length > 0) {
         Row({ space: 8 }) {
           Text(this.sessionRestoreMessage).fontSize(12).fontColor($r('app.color.muted')).layoutWeight(1)
@@ -806,10 +897,11 @@ struct Index {
         if (this.windowBreakpoint === 'lg') {
           this.navigationRail();
         }
-        // The same Tabs subtree survives breakpoint changes; only its bar is
-        // hidden on lg. Drafts, list state and tab lifecycle stay with each page.
+        // 断点变化时保留同一个 Tabs 子树，宽屏只是隐藏页签栏；草稿、列表状态和页签生命周期都留在各自页面中。
         Tabs({ barPosition: BarPosition.End, index: this.tabPosition(this.selectedTab), controller: this.tabsController }) {
           TabContent() {
+            Column() {
+            this.homeTopStrip(0);
             Stack({ alignContent: Alignment.BottomEnd }) {
               Column() {
               NearbyPage({
@@ -822,36 +914,49 @@ struct Index {
               }).layoutWeight(1)
               }.width('100%').height('100%')
               this.publishFab()
+            }.width('100%').layoutWeight(1)
             }.width('100%').height('100%')
           }.tabBar(this.bottomTab('推荐', 0, $r('app.media.nav_recommend')))
           TabContent() {
+            Column() {
+              this.homeTopStrip(1);
               FoodRankingPage({
                 pageActive: this.navigationHomeVisible && this.selectedTab === 1,
                 onOpenCard: (card: FoodCard): void => this.openCard(card),
                 revision: this.recommendationRevision + this.friendRelationshipRevision,
                 onRequireLogin: (): void => this.requestLogin('登录后查看好友推荐榜。')
-              })
+              }).layoutWeight(1)
+            }.width('100%').height('100%')
           }.tabBar(this.bottomTab('榜单', 1, $r('app.media.nav_ranking')))
           if (this.loggedIn) {
             TabContent() {
-              FriendsPage({
-                pageActive: this.navigationHomeVisible && this.selectedTab === 2,
-                onOpenChat: (friend: SocialUser): void => this.openChat(friend),
-                onOpenProfile: (friend: SocialUser): void => this.openFriendProfile(friend),
-                onOpenGroup: (group: GroupConversationSummary): void => this.openGroupChat(group),
-                onOpenAddFriend: (): void => this.openAddFriend()
-              })
+              Column() {
+                this.homeTopStrip(2);
+                FriendsPage({
+                  pageActive: this.navigationHomeVisible && this.selectedTab === 2,
+                  onOpenChat: (friend: SocialUser): void => this.openChat(friend),
+                  onOpenProfile: (friend: SocialUser): void => this.openFriendProfile(friend),
+                  onOpenGroup: (group: GroupConversationSummary): void => this.openGroupChat(group),
+                  onOpenAddFriend: (): void => this.openAddFriend()
+                }).layoutWeight(1)
+              }.width('100%').height('100%')
             }.tabBar(this.bottomTab('好友', 2, $r('app.media.nav_friends')))
           }
           TabContent() {
-            if (this.loggedIn) {
-              ProfilePage({ revision: this.profileRevision })
-            } else {
-              this.guestAccountPage('我的', '登录后管理资料、收藏和浏览记录。')
-            }
+            Column() {
+              this.homeTopStrip(4);
+              if (this.loggedIn) {
+                ProfilePage({ revision: this.profileRevision }).layoutWeight(1)
+              } else {
+                Column() { this.guestAccountPage('我的', '登录后管理资料、收藏和浏览记录。') }.width('100%').layoutWeight(1)
+              }
+            }.width('100%').height('100%')
           }.tabBar(this.bottomTab('我的', 4, $r('app.media.nav_profile')))
         }
         .onChange((position: number): void => this.onTabPositionChanged(position))
+        .animationDuration(TAB_SWITCH_MS)
+        .onAnimationStart((_position: number, targetPosition: number, _event: TabsAnimationEvent): void => this.beginTabSwitch(targetPosition))
+        .onAnimationEnd((position: number, _event: TabsAnimationEvent): void => this.endTabSwitch(position))
         .barMode(BarMode.Fixed)
         .layoutWeight(1).height('100%').barHeight(this.windowBreakpoint === 'lg' ? 0 : 58)
         .scrollable(this.windowBreakpoint !== 'lg')
@@ -864,61 +969,80 @@ struct Index {
     .expandSafeArea([], []);
   }
 
+  // 子页面使用的色板（由路由参数指定）。
   private choicePalette(routeParam: object): PagePaletteName {
     if (routeParam === null || routeParam === undefined) return 'NOTE';
     return (routeParam as PagePaletteRoute).palette === 'PERSONAL' ? 'PERSONAL' : 'NOTE';
   }
 
+  // 子页面画布颜色。
   private choiceCanvas(routeParam: object): Resource {
     return this.choicePalette(routeParam) === 'PERSONAL' ? $r('app.color.personal_canvas') : $r('app.color.random_canvas');
   }
 
+  // 当前首页页签的色板（跟随视觉页签）。
   private homePalette(): PagePaletteName {
-    if (this.selectedTab === 1) return 'RANKING';
-    if (this.selectedTab === 2 && this.loggedIn) return 'SOCIAL';
-    if (this.selectedTab === 4) return 'PERSONAL';
+    return this.homePaletteFor(this.visualTab);
+  }
+
+  // 某个页签的色板。
+  private homePaletteFor(tab: number): PagePaletteName {
+    if (tab === 1) return 'RANKING';
+    if (tab === 2 && this.loggedIn) return 'SOCIAL';
+    if (tab === 4) return 'PERSONAL';
     return 'NOTE';
   }
 
+  // 页签栏背景色。
   private tabCanvas(): Resource {
-    if (this.selectedTab === 0) return $r('app.color.discovery_canvas');
-    if (this.selectedTab === 1) return $r('app.color.food_ranking_canvas');
+    if (this.visualTab === 0) return $r('app.color.discovery_canvas');
+    if (this.visualTab === 1) return $r('app.color.food_ranking_canvas');
     return pageColor(this.homePalette(), 'canvas');
   }
 
+  // 页签栏选中色。
   private tabAction(): Resource {
-    if (this.selectedTab === 0) return $r('app.color.discovery_accent');
-    if (this.selectedTab === 1) return $r('app.color.food_ranking_accent');
+    if (this.visualTab === 0) return $r('app.color.discovery_accent');
+    if (this.visualTab === 1) return $r('app.color.food_ranking_accent');
     return pageColor(this.homePalette(), 'action');
   }
 
+  // 选中指示点颜色。
   private tabHighlightDot(): Resource {
-    if (this.selectedTab === 0) return $r('app.color.discovery_gold');
-    if (this.selectedTab === 1) return $r('app.color.food_ranking_action');
+    if (this.visualTab === 0) return $r('app.color.discovery_gold');
+    if (this.visualTab === 1) return $r('app.color.food_ranking_action');
     return pageColor(this.homePalette(), 'gold');
   }
 
+  // 选中高亮色。
   private tabHighlight(): Resource {
-    if (this.selectedTab === 0) return $r('app.color.discovery_soft');
-    if (this.selectedTab === 1) return $r('app.color.food_ranking_tab_track');
+    if (this.visualTab === 0) return $r('app.color.discovery_soft');
+    if (this.visualTab === 1) return $r('app.color.food_ranking_tab_track');
     return pageColor(this.homePalette(), 'soft');
   }
 
+  // 首页顶部颜色（跟随视觉页签）。
   private homeHeader(): Resource {
-    if (this.selectedTab === 0) return $r('app.color.discovery_header');
-    if (this.selectedTab === 1) return $r('app.color.food_ranking_header');
-    if (this.selectedTab === 4 && !this.loggedIn) return $r('app.color.personal_canvas');
-    return pageColor(this.homePalette(), 'header');
+    return this.homeHeaderFor(this.visualTab);
   }
 
-  // 「今日吃什么」桌面卡片: refresh its local pool in the foreground (returns at once when no card is placed
-  // or the pool is still current; clears it immediately when the account changes).
+  // 某个页签的顶部颜色。
+  private homeHeaderFor(tab: number): Resource {
+    if (tab === 0) return $r('app.color.discovery_header');
+    if (tab === 1) return $r('app.color.food_ranking_header');
+    if (tab === 4 && !this.loggedIn) return $r('app.color.personal_canvas');
+    return pageColor(this.homePaletteFor(tab), 'header');
+  }
+
+  // 「今日吃什么」桌面卡片：在前台刷新本地候选（没有卡片或候选仍有效时立即返回；换号时立即清空）。
+  // 前台刷新「今日吃什么」桌面卡片的候选。
   private syncRandomFoodWidget(): void {
     if (!this.ready || !this.privacyAccepted) return;
     const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
     void RandomFoodWidgetStore.sync(context).catch((): void => {});
   }
 
+  // 页面外观变化时同步窗口颜色。
   private onEntryAppearanceChanged(): void {
     const widgetScope: string = `${this.ready}|${this.privacyAccepted}|${this.loggedIn}`;
     if (widgetScope !== this.widgetScope) { this.widgetScope = widgetScope; this.syncRandomFoodWidget(); }
@@ -931,38 +1055,34 @@ struct Index {
     AppPageSurface.show(this.tabCanvas(), this.homeHeader(), this.homePalette(), this.profileCoverOnTop());
   }
 
-  // The profile tab extends its cover image under the status bar; every other screen keeps a solid strip.
+  // “我的”页签把背景图延伸到状态栏下，其他页面保持纯色条。
+  // “我的”页背景是否需要延伸到状态栏下。
   private profileCoverOnTop(): boolean {
     return this.ready && this.privacyAccepted && !this.loginRequested && this.loggedIn &&
-      this.navigationHomeVisible && this.selectedTab === 4 && this.profileCoverUrl.length > 0;
+      this.navigationHomeVisible && this.visualTab === 4 && this.profileCoverUrl.length > 0;
   }
 
-  private destinationEdgeImage(): string {
-    const revision: number = this.pageSurfaceRevision;
-    return !this.navigationHomeVisible && revision >= 0 ? AppPageSurface.edgeImageUrl : '';
+  // 隐私确认、启动加载与登录界面不属于 Navigation 页面，由 Index 预留状态栏高度并在这里着色；首页和子页面自己绘制状态栏区域。
+  private entrySurfaceActive(): boolean {
+    return !this.ready || !this.privacyAccepted || this.loginRequested;
   }
 
+  // 状态栏高度（vp）。
+  private systemTopVp(): number {
+    return this.getUIContext().px2vp(this.systemTopPx);
+  }
+
+  // 入口界面的状态栏颜色条。
   @Builder
   private topEdge(): void {
-    Stack({ alignContent: Alignment.TopStart }) {
-      if (this.profileCoverOnTop()) {
-        // Same size as ProfilePage's cover (inset + 360); only its top slice is visible here.
-        Image(this.profileCoverUrl).width('100%')
-          .height(this.getUIContext().px2vp(this.systemTopPx) + 360).objectFit(ImageFit.Cover)
-          .accessibilityLevel('no');
-        Column() {}.width('100%').height('100%').backgroundColor('#33000000');
-      } else if (this.destinationEdgeImage().length > 0) {
-        // Card detail hero: same image, same size and fit as the page's hero, so the two slices line up.
-        Image(this.destinationEdgeImage()).width('100%')
-          .height(this.getUIContext().px2vp(this.systemTopPx) + AppPageSurface.edgeImageHeight).objectFit(ImageFit.Cover)
-          .accessibilityLevel('no');
-        Column() {}.width('100%').height('100%').backgroundColor('#59000000');
-      }
-    }.width('100%').height(this.getUIContext().px2vp(this.systemTopPx))
-      .backgroundColor(this.edgeCanvas()).clip(true).position({ x: 0, y: 0 })
-      .hitTestBehavior(HitTestMode.None).accessibilityLevel('no');
+    if (this.entrySurfaceActive()) {
+      Column().width('100%').height(this.systemTopVp()).backgroundColor($r('app.color.canvas'))
+        .position({ x: 0, y: 0 }).hitTestBehavior(HitTestMode.None).accessibilityLevel('no');
+    }
   }
 
+
+  // 窗口底色（只在页面未覆盖的位置可见）。
   private edgeCanvas(): Resource {
     const revision: number = this.pageSurfaceRevision;
     if (!this.ready || !this.privacyAccepted || this.loginRequested) return $r('app.color.canvas');
@@ -970,32 +1090,39 @@ struct Index {
     return this.homeHeader();
   }
 
+  // 整体画布颜色。
   private frameCanvas(): Resource {
     const revision: number = this.pageSurfaceRevision;
     if (!this.ready || !this.privacyAccepted || this.loginRequested) return $r('app.color.canvas');
     return !this.navigationHomeVisible && revision >= 0 ? AppPageSurface.canvas : this.tabCanvas();
   }
 
+  // 需要避让的底部边缘。
   private bottomEdge(): Edges {
     const edges: Edges = { left: 0, bottom: 0 };
     return edges;
   }
 
+  // 系统栏样式。首页的状态栏文字颜色跟随视觉页签立即切换（“我的”主页背景延伸到状态栏下时用白色），不等窗口接口在动画结束后生效。
   private nativeSystemBarStyle(): SystemBarStyle {
-    const style: SystemBarStyle = { statusBarContentColor: this.systemBarInk };
+    const homeInk: string = this.profileCoverOnTop() ? '#FFFFFFFF' : AppPageSurface.systemBarInk;
+    const style: SystemBarStyle = { statusBarContentColor: this.navigationHomeVisible ? homeInk : this.systemBarInk };
     return style;
   }
 
-  // Bottom inset still reserved by Index: the gesture area minus the part the home tab bar may sink into.
+  // Index 仍需预留的底部安全区：手势区高度减去首页页签栏允许下沉的部分。
+  // Index 实际预留的底部安全区高度。
   private reservedBottom(): number {
     const bottom: number = this.getUIContext().px2vp(this.systemBottomPx);
     AppPageSurface.bottomOverlap = Math.min(HOME_BAR_OVERLAP, bottom);
     return this.keyboardVisible ? 0 : bottom - AppPageSurface.bottomOverlap;
   }
 
+  // 内容区内边距（系统安全区）。
   private contentInsets(): Padding {
     const insets: Padding = {
-      top: this.getUIContext().px2vp(this.systemTopPx),
+      // 进入 Navigation 后由首页页签与子页面各自绘制状态栏区域，这里不再预留。
+      top: this.ready && this.privacyAccepted ? 0 : this.systemTopVp(),
       bottom: this.reservedBottom(),
       left: this.getUIContext().px2vp(this.systemLeftPx),
       right: this.getUIContext().px2vp(this.systemRightPx)
@@ -1003,6 +1130,7 @@ struct Index {
     return insets;
   }
 
+  // 主内容：隐私页 / 登录 / 页签 / 子页面栈。
   @Builder
   private entryContent(): void {
     if (!this.ready) {
@@ -1029,23 +1157,23 @@ struct Index {
             }
           })
         if (this.loginRequested && !this.loggedIn) {
-          this.loginPage()
+          Column() { this.loginPage() }.width('100%').height('100%').padding({ top: this.systemTopVp() })
         }
       }.width('100%').height('100%')
     }
   }
 
+  // 页面布局。
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
-      // Reserve OS chrome once for every screen; only the backdrop occupies the full window.
+      // 统一预留左右与底部安全区（入口界面另预留顶部）；只有背景铺满整个窗口。
       Column() {
         this.entryContent();
       }.width('100%').height('100%').padding(this.contentInsets())
         .expandSafeArea([], []).clip(true);
-      // Paint the reserved chrome regions without covering the inset content.
+      // 入口界面的状态栏颜色条。
       this.topEdge();
-      // align() only aligns a container's own children; inside a TopStart Stack the strip stayed at the top,
-      // covering the status-bar slice and leaving the gesture area unpainted. Pin it to the bottom edge instead.
+      // 底部手势区颜色条（align() 只对容器自己的子组件生效，所以用 position 固定到底部边缘）。
       Column() {}.width('100%').height(this.reservedBottom())
         .backgroundColor(this.frameCanvas()).position(this.bottomEdge())
         .hitTestBehavior(HitTestMode.None).accessibilityLevel('no');

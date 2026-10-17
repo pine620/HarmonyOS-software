@@ -251,6 +251,8 @@ function handlerFixture() {
         normalizePublicContent: async () => { calls.push(['public']); return {}; }, safeLogError: () => 'REDACTED'
       };
       if (name === './media/runtime') return { runCoverBackfill: async () => { calls.push(['covers']); return {}; } };
+      // home-snapshot 动作的依赖；这里的用例不触发它，调用即记录。
+      if (name === './shared/public-snapshot') return { HOME_REQUEST: {}, writeSnapshot: async () => { calls.push(['snapshot']); return {}; } };
       if (name === './shared/read-errors') return { READ_OPT_VERSION: 'test-only', errorCode: error => error.code || 'REQUEST_FAILED' };
       if (name === './shared/release-info') return { buildInfo: {} };
       throw new Error('Unexpected dependency ' + name);

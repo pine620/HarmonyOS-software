@@ -1,3 +1,10 @@
+/**
+ * 【文件职责】卡片详情页（最大的页面）：沉浸式大图轮播与全屏预览、作者信息、点评与口味评分、价格与店铺信息、来源链接、
+ * 互动（赞 / 踩 / 收藏，由 CardInteractionController 协调）、发给好友、碰一碰分享（Share Kit）、举报、作者编辑 / 删除、店铺导航。
+ * 【加载链路】先用列表传入的卡片与封面立即显示（showEntryCover）→ get-card-detail 读取完整详情（CardRepository.detail）
+ * → 按需加载每张原图（hydratePhotoAt，并预取下一张）→ 写入本机浏览记录（CardVisitStore）。
+ * 卡片不可见（下架、删除、无权限）时清空页面并提示；所有异步结果用 detailGeneration 判断是否过期。
+ */
 import { PagePaletteName, pageColor } from '../common/PagePaletteUi';
 import { WarmNoteBackdrop, notePanelTransition } from '../common/WarmNoteUi';
 import { RandomFoodMotionObserver } from '../common/RandomFoodUi';
@@ -40,8 +47,10 @@ import { CardInteractionButton } from '../components/CardInteractionButton';
 
 const DETAIL_MEDIA_MAX_HEIGHT: number = 420;
 
+// 商品信息区的一项（类型、标签、值）。
 interface DetailInfoItem { kind: string; label: string; value: string; }
 
+// 空卡片占位。
 function emptyCard(): FoodCard {
   return {
     id: '', productName: '', brand: '', priceFen: 0, priceLabel: '', originalPriceFen: 0,
@@ -55,6 +64,7 @@ function emptyCard(): FoodCard {
   };
 }
 
+// 旧数据没有 photos 数组时，用单图字段构造首图。
 function fallbackPhoto(card: FoodCard): CardPhoto {
   return {
     id: '', url: '', path: card.photoPath, bucket: card.photoBucket,
@@ -62,10 +72,12 @@ function fallbackPhoto(card: FoodCard): CardPhoto {
   };
 }
 
+// 卡片详情页面。
 @Component
 export struct CardDetailPage {
   @Prop palette: PagePaletteName = 'NOTE';
   @StorageLink('favoritesMutationRevision') @Watch('onFavoriteMutation') favoritesMutationRevision: number = 0;
+  // 别处修改了收藏时刷新互动状态。
   private onFavoriteMutation(): void {
     const controller: CardInteractionController | undefined = this.interactionController;
     if (this.detailVisible && this.appActive && controller !== undefined && controller.needsFavoriteRefresh())
@@ -74,12 +86,13 @@ export struct CardDetailPage {
   @Consume('pathStack') pathStack: NavPathStack;
   @StorageLink('stage47AppActive') @Watch('onAppActiveChanged') appActive: boolean = true;
   private detailVisible: boolean = false;
+  // App 进入后台时作废进行中的请求并停止碰一碰分享；回到前台时重新加载。
   private onAppActiveChanged(): void { if (!this.appActive) { this.detailGeneration++; this.clearDetailView(); } else if (this.detailVisible) void this.loadDetail(); }
 
   @State @Watch('syncEdgeImage') detailWidthVp: number = 0;
   @State @Watch('syncEdgeImage') heroAtTop: boolean = true;
   @StorageProp('appSystemTopPx') systemTopPx: number = 0;
-  private edgeOwner: number = AppPageSurface.newEdgeImageOwner();
+  private edgeOwner: number = AppPageSurface.newImmersiveOwner();
   @State detailHeightVp: number = 0;
   @State collectionReady: boolean = false;
   @State collectionKnown: boolean = false;
@@ -146,14 +159,16 @@ export struct CardDetailPage {
       void this.sendKnockShare(target);
     };
 
+  // 出现时加载详情并绑定互动。
   aboutToAppear(): void {
     this.primaryImageStarted = Date.now();
     this.mediaServiceUnavailable = false;
     this.clearDetailView();
   }
 
+  // 消失时停止分享、解绑互动并清空大图。
   aboutToDisappear(): void {
-    AppPageSurface.clearEdgeImage(this.edgeOwner);
+    AppPageSurface.setImmersiveTop(this.edgeOwner, false);
     this.motionObserver.stop();
     if (this.restoreTimer !== -1) { clearTimeout(this.restoreTimer); this.restoreTimer = -1; }
     this.clearDetailView();
@@ -161,12 +176,14 @@ export struct CardDetailPage {
     this.finishPrimaryImage('cancelled');
   }
 
+  // 会话变化（换号）时重新加载。
   private onSessionChanged(): void {
     this.pendingMigrationId = ''; this.editingVisible = false; this.savedScrollY = 0;
     this.clearDetailView();
     if (this.detailVisible && this.appActive) void this.loadDetail();
   }
 
+  // 需要登录的操作前检查登录（未登录时提示）。
   private requireAccount(): boolean {
     if (this.loggedIn && AuthService.profile() !== undefined && CloudGateway.hasSession()) return true;
     this.closeActionMenu();
@@ -174,12 +191,14 @@ export struct CardDetailPage {
     return false;
   }
 
+  // 结束首图加载的性能指标。
   private finishPrimaryImage(state: PreloadMetricState): void {
     if (this.primaryImageStarted === 0) return;
     NearbyPerformanceTrace.record('detail_primary_image', state, this.primaryImageStarted);
     this.primaryImageStarted = 0;
   }
 
+  // 清空详情视图（卡片不可见或换号时）。
   private clearDetailView(): void {
     this.preparingCollection = false; this.gateChecking = false;
     this.detachInteractions(); this.detachInteractions = (): void => {}; this.interactionController = undefined;
@@ -193,6 +212,7 @@ export struct CardDetailPage {
     this.collectionKnown = false; this.collectionReady = false; this.stopKnockShare('');
   }
 
+  // 先显示列表中带过来的封面，减少等待。
   private async showEntryCover(generation: number): Promise<void> {
     const photo: CardPhoto = this.card.photos?.[0] || fallbackPhoto(this.card);
     const url: string = await ImageRepository.cachedPhotoUrl(this.getUIContext().getHostContext() as common.UIAbilityContext,
@@ -203,6 +223,7 @@ export struct CardDetailPage {
     }
   }
 
+  // 显示某张图片的本机缓存（如有）。
   private async showCachedCover(index: number, generation: number): Promise<void> {
     const photo: CardPhoto | undefined = this.detailPhotos[index];
     if (photo === undefined) return;
@@ -213,6 +234,7 @@ export struct CardDetailPage {
     this.coverUrls = this.coverUrls.map((value: string, position: number): string => position === index ? url : value);
   }
 
+  // 预取下一张原图。
   private prefetchNextPhoto(index: number): void {
     if (index !== this.photoIndex || !this.detailVisible || !this.appActive || !this.detailReady || !ReadScheduler.canPrefetch()) return;
     if (index + 1 >= this.detailPhotos.length || this.hydratingPhotoIndices.has(index + 1) || this.detailPhotos[index + 1].url.length > 0) return;
@@ -220,6 +242,7 @@ export struct CardDetailPage {
     void this.hydratePhotoAt(index + 1, 'prefetch');
   }
 
+  // 读取完整详情（流程见文件头）。
   private async loadDetail(): Promise<void> {
     const generation: number = this.detailGeneration + 1;
     this.detailGeneration = generation;
@@ -234,7 +257,7 @@ export struct CardDetailPage {
       this.detailReady = true;
       this.detailPhotos = this.card.photos !== undefined && this.card.photos.length > 0
         ? this.card.photos.map((photo: CardPhoto): CardPhoto => {
-          // List photo URLs are covers; only an ORIGINAL cache/read may fill this URL.
+          // 列表中的图片地址都是封面；只有读取到的原图（缓存或云端）才能填入这里。
           const preview: CardPhoto = { id: photo.id, url: '', path: photo.path, bucket: photo.bucket,
             width: photo.width, height: photo.height, sha256: photo.sha256, byteSize: photo.byteSize,
             coverSha256: photo.coverSha256, coverByteSize: photo.coverByteSize, coverWidth: photo.coverWidth,
@@ -278,7 +301,7 @@ export struct CardDetailPage {
         const viewer = AuthService.profile();
         if (viewer !== undefined) CardVisitStore.record(context, viewer.uid, detail);
       } catch (_error) {
-        // Local browsing history must never turn a successful detail load into an error.
+        // 本机浏览记录写入失败绝不能把一次成功的详情加载变成错误。
       }
       this.detailPhotos = photos.length > 0
         ? photos : (detail.photoPath.length > 0 ? [fallbackPhoto(detail)] : []);
@@ -331,6 +354,7 @@ export struct CardDetailPage {
     }
   }
 
+  // 加载第 index 张原图。
   private async hydratePhotoAt(index: number, priority: MediaPriority,
     generation: number = this.detailGeneration): Promise<void> {
     if (index < 0 || index >= this.detailPhotos.length ||
@@ -375,6 +399,7 @@ export struct CardDetailPage {
     }
   }
 
+  // 图片解码失败：清除缓存并允许重试。
   private photoDecodeFailed(index: number): void {
     const photo: CardPhoto | undefined = this.detailPhotos[index]; if (photo === undefined) return;
     this.decodedPhotoUrls = this.decodedPhotoUrls.filter((url: string): boolean => url !== photo.url);
@@ -385,6 +410,7 @@ export struct CardDetailPage {
     if (!this.photoFailures.includes(index)) this.photoFailures = this.photoFailures.concat([index]);
   }
 
+  // 重试加载某张图片。
   private retryPhoto(index: number): void {
     ImageRepository.retryUnavailableService();
     this.mediaServiceUnavailable = false;
@@ -392,6 +418,7 @@ export struct CardDetailPage {
     void this.hydratePhotoAt(index, 'high');
   }
 
+  // 加载作者头像。
   private async hydrateAuthorAvatar(generation: number): Promise<void> {
     if (this.detailAuthorAvatarUrl.length > 0 || !this.card.authorAvatarPath || !this.card.authorAvatarBucket) return;
     try {
@@ -402,18 +429,21 @@ export struct CardDetailPage {
     } catch (error) { if (generation === this.detailGeneration && error instanceof CloudBusinessError && ['CONTENT_ACCESS_DENIED', 'ACCOUNT_INACTIVE'].includes(error.code)) { this.clearDetailView(); this.status = '该作者当前不可访问。'; } }
   }
 
+  // 作者名称。
   private authorName(): string {
     if (this.detailAuthorNickname.length > 0) return this.detailAuthorNickname;
     const value = this.card.authorNickname;
     return value !== undefined && value.length > 0 ? value : '食刻用户';
   }
 
+  // 作者头像地址。
   private authorAvatarUrl(): string {
     if (this.detailAuthorAvatarUrl.length > 0) return this.detailAuthorAvatarUrl;
     const value = this.card.authorAvatarUrl;
     return value === undefined ? '' : value;
   }
 
+  // 大图高度（随屏幕宽度与图片比例）。
   private imageHeight(): number {
     const width: number = this.isWideDetail() ? this.detailPaneWidth() : Math.max(240, this.detailWidthVp - this.detailPadding() * 2);
     const photo: CardPhoto | undefined = this.detailPhotos[this.photoIndex];
@@ -422,38 +452,46 @@ export struct CardDetailPage {
     return Math.round(Math.max(180, Math.min(DETAIL_MEDIA_MAX_HEIGHT, available, natural)));
   }
 
+  // 是否为宽屏双栏布局。
   private isWideDetail(): boolean {
     return this.detailWidthVp >= BreakpointSystem.LARGE_MIN;
   }
 
+  // 页面内边距。
   private detailPadding(): number {
     return BreakpointSystem.pagePadding(BreakpointSystem.fromWidth(this.detailWidthVp));
   }
 
+  // 宽屏下详情栏宽度。
   private detailPaneWidth(): number {
     return Math.max(0, (this.detailWidthVp - this.detailPadding() * 2 - 24) / 2);
   }
 
+  // 内容栏宽度。
   private detailColumnWidth(): number | string {
     return this.isWideDetail() ? this.detailPaneWidth() : '100%';
   }
 
+  // 打开全屏图片预览。
   private openPhotoPreview(index: number): void {
     if (index < 0 || index >= this.detailPhotos.length || this.detailPhotos[index].url.length === 0) return;
     this.previewPhotoIndex = index;
     this.photoPreviewVisible = true;
   }
 
+  // 关闭全屏图片预览。
   private closePhotoPreview(): void {
     this.photoPreviewVisible = false;
   }
 
+  // 发布时间文字。
   private createdLabel(timestamp: number): string {
     if (timestamp <= 0) return '刚刚发布';
     const date = new Date(timestamp);
     return `${date.getMonth() + 1}月${date.getDate()}日`;
   }
 
+  // 点评文字。
   private reviewText(): string {
     const reviewText = typeof this.card.reviewText === 'string' ? this.card.reviewText.trim() : '';
     if (reviewText.length > 0) return reviewText;
@@ -461,18 +499,22 @@ export struct CardDetailPage {
       ? this.card.sellingPoints.join('；') : '发布者暂未填写点评。';
   }
 
+  // 评分文字。
   private tasteScoreText(): string {
     const score = typeof this.card.tasteScore === 'number' ? this.card.tasteScore : 0;
     return formatTasteScore(score);
   }
 
+  // 卡片分享链接（shike://card?cardId=…）。
   private cardLink(): string {
     return this.detailReady && this.card.status === 'APPROVED' ? cardDeepLink(this.card.id) : '';
   }
 
+  // 互动订阅是否仍属于当前详情。
   private interactionCurrent(generation: number): boolean {
     return generation === this.detailGeneration && this.detailReady && this.detailVisible && this.appActive;
   }
+  // 绑定 CardInteractionController（订阅互动状态变化）。
   private bindInteractions(generation: number): void {
     if (!this.loggedIn || AuthService.profile() === undefined || !CloudGateway.hasSession()) return;
     try {
@@ -497,6 +539,7 @@ export struct CardDetailPage {
       void controller.refreshState();
     } catch (error) { this.interactionMessage = errorText(error as ErrorDetail); }
   }
+  // 收藏前的准备（旧收藏未迁移时提示整理）。
   private async prepareFavorite(): Promise<void> {
     if (!this.requireAccount() || !this.detailReady || !this.detailVisible || !this.appActive || this.preparingCollection) return;
     const generation: number = this.detailGeneration;
@@ -524,6 +567,7 @@ export struct CardDetailPage {
     } finally { if (generation === this.detailGeneration) this.preparingCollection = false; }
   }
 
+  // 碰一碰分享前重新读取卡片，确认仍可分享。
   private async refreshForKnockShare(): Promise<boolean> {
     const generation: number = this.detailGeneration;
     const cardId: string = this.card.id;
@@ -541,14 +585,17 @@ export struct CardDetailPage {
     }
     return true;
   }
+  // 点击赞 / 踩。
   private react(reaction: CardReactionType): void {
     if (!this.requireAccount() || !this.detailReady || !this.detailVisible || !this.appActive) return;
     this.interactionController?.chooseReaction(reaction);
   }
+  // 点击收藏。
   private favorite(): void {
     if (!this.requireAccount() || !this.detailReady || !this.detailVisible || !this.appActive) return;
     this.interactionController?.chooseFavorite();
   }
+  // 互动区的提示文字。
   private interactionStatusText(): string {
     const messages: Array<string> = [];
     if (this.interactionMessage.length > 0) messages.push(this.interactionMessage);
@@ -557,6 +604,7 @@ export struct CardDetailPage {
     if (this.status.length > 0) messages.push(this.status);
     return messages.join('；');
   }
+  // 刷新互动状态。
   private async refreshInteractions(): Promise<void> {
     if (!this.requireAccount() || this.gateChecking) return;
     this.gateChecking = true;
@@ -565,8 +613,9 @@ export struct CardDetailPage {
     finally { this.gateChecking = false; }
   }
 
+  // 构造分享数据（卡片链接）。
   private cardLinkShareData(): systemShare.SharedData {
-    // SharedData is also required by harmonyShare; it does not open a share panel.
+    // harmonyShare 也需要 SharedData；这里只构造数据，不会打开分享面板。
     const record: systemShare.SharedRecord = {
       utd: utd.UniformDataType.HYPERLINK,
       content: this.cardLink(),
@@ -576,6 +625,7 @@ export struct CardDetailPage {
     return new systemShare.SharedData(record);
   }
 
+  // 开启 / 关闭碰一碰分享。
   private toggleKnockShare(): void {
     if (this.knockShareEnabled) {
       this.stopKnockShare('已结束碰一碰分享。');
@@ -605,6 +655,7 @@ export struct CardDetailPage {
     this.closeActionMenu();
   }
 
+  // 停止碰一碰分享并显示状态。
   private stopKnockShare(status: string): void {
     const wasEnabled: boolean = this.knockShareEnabled;
     this.knockShareGeneration += 1;
@@ -614,19 +665,21 @@ export struct CardDetailPage {
       try {
         harmonyShare.off('knockShare', this.knockShareListener);
       } catch (_error) {
-        // The system may already have removed the foreground callback.
+        // 系统可能已经移除了前台回调。
       }
     }
     if (status.length > 0) this.status = status;
   }
 
+  // 拒绝一次碰一碰分享请求。
   private async rejectKnockShare(target: harmonyShare.SharableTarget,
     reason: harmonyShare.SharableErrorCode): Promise<void> {
     try { await target.reject(reason); } catch (_error) {
-      // The system may already have closed this knock session.
+      // 系统可能已经关闭了这次碰一碰会话。
     }
   }
 
+  // 向碰一碰的目标设备发送分享数据。
   private async sendKnockShare(target: harmonyShare.SharableTarget): Promise<void> {
     if (!this.knockShareEnabled || this.knockShareBusy || !this.detailVisible
       || !this.appActive || this.cardLink().length === 0) {
@@ -656,10 +709,12 @@ export struct CardDetailPage {
     }
   }
 
+  // 价格文字。
   private priceText(): string {
     return cardPriceText(this.card);
   }
 
+  // 用系统浏览器打开来源链接（只允许 HTTPS）。
   private async openSource(): Promise<void> {
     const generation: number = this.detailGeneration; this.closeActionMenu();
     try { const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -669,31 +724,38 @@ export struct CardDetailPage {
     } catch (error) { if (generation === this.detailGeneration) { this.clearDetailView(); this.status = errorText(error as ErrorDetail); } }
   }
 
+  // 导航到店铺。
   private async navigateMerchant(): Promise<void> { const generation: number = this.detailGeneration; try { const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext; const fresh: FoodCard = await this.repository.detail(context, this.card.id); if (generation !== this.detailGeneration || !this.detailReady) return; if (fresh.consumptionMode !== 'DINE_IN' || !fresh.merchantId) throw new Error('当前卡片没有可导航的到店商家。'); const result: MerchantResponse = await new MerchantRepository().get(context, fresh.merchantId); if (generation !== this.detailGeneration || !this.detailReady) return; this.navigationAddress = result.merchant.address || result.merchant.name; await MerchantNavigationService.open(context, result.merchant); } catch (error) { if (generation === this.detailGeneration) this.status = errorText(error as ErrorDetail); } }
 
+  // 复制店铺地址。
   private async copyNavigationAddress(): Promise<void> { if (!this.detailReady || this.navigationAddress.length === 0) return; try { const data: pasteboard.PasteData = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, this.navigationAddress); await pasteboard.getSystemPasteboard().setData(data); this.status = '已复制商家地址。'; } catch (error) { this.status = errorText(error as ErrorDetail); } }
 
+  // 关闭操作菜单。
   private closeActionMenu(): void {
     this.actionMenuVisible = false;
   }
 
+  // 打开“发给好友”。
   private shareToFriend(): void {
     if (!this.requireAccount()) return;
     this.closeActionMenu();
     this.onShareToFriend(this.card);
   }
 
+  // 关闭所有弹层。
   private dismissOverlay(): void {
     this.closeActionMenu();
     this.closePhotoPreview();
   }
 
+  // 打开举报页。
   private openReport(): void {
     if (!this.requireAccount() || !this.detailReady) return;
     const request: ReportRoute = { targetType: 'CARD', targetId: this.card.id };
     this.closeActionMenu(); this.pathStack.pushPathByName('report-content', request);
   }
 
+  // 作者信息区。
   @Builder
   private authorHeader() {
     Row({ space: 10 }) {
@@ -730,11 +792,13 @@ export struct CardDetailPage {
     }.width('100%');
   }
 
+  // 作者所在地文字。
   private authorPlace(): string {
     return this.card.merchantNameSnapshot || (this.card.consumptionMode === 'DELIVERY' || this.card.consumptionMode === 'DINE_IN'
       ? '店铺未关联' : this.card.district || '历史发布位置');
   }
 
+  // 操作菜单中的一行。
   @Builder
   private menuRow(label: string, icon: Resource, danger: boolean, onTap: () => void) {
     Button({ type: ButtonType.Normal, stateEffect: true }) {
@@ -752,6 +816,7 @@ export struct CardDetailPage {
     .accessibilityText(label).onClick(onTap);
   }
 
+  // 操作菜单（编辑、删除、举报、分享等）。
   @Builder
   private actionMenu() {
     Column({ space: 2 }) {
@@ -784,6 +849,7 @@ export struct CardDetailPage {
     .backgroundColor(pageColor(this.palette, 'surface')).borderRadius({ topLeft: 24, topRight: 24 });
   }
 
+  // 碰一碰分享提示条。
   @Builder
   private knockShareNotice(): void {
     Column({ space: 8 }) {
@@ -811,6 +877,7 @@ export struct CardDetailPage {
     .accessibilityText('碰一碰分享已就绪；可随时点击结束。');
   }
 
+  // 图片轮播。
   @Builder
   private photoCarousel() {
     if (this.detailPhotos.length > 0) {
@@ -887,6 +954,7 @@ export struct CardDetailPage {
     }
   }
 
+  // 全屏图片预览。
   @Builder
   private photoPreview() {
     Stack({ alignContent: Alignment.Center }) {
@@ -937,24 +1005,27 @@ export struct CardDetailPage {
         Text(`完整实拍 ${this.previewPhotoIndex + 1} / ${this.detailPhotos.length}`).fontSize(12)
           .fontColor($r('app.color.on_danger_action')).width('100%').textAlign(TextAlign.Center);
       }
-      .width('100%').height('100%').padding({ left: 16, right: 16, top: 24, bottom: 28 });
+      .width('100%').height('100%').padding({ left: 16, right: 16, top: 24 + (this.heroLayout() ? this.topInset() : 0), bottom: 28 });
     }
     .width('100%').height('100%')
     .accessibilityText(`实拍图预览，共 ${this.detailPhotos.length} 张`);
   }
 
-  // ---- Pack 2: immersive hero (phone width) ----
+  // ---- 沉浸式大图（手机宽度）----
 
+  // 顶部安全区高度。
   private topInset(): number {
     return this.getUIContext().px2vp(this.systemTopPx);
   }
 
+  // 大图区域高度。
   private heroHeight(): number {
     const width: number = this.detailWidthVp > 0 ? this.detailWidthVp : 360;
     const limit: number = this.detailHeightVp > 0 ? this.detailHeightVp * 0.5 : 360;
     return Math.round(Math.max(220, Math.min(width * 0.82, limit)));
   }
 
+  // 第 index 张大图的地址。
   private heroUrl(index: number): string {
     const photo: CardPhoto | undefined = this.detailPhotos[index];
     if (photo === undefined) return '';
@@ -962,19 +1033,30 @@ export struct CardDetailPage {
     return this.coverUrls[index] || '';
   }
 
-  // Index paints the status-bar slice of the current hero photo while the page is scrolled to the top.
-  private syncEdgeImage(): void {
-    const url: string = this.detailVisible && this.detailReady && !this.isWideDetail() && this.heroAtTop &&
-      !this.photoPreviewVisible && !this.editingVisible ? this.heroUrl(this.photoIndex) : '';
-    if (url.length > 0) AppPageSurface.setEdgeImage(this.edgeOwner, url, this.heroHeight());
-    else AppPageSurface.clearEdgeImage(this.edgeOwner);
+  // 手机宽度的大图布局：大图由本页直接画到状态栏下（页面不预留顶部安全区），随页面一起转场。
+  private heroLayout(): boolean {
+    return this.detailReady && !this.isWideDetail() && !this.editingVisible;
   }
 
+  // 状态栏区域显示页面顶部色（而不是大图）：大图已滚走，或全屏预览打开时。
+  private statusStripVisible(): boolean {
+    return this.heroLayout() && (!this.heroAtTop || this.photoPreviewVisible);
+  }
+
+  // 大图正露在状态栏下时声明沉浸状态，让状态栏文字改为白色。
+  private syncEdgeImage(): void {
+    const immersive: boolean = this.detailVisible && this.heroLayout() && this.heroAtTop &&
+      !this.photoPreviewVisible && this.heroUrl(this.photoIndex).length > 0;
+    AppPageSurface.setImmersiveTop(this.edgeOwner, immersive);
+  }
+
+  // 大图滚动时更新“大图是否在顶部”（决定状态栏区域显示大图还是页面顶部色）。
   private onHeroScroll(): void {
     const atTop: boolean = this.detailScroller.currentOffset().yOffset <= 1;
     if (atTop !== this.heroAtTop) this.heroAtTop = atTop;
   }
 
+  // 沉浸式大图区域。
   @Builder
   private hero() {
     Stack({ alignContent: Alignment.Top }) {
@@ -984,9 +1066,8 @@ export struct CardDetailPage {
             Stack({ alignContent: Alignment.Top }) {
               Column().width('100%').height('100%').backgroundColor(pageColor(this.palette, 'soft'));
               if ((this.coverUrls[index] || '').length > 0 && !this.decodedPhotoUrls.includes(photo.url)) {
-                // Same size and fit as the status-bar slice drawn by Index, shifted up by the inset.
+                // 大图从页面顶边开始画，上面一段位于状态栏下。
                 Image(this.coverUrls[index]).width('100%').height(this.topInset() + this.heroHeight()).objectFit(ImageFit.Cover)
-                  .translate({ y: -this.topInset() })
                   .onError((): void => {
                     this.coverUrls = this.coverUrls.map((url: string, position: number): string => position === index ? '' : url);
                   })
@@ -994,7 +1075,6 @@ export struct CardDetailPage {
               }
               if (photo.url.length > 0) {
                 Image(photo.url).width('100%').height(this.topInset() + this.heroHeight()).objectFit(ImageFit.Cover)
-                  .translate({ y: -this.topInset() })
                   .onComplete((event): void => {
                     if (event !== undefined && event.loadingStatus === 1 && this.detailVisible && this.detailPhotos[index]?.url === photo.url) {
                       if (!this.decodedPhotoUrls.includes(photo.url)) this.decodedPhotoUrls = this.decodedPhotoUrls.concat([photo.url]);
@@ -1030,10 +1110,10 @@ export struct CardDetailPage {
                     .fontColor(pageColor(this.palette, 'action')).onClick((): void => this.retryPhoto(index));
                 }.width('100%').height('100%').justifyContent(FlexAlign.Center);
               }
-            }.width('100%').height(this.heroHeight());
+            }.width('100%').height(this.topInset() + this.heroHeight());
           }, (photo: CardPhoto): string => `${photo.id.length > 0 ? photo.id : photo.path}:${photo.url}`)
         }
-        .width('100%').height(this.heroHeight()).index(this.photoIndex).indicator(false)
+        .width('100%').height(this.topInset() + this.heroHeight()).index(this.photoIndex).indicator(false)
         .loop(false).onChange((index: number): void => {
           this.photoIndex = index;
           ImageRepository.subscriptionsChanged();
@@ -1041,28 +1121,31 @@ export struct CardDetailPage {
           void this.hydratePhotoAt(index, 'high');
           if (this.decodedPhotoUrls.includes(this.detailPhotos[index]?.url || '')) this.prefetchNextPhoto(index);
         });
-        // Continues the 35% scrim Index draws under the status bar, fading out over the photo.
-        Column().width('100%').height(90).hitTestBehavior(HitTestMode.None).accessibilityLevel('no')
-          .linearGradient({ direction: GradientDirection.Bottom, colors: [['#59000000', 0], ['#00000000', 1]] });
+        // 状态栏区域保持 35% 遮罩（白色状态栏文字可读），其下 90vp 逐渐淡出。
+        Column().width('100%').height(this.topInset() + 90).hitTestBehavior(HitTestMode.None).accessibilityLevel('no')
+          .linearGradient({ direction: GradientDirection.Bottom, colors: [['#59000000', 0],
+            ['#59000000', this.topInset() / (this.topInset() + 90)], ['#00000000', 1]] });
         if (this.detailPhotos.length > 1) {
           Row() {
             Blank();
             Text(`${this.photoIndex + 1} / ${this.detailPhotos.length}`).fontSize(11).fontColor('#FFF8EC')
               .height(22).padding({ left: 9, right: 9 }).borderRadius(11).backgroundColor('#8C14100A')
               .accessibilityText(`第 ${this.photoIndex + 1} 张，共 ${this.detailPhotos.length} 张实拍图`);
-          }.width('100%').padding({ right: 14 }).position({ x: 0, y: this.heroHeight() - 58 })
+          }.width('100%').padding({ right: 14 }).position({ x: 0, y: this.topInset() + this.heroHeight() - 58 })
             .hitTestBehavior(HitTestMode.None);
         }
       } else {
         Column({ space: 6 }) {
           Text('暂无发布者实拍图').fontSize(15).fontWeight(FontWeight.Medium).fontColor(pageColor(this.palette, 'muted'));
           Text('卡片仍可查看点评、商品信息与来源。').fontSize(12).fontColor(pageColor(this.palette, 'muted'));
-        }.width('100%').height(this.heroHeight() * 0.6).justifyContent(FlexAlign.Center)
+        }.width('100%').height(this.topInset() + this.heroHeight() * 0.6).padding({ top: this.topInset() })
+          .justifyContent(FlexAlign.Center)
           .backgroundColor(pageColor(this.palette, 'soft'));
       }
     }.width('100%');
   }
 
+  // 浮动顶部栏（返回、更多）。
   @Builder
   private floatingTopBar() {
     Row() {
@@ -1078,10 +1161,11 @@ export struct CardDetailPage {
       .width(40).height(40).backgroundColor('#6B14100A').accessibilityText('更多帖子操作')
       .onClick((): void => { this.actionMenuVisible = !this.actionMenuVisible; });
     }
-    .width('100%').padding({ left: 12, right: 12, top: 8 }).position({ x: 0, y: 0 })
+    .width('100%').padding({ left: 12, right: 12, top: 8 + this.topInset() }).position({ x: 0, y: 0 })
     .hitTestBehavior(HitTestMode.Transparent);
   }
 
+  // 详情内容卡片。
   @Builder
   private detailSheet() {
     Column({ space: 14 }) {
@@ -1095,6 +1179,7 @@ export struct CardDetailPage {
     .borderRadius({ topLeft: 24, topRight: 24 });
   }
 
+  // 互动按钮行。
   @Builder
   private cardActions(): void {
     Column({ space: 6 }) {
@@ -1149,6 +1234,7 @@ export struct CardDetailPage {
       .border({ width: { top: 1.2 }, color: pageColor(this.palette, 'line'), style: BorderStyle.Dashed })
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM]);
   }
+  // 标题区。
   @Builder
   private detailHeading(): void {
     Row({ space: 12 }) {
@@ -1158,6 +1244,7 @@ export struct CardDetailPage {
       Text('美食笔记').fontSize(18).fontWeight(FontWeight.Medium).fontColor(pageColor(this.palette, 'ink')).layoutWeight(1);
     }.width('100%').padding({ left: 8, right: 16, top: 4, bottom: 4 });
   }
+  // 点评区。
   @Builder
   private reviewSection() {
     Stack({ alignContent: Alignment.TopEnd }) {
@@ -1182,11 +1269,13 @@ export struct CardDetailPage {
     }.width('100%').margin({ top: 8 });
   }
 
+  // 是否显示评分印章。
   private scoreStampVisible(): boolean {
     const score: number = typeof this.card.tasteScore === 'number' ? this.card.tasteScore : 0;
     return Number.isInteger(score) && score >= 1 && score <= 10;
   }
 
+  // 商品信息列表项。
   private infoItems(): Array<DetailInfoItem> {
     const items: Array<DetailInfoItem> = [];
     const shop: string = this.card.merchantNameSnapshot || this.card.shop;
@@ -1205,6 +1294,7 @@ export struct CardDetailPage {
     return items;
   }
 
+  // 信息行边框。
   private infoBorder(last: boolean): BorderOptions {
     if (last) {
       const none: BorderOptions = { width: 0 };
@@ -1214,6 +1304,7 @@ export struct CardDetailPage {
     return dashed;
   }
 
+  // 信息行图标。
   @Builder
   private infoIcon(kind: string) {
     if (kind === 'store') {
@@ -1233,6 +1324,7 @@ export struct CardDetailPage {
     }
   }
 
+  // 一行商品信息。
   @Builder
   private infoRow(item: DetailInfoItem, last: boolean) {
     Row({ space: 10 }) {
@@ -1244,6 +1336,7 @@ export struct CardDetailPage {
     }.width('100%').padding({ top: 10, bottom: 10 }).alignItems(VerticalAlign.Center).border(this.infoBorder(last));
   }
 
+  // 胶囊按钮。
   @Builder
   private pillAction(label: string, icon: Resource, onTap: () => void) {
     Button({ type: ButtonType.Capsule, stateEffect: true }) {
@@ -1257,6 +1350,7 @@ export struct CardDetailPage {
     .accessibilityText(label).onClick(onTap);
   }
 
+  // 商品信息区。
   @Builder
   private productInfo(): void {
     Column({ space: 12 }) {
@@ -1299,8 +1393,10 @@ export struct CardDetailPage {
     }.width('100%');
   }
 
+  // 当前登录用户 uid（判断是否为作者）。
   private editorUid(): string { const profile = AuthService.profile(); return profile === undefined ? '' : profile.uid; }
 
+  // 页面布局。
   build() {
     NavDestination() {
       if (this.editingVisible && this.loggedIn && this.detailReady) {
@@ -1358,6 +1454,11 @@ export struct CardDetailPage {
             Column() {}.width('100%').height('100%').backgroundColor($r('app.color.scrim')).onClick((): void => this.dismissOverlay());
             this.actionMenu();
           }
+          if (this.statusStripVisible()) {
+            // 大图滚走或预览打开时，状态栏区域显示页面顶部色。
+            Column().width('100%').height(this.topInset()).backgroundColor(pageColor(this.palette, 'header'))
+              .position({ x: 0, y: 0 }).hitTestBehavior(HitTestMode.None).accessibilityLevel('no');
+          }
         }.width('100%').height('100%').backgroundColor(pageColor(this.palette, 'canvas'))
           .onAreaChange((_oldArea: Area, newArea: Area): void => {
             const height: number = Number(newArea.height); const width: number = Number(newArea.width);
@@ -1365,14 +1466,14 @@ export struct CardDetailPage {
             if (Number.isFinite(width) && width > 0 && this.detailWidthVp !== width) this.detailWidthVp = width;
           });
       }
-    }.hideTitleBar(!this.editingVisible).attributeModifier(new AppDestinationStyle(this.editingVisible ? '编辑推荐' : '', pageColor(this.palette, 'canvas'), pageColor(this.palette, 'header'), this.palette))
+    }.hideTitleBar(!this.editingVisible).attributeModifier(new AppDestinationStyle(this.editingVisible ? '编辑推荐' : '', pageColor(this.palette, 'canvas'), pageColor(this.palette, 'header'), this.palette, this.heroLayout()))
       .onShown((): void => {
         this.reducedMotion = this.motionObserver.start();
         if (!this.detailVisible) { this.detailVisible = true; if (this.appActive) void this.loadDetail(); }
         this.syncEdgeImage();
       })
       .onHidden((): void => {
-        AppPageSurface.clearEdgeImage(this.edgeOwner);
+        AppPageSurface.setImmersiveTop(this.edgeOwner, false);
         this.motionObserver.stop(); this.reducedMotion = true;
         this.savedScrollY = this.detailScroller.currentOffset().yOffset;
         if (this.restoreTimer !== -1) { clearTimeout(this.restoreTimer); this.restoreTimer = -1; }

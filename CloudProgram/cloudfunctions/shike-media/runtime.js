@@ -1,3 +1,10 @@
+/**
+ * 【文件职责】shike-media 的实现：所有 Cloud Storage 读写集中在这里（使用平台注入的 PROJECT_CREDENTIAL）。
+ *   - 客户端接口：prepareCardPhoto / uploadCardPhoto / confirmCardPhotoUpload / getPublicMedia（均校验 AGC Token 与 CardMedia 记录）；
+ *   - 内部接口 execute：校验 shike-service 的 HMAC 签名（SHIKE_MEDIA_INTERNAL_KEY，60 秒内有效）后执行 write-approved / promote / remove；
+ *   - 封面：buildCover 在上传后生成 480px 封面（需 SHIKE_MEDIA_COVERS_VERIFIED=true）；runCoverBackfill 给维护函数回填旧图封面。
+ * 存储路径：公开原图 public/approved/{storageUid}/{mediaId}.jpg、封面 *.cover-v1.jpg、直传暂存 private/pending/{uid}/{mediaId}.jpg。
+ */
 'use strict';
 const { errorCode, requestId, READ_OPT_VERSION, shouldReadMetrics } = require('./shared/read-errors');
 
@@ -10,21 +17,15 @@ const { createContentPolicy, policyModels, accessError } = require('./shared/con
 const { AGCClient, CredentialParser } = require('@agconnect/common-server');
 const { AGCCloudStorage } = require('@agconnect/cloudstorage-server');
 
+// 单张图片上限 2MB、内部请求有效期 60 秒、存储客户端名。
 const MAX_PHOTO_BYTES = 2 * 1024 * 1024;
 const MAX_REQUEST_AGE_MS = 60 * 1000;
 const STORAGE_CLIENT_NAME = 'shike-media-storage-server';
 let storageReady = false;
 const readMetricsScope = new AsyncLocalStorage();
 
-class CloudDbModel {
-  getFieldTypeMap() { return new Map(Object.entries(this.constructor.fieldTypes)); }
-  getClassName() { return this.constructor.name; }
-  getPrimaryKeyList() { return [...this.constructor.primaryKeys]; }
-  getIndexList() { return [...this.constructor.indexes]; }
-  getEncryptedFieldList() { return []; }
-}
-
-const { CardMedia } = require('./shared/image-models');
+// Cloud DB 模型基类与本函数用到的模型（字段与 objecttype 一致）。
+const { CloudDbModel, CardMedia } = require('./shared/image-models');
 
 class IdentityBinding extends CloudDbModel {}
 IdentityBinding.fieldTypes = Object.freeze({
@@ -41,12 +42,14 @@ MaintenanceJob.indexes = Object.freeze(["status,runAfterAt,jobId", "status,lease
 
 const OBJECT_TYPES = Object.freeze({ ...policyModels, CardMedia, IdentityBinding, MaintenanceJob });
 
+// 读取必需的环境变量。
 function required(env, name) {
   const value = String((env || {})[name] || '').trim();
   if (!value) throw new Error(`云端缺少 ${name} 配置。`);
   return value;
 }
 
+// 取得存储桶（SHIKE_STORAGE_BUCKET）客户端，首次调用时初始化平台凭据。
 function storageBucket(env) {
   if (!storageReady) {
     const credential = CredentialParser.toCredentialWithContents(required(env, 'PROJECT_CREDENTIAL'));
@@ -57,6 +60,7 @@ function storageBucket(env) {
     .bucket(required(env, 'SHIKE_STORAGE_BUCKET'), 'CN');
 }
 
+// 校验对象路径（只允许 public/approved 与 private/pending 下的合法路径）。
 function validKey(value) {
   const key = String(value || '').trim();
   if (!/^public\/approved\/[^/]+\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:\.cover-v1)?\.jpg$/i.test(key)
@@ -66,6 +70,7 @@ function validKey(value) {
   return key;
 }
 
+// 取得 Cloud DB 集合（包装读取计量）。
 function collection(env, name) {
   const zoneName = String((env && env.SHIKE_DB_ZONE) || process.env.SHIKE_DB_ZONE || 'shike');
   const objectType = OBJECT_TYPES[name];
@@ -81,6 +86,7 @@ function collection(env, name) {
   } });
 }
 
+// 给查询包装计量。
 function measuredQuery(target, name, metrics) {
   const proxy = new Proxy(target, { get(object, property) {
     if (property === 'get') return async (...args) => {
@@ -116,6 +122,7 @@ function measuredQuery(target, name, metrics) {
   return proxy;
 }
 
+// 收集一次操作的读取指标。
 async function withReadMetrics(operation, env, action, id) {
   if (!shouldReadMetrics(env, id)) return action();
   const counter = () => ({ calls: 0, failures: 0, ms: 0, successfulBytes: 0 });
@@ -134,7 +141,7 @@ async function withReadMetrics(operation, env, action, id) {
       throw error;
     }
     finally {
-      // SDK call counts and successful payload bytes are not HTTP attempts or billable totals.
+      // 这里统计的是 SDK 调用次数与成功传输的字节数，不等于 HTTP 请求次数或计费总量。
       console.info(`read.metrics metricsVersion=o0-20261008-v1 boundary=media operation=${operation} action=${metrics.action || 'none'} requestId=${id || 'not-provided'} functionVersion=${READ_OPT_VERSION} outcome=${outcome} code=${code || 'OK'} failureCollection=${failureCollection || 'none'} queryGetCount=${metrics.queryGetCount} ` +
         `queriedRows=${metrics.queriedRows} queryFailures=${metrics.queryFailures} busyErrors=${metrics.busyErrors} ` +
         `dbMs=${metrics.dbMs} totalMs=${Date.now() - started} metricsComplete=${metrics.inFlightQueries === 0 && metrics.inFlightDependencies === 0} pendingQueryGetCount=${metrics.inFlightQueries} pendingDependencyCallCount=${metrics.inFlightDependencies} queryScope=wrapped-query-get dependencyScope=logical-sdk-calls ` +
@@ -145,6 +152,7 @@ async function withReadMetrics(operation, env, action, id) {
   });
 }
 
+// 计量一次存储调用。
 async function measuredCall(category, method, action, byteSize = 0) {
   const metrics = readMetricsScope.getStore();
   if (!metrics) return action();
@@ -160,19 +168,23 @@ async function measuredCall(category, method, action, byteSize = 0) {
   finally { counter.ms += Date.now() - started; metrics.inFlightDependencies -= 1; }
 }
 
+// 取查询结果的第一行。
 async function one(query) {
   const rows = await query.limit(1).get();
   return rows.length > 0 ? rows[0] : null;
 }
 
+// 创建内容策略实例。
 function contentPolicy(env) {
   return createContentPolicy((name) => collection(env, name), one);
 }
 
+// IdentityBinding 主键（与 shike-service 相同算法）。
 function identityBindingId(provider, providerUid) {
   return crypto.createHash('sha256').update(`shike-identity:${String(provider)}:${String(providerUid)}`).digest('hex');
 }
 
+// 校验 AGC Token 并映射到业务 UID（与 shike-service 的 verifiedIdentity 一致）。
 async function verifiedIdentity(accessToken, env, readOnly = false, policy = contentPolicy(env)) {
   if (!accessToken || String(accessToken).length > 8192) throw accessError('未登录或登录状态已失效。','AUTH_REQUIRED');
   let providerUid = '';
@@ -199,6 +211,7 @@ async function verifiedIdentity(accessToken, env, readOnly = false, policy = con
   return { providerUid, canonicalUid };
 }
 
+// 公开原图路径。
 function approvedObjectKey(storageUid, mediaId) {
   const uid = String(storageUid || '');
   const id = String(mediaId || '');
@@ -209,11 +222,13 @@ function approvedObjectKey(storageUid, mediaId) {
   return `public/approved/${uid}/${id}.jpg`;
 }
 
+// 从公开路径中解析 mediaId。
 function mediaIdFromApprovedObjectKey(objectKey) {
   const match = /^public\/approved\/[^/]+\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jpg$/i.exec(String(objectKey || ''));
   return match ? match[1] : '';
 }
 
+// 校验 shike-service 发来的签名请求（HMAC + 时间戳 + nonce）。
 function verifySignedInput(input, env) {
   const body = String(input && input.body || '');
   const signature = String(input && input.signature || '').toLowerCase();
@@ -240,6 +255,7 @@ function verifySignedInput(input, env) {
   return request;
 }
 
+// Base64 解码并校验大小与 sha256。
 function bytesFromBase64(value, expectedSha256) {
   const encoded = String(value || '');
   const maximumLength = Math.ceil(MAX_PHOTO_BYTES / 3) * 4 + 4;
@@ -255,6 +271,7 @@ function bytesFromBase64(value, expectedSha256) {
   return bytes;
 }
 
+// 从存储读取文件字节。
 function readFileBytes(file) {
   return measuredCall('storage', 'download', () => new Promise((resolve, reject) => {
     const chunks = [];
@@ -266,6 +283,7 @@ function readFileBytes(file) {
   }));
 }
 
+// 把字节写入公开路径（附带 sha256 元数据）。
 async function writeApproved(payload, env) {
   const key = validKey(payload && payload.key);
   if (!key.startsWith('public/approved/')) throw new Error('媒体上传路径无效。');
@@ -292,10 +310,7 @@ async function writeApproved(payload, env) {
 }
 
 
-async function readApproved(payload, env) {
-  const key = validKey(payload && payload.key);
-  return require('./shared/image-reader').readLegacy({ ...payload, key, mediaId: mediaIdFromApprovedObjectKey(key), mode: 'PUBLIC', viewerUid: '' }, env);
-}
+// 生成 480px 封面并在事务中把封面信息写入 CardMedia（源图变化时放弃）。
 async function buildCover(media,env,sourceBytes){
  if(String(env.SHIKE_MEDIA_COVERS_VERIFIED)!=='true')return false;
  try{mediaVariant(media,'COVER_480');return true;}catch(_){}
@@ -316,15 +331,7 @@ async function buildCover(media,env,sourceBytes){
  if(!committed||!saved){await remove({keys:[coverKey]},env);return false;}return true;
 }
 
-async function readRevision(payload, env) {
-  const key = validKey(payload && payload.key);
-  return require('./shared/image-reader').readLegacy({ ...payload, key, mediaId: mediaIdFromApprovedObjectKey(key), mode: 'REVISION' }, env);
-}
-async function readModeration(payload, env) {
-  const key = validKey(payload && payload.key);
-  return require('./shared/image-reader').readLegacy({ ...payload, key, mediaId: mediaIdFromApprovedObjectKey(key), mode: 'REVIEW' }, env);
-}
-
+// promote：把暂存区对象复制到公开路径并删除暂存对象。
 async function promote(payload, env) {
   const pendingKey = validKey(payload && payload.pendingKey);
   const approvedKey = validKey(payload && payload.approvedKey);
@@ -340,6 +347,7 @@ async function promote(payload, env) {
   return { exists: true };
 }
 
+// remove：删除对象（原图会连同封面一起删除）。
 async function remove(payload, env) {
   const originals = Array.isArray(payload && payload.keys) ? payload.keys : [];
   const keys = [...new Set(originals.flatMap(key => /^public\/approved\/[^/]+\/[0-9a-f-]{36}\.jpg$/i.test(key) ? [key, key.slice(0,-4)+'.cover-v1.jpg'] : [key]))];
@@ -351,6 +359,7 @@ async function remove(payload, env) {
   return { deleted: keys.length };
 }
 
+// 校验准备上传的图片参数（JPEG、≤2MB、长边 ≤1600px、sha256）。
 function validatePreparedPhoto(payload) {
   if (String(payload && payload.mimeType || '') !== 'image/jpeg') throw new Error('实拍图必须处理为 JPEG。');
   const byteSize = Number(payload && payload.byteSize);
@@ -365,6 +374,7 @@ function validatePreparedPhoto(payload) {
   return { byteSize, width, height, sha256 };
 }
 
+// prepare-card-photo：写入 PENDING_UPLOAD 记录，返回 mediaId、目标路径与桶名。
 async function prepareCardPhoto(input, env) {
   const identity = await verifiedIdentity(input && input.accessToken, env);
   const prepared = validatePreparedPhoto(input && input.payload);
@@ -388,9 +398,8 @@ async function prepareCardPhoto(input, env) {
   return { mediaId, cloudPath: objectKey, bucketName: required(env, 'SHIKE_STORAGE_BUCKET') };
 }
 
-async function uploadCardPhoto(input, env) {
-  const identity = await verifiedIdentity(input && input.accessToken, env);
-  const payload = input && input.payload || {};
+// 上传 / 直传确认共用：校验 mediaId 与 sha256，读取调用者本人尚未使用、仍处于 PENDING_UPLOAD 的准备记录。
+async function pendingMediaFor(identity, payload, env) {
   const mediaId = String(payload.mediaId || '').trim();
   const sha256 = String(payload.sha256 || '').trim().toLowerCase();
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(mediaId)) throw new Error('图片上传标识无效。');
@@ -400,6 +409,14 @@ async function uploadCardPhoto(input, env) {
     throw new Error('图片不存在、不属于当前用户或已被使用。');
   }
   if (String(media.status || '') !== 'PENDING_UPLOAD') throw new Error('图片已上传或状态无效，请重新选择。');
+  return { media, mediaId, sha256 };
+}
+
+// upload-card-photo：校验 Base64 内容与准备记录一致后写入公开路径，并生成封面。
+async function uploadCardPhoto(input, env) {
+  const identity = await verifiedIdentity(input && input.accessToken, env);
+  const payload = input && input.payload || {};
+  const { media, mediaId, sha256 } = await pendingMediaFor(identity, payload, env);
   const bytes = bytesFromBase64(payload.dataBase64, sha256);
   const preparedSha256 = String(media.preparedSha256 || '').toLowerCase();
   if (!/^[a-f0-9]{64}$/.test(preparedSha256)) {
@@ -414,22 +431,13 @@ async function uploadCardPhoto(input, env) {
   return { success: true };
 }
 
-// Pack 3.3 (2026-10-15): the client uploaded the prepared JPEG itself to private/pending/{storageUid}/{mediaId}.jpg
-// (Cloud Storage rules allow that only for the signed-in AGC user). This reads it back, checks owner, size and
-// sha256 against the prepare record, then writes the public object exactly like uploadCardPhoto does.
-// Any failure leaves the prepare record untouched, so the client can still fall back to upload-card-photo.
+/**
+ * confirm-card-photo-upload：客户端已把准备好的 JPEG 自己上传到 private/pending/{storageUid}/{mediaId}.jpg（存储规则只允许已登录的 AGC 用户本人写入）。这里读回文件，核对所有者、大小与 sha256 是否与准备记录一致，然后与 uploadCardPhoto 一样写入公开对象。任何失败都不改动准备记录，客户端仍可回落到 upload-card-photo。
+ */
 async function confirmCardPhotoUpload(input, env) {
   const identity = await verifiedIdentity(input && input.accessToken, env);
   const payload = input && input.payload || {};
-  const mediaId = String(payload.mediaId || '').trim();
-  const sha256 = String(payload.sha256 || '').trim().toLowerCase();
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(mediaId)) throw new Error('图片上传标识无效。');
-  if (!/^[a-f0-9]{64}$/.test(sha256)) throw new Error('图片摘要无效。');
-  const media = await one(collection(env, 'CardMedia').query().equalTo('id', mediaId));
-  if (!media || String(media.ownerUid || '') !== identity.canonicalUid || String(media.cardId || '')) {
-    throw new Error('图片不存在、不属于当前用户或已被使用。');
-  }
-  if (String(media.status || '') !== 'PENDING_UPLOAD') throw new Error('图片已上传或状态无效，请重新选择。');
+  const { media, mediaId, sha256 } = await pendingMediaFor(identity, payload, env);
   const storageUid = String(media.storageUid || identity.providerUid);
   if (storageUid !== identity.providerUid) throw accessError('上传账号与准备记录不一致。', 'UPLOAD_OWNER_MISMATCH');
   const preparedSha256 = String(media.preparedSha256 || '').toLowerCase();
@@ -445,6 +453,7 @@ async function confirmCardPhotoUpload(input, env) {
   return { success: true };
 }
 
+// get-public-media：按公开模式读取图片（校验桶名与路径）。
 async function getPublicMedia(input, env) {
   const payload = input && input.payload || {};
   if (String(payload.bucketName || '').trim() !== required(env, 'SHIKE_STORAGE_BUCKET')) throw new Error('图片所属存储实例无效。');
@@ -452,6 +461,7 @@ async function getPublicMedia(input, env) {
   return require('./shared/image-reader').readLegacy({ ...payload, key, mediaId: mediaIdFromApprovedObjectKey(key), mode: 'PUBLIC', viewerUid: '', readRequestId: input && input.readRequestId }, env);
 }
 
+// 维护任务：逐张为旧图片回填封面（租约 + 断点，连续失败 3 次暂停）。
 async function runCoverBackfill(env,retryFailed=false){
  if(String(env.SHIKE_MEDIA_COVERS_VERIFIED)!=='true')return {status:'NOT_READY',reason:'SHIKE_MEDIA_COVERS_VERIFIED'};
  const jobs=collection(env,'MaintenanceJob'),jobId='media-cover-backfill-v1',lease=crypto.randomUUID(),now=Date.now();let job;
@@ -479,27 +489,27 @@ async function runCoverBackfill(env,retryFailed=false){
  return {status,processed:checkpoint.processed,errors:checkpoint.errors,lastErrorCode:error};
 }
 
+// 内部接口分发（只接受签名请求）。
 async function execute(input, env) {
   const request = verifySignedInput(input, env);
   const metrics = readMetricsScope.getStore();
-  if (metrics && ['write-approved', 'read-approved', 'read-revision', 'read-moderation', 'promote', 'remove'].includes(request.action)) metrics.action = request.action;
+  if (metrics && ['write-approved', 'promote', 'remove'].includes(request.action)) metrics.action = request.action;
   switch (request.action) {
     case 'write-approved': return writeApproved(request.payload, env);
-    case 'read-approved': return readApproved(request.payload, env);
-    case 'read-revision': return readRevision(request.payload, env);
-    case 'read-moderation': return readModeration(request.payload, env);
     case 'promote': return promote(request.payload, env);
     case 'remove': return remove(request.payload, env);
     default: throw new Error('未知的媒体服务操作。');
   }
 }
 
+// 脱敏错误日志。
 function safeLogError(error) {
   const message = error instanceof Error ? error.message.replace(/(accessToken|authorization|signature|body)=[^\s,]+/ig, '$1=[REDACTED]') : 'unknown error';
   const checks = ['NOT_BINARY', 'BYTE_BUDGET', 'SIZE_MISMATCH', 'JPEG_MARKERS', 'SHA256_MISMATCH'];
   return error && checks.includes(error.integrityCheck) ? message + ' integrityCheck=' + error.integrityCheck : message;
 }
 
+// 导出：客户端接口都包装了读取计量；runCoverBackfill 供维护函数使用。
 module.exports = {
   execute: (input, env) => withReadMetrics('execute', env, () => execute(input, env), requestId(input)),
   prepareCardPhoto: (input, env) => withReadMetrics('prepare-card-photo', env, () => prepareCardPhoto(input, env), requestId(input)),

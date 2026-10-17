@@ -8,7 +8,9 @@ import { ImageRepository } from '../service/ImageRepository';
 import { PhotoUploadService } from '../service/PhotoUploadService';
 import { ErrorDetail, errorText } from '../common/ErrorKit';
 
-// Pack 4.3 (2026-10-15): split out of ProfileSubPages.ets without behaviour changes.
+/**
+ * 【文件职责】编辑资料页面：修改昵称、头像（选图 → 拖动/双指缩放裁剪 → 本机处理 → 上传）与主页背景（选图 → 处理 → 上传 / 恢复默认），最后通过 upsert-profile 保存。
+ */
 
 const AVATAR_CROP_VIEWPORT = 240;
 
@@ -16,6 +18,7 @@ const CLOUD_BUSY_MAX_ATTEMPTS = 3;
 
 const CLOUD_BUSY_RETRY_BASE_DELAY_MS = 800;
 
+// 编辑资料页面。
 @Component
 export struct ProfileEditPage {
   onProfileChanged: (profile: UserProfile) => void = (_profile: UserProfile): void => {};
@@ -50,6 +53,7 @@ export struct ProfileEditPage {
   private cropTouchStartDistance: number = 0;
   private cropTouchStartScale: number = 1;
 
+  // 出现时读取当前资料。
   aboutToAppear(): void {
     this.profile = AuthService.profile();
     this.nickname = this.profile?.nickname || '';
@@ -63,6 +67,7 @@ export struct ProfileEditPage {
     this.status = '';
   }
 
+  // 补全当前主页背景的本地地址。
   private async resolveCurrentCover(): Promise<void> {
     const profile = this.profile;
     if (profile === undefined || profile.coverPath === undefined || profile.coverPath.length === 0 ||
@@ -76,6 +81,7 @@ export struct ProfileEditPage {
     }
   }
 
+  // 当前裁剪参数。
   private cropSpec(): AvatarCrop {
     return {
       scale: this.cropScale,
@@ -84,20 +90,24 @@ export struct ProfileEditPage {
     };
   }
 
+  // 把数值限制在区间内。
   private bounded(value: number, minimum: number, maximum: number): number {
     return Math.max(minimum, Math.min(maximum, value));
   }
 
+  // 清除已准备的头像上传。
   private clearAvatarUpload(): void {
     this.avatarUpload = undefined;
     this.avatarUploadCompleted = false;
   }
 
+  // 清除已准备的背景上传。
   private clearCoverUpload(): void {
     this.coverUpload = undefined;
     this.coverUploadCompleted = false;
   }
 
+  // 选择主页背景图并在本机处理。
   private async chooseCover(): Promise<void> {
     if (this.saving || this.preparingCover || this.preparingAvatar) return;
     try {
@@ -120,6 +130,7 @@ export struct ProfileEditPage {
     }
   }
 
+  // 上传已处理的背景图，返回 mediaId。
   private async uploadPreparedCover(context: common.UIAbilityContext): Promise<string> {
     const cover: PreparedPhoto | undefined = this.preparedCover;
     if (cover === undefined) return '';
@@ -146,6 +157,7 @@ export struct ProfileEditPage {
     return upload.mediaId;
   }
 
+  // 恢复默认背景。
   private clearCover(): void {
     if (this.saving || this.preparingCover) return;
     this.preparedCover = undefined;
@@ -155,17 +167,20 @@ export struct ProfileEditPage {
     this.status = '将恢复食刻默认背景，保存后生效。';
   }
 
+  // 是否为数据库繁忙错误（3007009）。
   private isCloudBusyError(error: ErrorDetail): boolean {
     const message = errorText(error).toLowerCase();
     return message.includes('3007009') || message.includes('too many requests') || message.includes('too busy');
   }
 
+  // 等待一段时间后重试。
   private waitForCloudRetry(delayMs: number): Promise<void> {
     return new Promise<void>((resolve) => {
       setTimeout((): void => resolve(), delayMs);
     });
   }
 
+  // 遇到数据库繁忙时自动重试几次。
   private async retryCloudBusy<T>(operationName: string, operation: () => Promise<T>): Promise<T> {
     for (let attempt = 1; attempt <= CLOUD_BUSY_MAX_ATTEMPTS; attempt++) {
       try {
@@ -183,6 +198,7 @@ export struct ProfileEditPage {
     throw new Error(`${operationName}未完成，请稍后重试。`);
   }
 
+  // 上传已处理的头像，返回 mediaId。
   private async uploadPreparedAvatar(context: common.UIAbilityContext): Promise<string> {
     const avatar: PreparedPhoto | undefined = this.preparedAvatar;
     if (avatar === undefined) return '';
@@ -209,20 +225,21 @@ export struct ProfileEditPage {
     return upload.mediaId;
   }
 
+  // 两个触点之间的距离（用于双指缩放）。
   private cropTouchDistance(first: TouchObject, second: TouchObject): number {
     const deltaX = second.x - first.x;
     const deltaY = second.y - first.y;
     return Math.sqrt(deltaX * deltaX + deltaY * deltaY);
   }
 
+  // 重置触摸状态。
   private resetCropTouch(): void {
     this.activeCropTouchId = -1;
     this.cropTouchStartDistance = 0;
   }
 
   /**
-   * Handles touch input on the crop frame itself. The frame stays fixed while
-   * the source image moves underneath it, matching the common avatar-crop flow.
+   * 处理裁剪框上的触摸：裁剪框保持不动，原图在下面移动（单指拖动、双指缩放），与常见的头像裁剪交互一致。
    */
   private handleCropTouch(viewport: number, event: TouchEvent): void {
     if (!this.cropEditing || this.saving || this.preparingAvatar) return;
@@ -293,6 +310,7 @@ export struct ProfileEditPage {
     }
   }
 
+  // 重置裁剪位置。
   private resetCropPosition(): void {
     this.cropScale = 1;
     this.cropOffsetX = 0;
@@ -300,6 +318,7 @@ export struct ProfileEditPage {
     this.status = '已重置取景位置。';
   }
 
+  // 预览中图片的宽度。
   private previewImageWidth(viewport: number): number {
     if (this.cropImageWidth <= 0 || this.cropImageHeight <= 0) return viewport;
     const baseWidth = this.cropImageWidth >= this.cropImageHeight
@@ -307,6 +326,7 @@ export struct ProfileEditPage {
     return baseWidth * this.cropScale;
   }
 
+  // 预览中图片的高度。
   private previewImageHeight(viewport: number): number {
     if (this.cropImageWidth <= 0 || this.cropImageHeight <= 0) return viewport;
     const baseHeight = this.cropImageHeight >= this.cropImageWidth
@@ -314,14 +334,17 @@ export struct ProfileEditPage {
     return baseHeight * this.cropScale;
   }
 
+  // 预览中图片的水平偏移。
   private previewPanX(viewport: number): number {
     return Math.max(0, (this.previewImageWidth(viewport) - viewport) / 2);
   }
 
+  // 预览中图片的垂直偏移。
   private previewPanY(viewport: number): number {
     return Math.max(0, (this.previewImageHeight(viewport) - viewport) / 2);
   }
 
+  // 清除裁剪状态。
   private clearCrop(): void {
     this.resetCropTouch();
     this.cropSourceUri = '';
@@ -333,6 +356,7 @@ export struct ProfileEditPage {
     this.cropEditing = false;
   }
 
+  // 选择头像图片并进入裁剪。
   private async chooseAvatar(): Promise<void> {
     if (this.saving || this.preparingAvatar || this.preparingCover) return;
     try {
@@ -358,6 +382,7 @@ export struct ProfileEditPage {
     }
   }
 
+  // 应用裁剪：在本机生成头像 JPEG。
   private async applyAvatarCrop(): Promise<void> {
     if (this.cropSourceUri.length === 0 || this.saving || this.preparingAvatar || this.preparingCover) return;
     this.preparingAvatar = true;
@@ -378,6 +403,7 @@ export struct ProfileEditPage {
     }
   }
 
+  // 取消裁剪。
   private cancelAvatarCrop(): void {
     if (this.preparingAvatar) return;
     this.preparedAvatar = undefined;
@@ -386,6 +412,7 @@ export struct ProfileEditPage {
     this.status = '已取消这次头像选择。';
   }
 
+  // 保存资料：先上传头像/背景（如有），再调用 upsert-profile。
   private async save(): Promise<void> {
     if (this.cropEditing) {
       this.status = '请先确认或取消头像取景，再保存资料。';
@@ -439,6 +466,7 @@ export struct ProfileEditPage {
     }
   }
 
+  // 裁剪预览。
   @Builder
   private avatarCropPreview(viewport: number, description: string) {
     Stack({ alignContent: Alignment.Center }) {
@@ -461,6 +489,7 @@ export struct ProfileEditPage {
     .accessibilityText(description);
   }
 
+  // 裁剪编辑器。
   @Builder
   private cropEditor() {
     Column({ space: 14 }) {
@@ -500,6 +529,7 @@ export struct ProfileEditPage {
     .border({ width: 1, color: $r('app.color.personal_line') }).alignItems(HorizontalAlign.Start)
   }
 
+  // 页面布局。
   build() {
     NavDestination() {
       Column() {
@@ -600,7 +630,7 @@ export struct ProfileEditPage {
         }
         .width('100%').layoutWeight(1).scrollBar(BarState.Off).edgeEffect(EdgeEffect.Spring)
         .padding({ left: 20, right: 20, top: 12, bottom: 16 })
-        // Pack 2: the save button stays at the bottom instead of scrolling with the form.
+        // 保存按钮固定在底部，不随表单滚动。
         Column() {
           Button(this.cropEditing ? '请先确认头像取景' : (this.saving ? '正在保存…' : '保存资料'))
             .enabled(!this.saving && !this.cropEditing && !this.preparingAvatar && !this.preparingCover)

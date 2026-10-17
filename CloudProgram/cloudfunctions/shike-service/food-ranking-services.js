@@ -1,12 +1,18 @@
+/**
+ * 【文件职责】榜单（list-food-rankings）：高分榜（全部公开卡片按口味评分）与好友榜（好友发布的卡片）。
+ * 结果按查询条件生成快照（5 分钟有效），分页游标绑定快照签名；每次请求有扫描预算，快照未准备好时返回“准备中”。
+ */
 'use strict';
 const { dateMillis } = require('./shared/content-policy');
 const { fail, hash, flag, id, token, encode } = require('./stages47-common');
 
+// 榜单上限、每页数量、结果有效期、单次扫描预算、范围标识。
 const TOP_LIMIT = 50;
 const PAGE_SIZE = 20;
 const RESULT_TTL_MS = 5 * 60 * 1000;
 const CARD_SCAN_BUDGET = 200;
 const SCOPE = 'ALL_VISIBLE';
+// 卡片指纹（任何影响排名的字段变化都会改变指纹）。
 const cardStamp = row => hash([row.id, row.ownerUid, row.merchantId, Number(row.tasteScore), dateMillis(row.publishedAt),
   dateMillis(row.modifiedAt), Number(row.updatedAt), Number(row.lifecycleGeneration || 0), row.status, row.reviewState,
   dateMillis(row.deletedAt), dateMillis(row.purgeAt)]);
@@ -14,26 +20,32 @@ const compare = (a, b) => b.score - a.score || b.publishedAt - a.publishedAt ||
   (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 const stale = () => fail('榜单内容已变化，请刷新榜单。', 'CURSOR_STALE');
 
+// 创建模块：ctx 由 runtime.js 注入。
 function createFoodRankingServices(ctx) {
   const { collection, one } = ctx;
+  // 榜单是否开放（SHIKE_FOOD_RANKINGS_VERIFIED 与数据迁移就绪）。
   async function capability(env, readiness) {
     const reason = !flag(env, 'SHIKE_FOOD_RANKINGS_VERIFIED') ? '新榜单尚未完成上线验证' :
       !readiness.cardCoverageComplete ? '卡片历史回填尚未完成' :
       !flag(env, 'SHIKE_INDEXED_QUERY_VERIFIED') ? '查询索引尚未验证' : '';
     return { enabled: !reason, reason };
   }
+  // 读取好友 uid 列表。
   async function friends(uid, env) {
     return new Set((await ctx.friendshipRowsFor(uid, env)).filter(row => row.status === 'ACCEPTED')
       .map(row => row.memberAUid === uid ? row.memberBUid : row.memberAUid).filter(owner => owner !== uid));
   }
+  // 好友榜的游标必须对应同一组好友，否则要求刷新。
   async function assertFriends(uid, kind, expected, env) {
     if (kind === 'FRIENDS' && hash([...await friends(uid, env)].sort()) !== expected) throw stale();
   }
+  // 组装一页响应。
   function response(state, items, nextCursor) {
     return { phase: state.phase === 'READY' ? 'READY' : 'PREPARING', kind: state.kind, scope: SCOPE, items,
       totalCount: state.phase === 'READY' ? state.best.length : 0, nextCursor,
       snapshotAt: state.snapshotAt, updatedAt: state.updatedAt || 0, scannedCardCount: state.scannedCards };
   }
+  // 校验快照中的卡片仍然可见且未变化。
   async function validateBest(uid, state, env) {
     const rows = await ctx.readCardRowsByIds(state.best.map(entry => entry.id), env);
     const ordered = state.best.map(entry => rows.get(entry.id)).filter(Boolean);
@@ -46,6 +58,7 @@ function createFoodRankingServices(ctx) {
     await assertFriends(uid, state.kind, state.friendHash, env);
     return { rows, context };
   }
+  // 读取一页榜单。
   async function page(uid, state, signature, env) {
     if (Date.now() - state.updatedAt >= RESULT_TTL_MS) throw stale();
     const { rows, context } = await validateBest(uid, state, env);
@@ -64,6 +77,7 @@ function createFoodRankingServices(ctx) {
     const offset = state.offset + items.length;
     return response(state, items, offset < state.best.length ? encode(signature, state.updatedAt, { ...state, offset }) : '');
   }
+  // 入口：校验参数与游标，返回一页或“准备中”。
   async function list(uid, payload, env) {
     if (uid) await ctx.contentPolicy(env).assertAccountActive(uid);
     const caps = await capability(env, await ctx.stage1().migrationReadiness(env));
@@ -79,8 +93,7 @@ function createFoodRankingServices(ctx) {
     if (!Array.isArray(state.best) || state.best.length > TOP_LIMIT || !['BUILD', 'READY'].includes(state.phase) ||
       state.kind !== kind || !Number.isSafeInteger(state.offset) || state.offset < 0 || state.offset > state.best.length) throw stale();
     if (state.phase === 'READY') return page(uid, state, signature, env);
-    // Primary-key continuation needs no merchant coordinates or additional index.
-    // Each request is bounded, but every candidate is considered before ranking.
+    // 用主键续读，不需要店铺坐标或额外索引；每次请求有上限，但在排名之前会考虑全部候选。
     let query = collection(env, 'FoodCard').query();
     if (state.cardAfter) {
       const previous = await one(collection(env, 'FoodCard').query().equalTo('id', id(state.cardAfter.id)));

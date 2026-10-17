@@ -1,3 +1,18 @@
+/**
+ * 【文件职责】食刻业务云函数的核心实现（约 4000 行）。shike-service 与四个领域函数（shike-content / -social / -account /
+ * -governance）运行的都是这一份代码（领域函数里的 service/ 目录由 npm run prepare:deveco 或打包脚本复制生成），shike-maintenance 也复用它。
+ * 【请求入口】云对象 TS 文件调用 executeOperation(操作名, 信封, env) → 在请求上下文中执行 operations[操作名]
+ * → verifiedUid() 校验 AGC Token 得到业务 UID → 调用本文件或 stage1~7 等子模块中的业务函数 → 读写 Cloud DB。
+ * 【文件分区（按出现顺序）】
+ *   1. 常量、实例内缓存（身份缓存 90 秒、游客首页 30 秒）、请求上下文（AsyncLocalStorage）
+ *   2. Cloud DB 模型类（必须与 clouddb/objecttype/*.json 一致）
+ *   3. 私信加密（AES-256-GCM）  4. Push 设备 / 桌面卡片登记与 Push Kit 发送
+ *   5. 日志脱敏、collection()、读取计量  6. 卡片读取辅助  7. 身份：Token 校验、IdentityBinding、迁移票据、邮箱绑定
+ *   8. 位置工具（旧发布位置）  9. 调用 shike-media（HMAC 委托）与对象路径  10. 用户资料  11. 卡片校验与发布
+ *   12. 卡片读取组装（作者、图片、店铺、互动）  14. 推荐流 / 详情 / 我的卡片
+ *   15. 好友关系  16. 私信  17. 群聊  18. 删除卡片与注销  19. 子模块装配  20. operations 操作表  21. 入口与维护导出
+ * 【新人注意】新增操作要同步修改 operations 表、shikeService.ts、对应领域函数 TS 与客户端 CloudRoutes.ets（见报告第 5 节）。
+ */
 'use strict';
 
 const crypto = require('crypto');
@@ -6,19 +21,17 @@ const { AsyncLocalStorage } = require('async_hooks');
 const { cloud } = require('@hw-agconnect/cloud-server');
 const { createContentPolicy, isAccountActive, readableCardState, currentVisibility, dateMillis, accessError } = require('./shared/content-policy');
 
-const MAX_DISTANCE_KM = 20.0;
 const MAX_PAGE_SIZE = 20;
-const MAX_PHOTO_BYTES = 2 * 1024 * 1024;
 const MAX_CARD_PHOTOS = 6;
 const CARD_READ_BATCH_SIZE = 10;
+// 请求级上下文：读取计量、逻辑请求号、当前读取阶段、本次请求内的卡片读取缓存、当前操作名。
 const readMetricsScope = new AsyncLocalStorage();
 const readRequestScope = new AsyncLocalStorage();
 const readPhaseScope = new AsyncLocalStorage();
 const cardReadScope = new AsyncLocalStorage();
 const operationScope = new AsyncLocalStorage();
 
-// Pack 1 (2026-10-15): per-instance caches. Each function instance keeps its own copy; nothing is shared
-// across instances, so every entry is bounded by a short TTL instead of cross-instance invalidation.
+// 【分区 1】实例内缓存：每个函数实例各自一份，实例之间不共享，所以每条缓存都用短 TTL 限制，而不是做跨实例失效。
 const IDENTITY_CACHE_TTL_MS = 90 * 1000;
 const IDENTITY_CACHE_MAX_ENTRIES = 2000;
 const IDENTITY_CACHE_EXCLUDED_OPERATIONS = new Set(['get-password-account']);
@@ -29,24 +42,29 @@ const GUEST_PAGE_CACHE_MAX_ENTRIES = 50;
 const GUEST_PAGE_CACHE_MAX_BYTES = 512 * 1024;
 const guestPageCache = new Map();
 
+// 是否为只读操作（get- / list- / search- 开头）。
 function readOnlyOperation(operation) {
   return /^(get|list|search)-/.test(String(operation || ''));
 }
 
+// 记录一次缓存命中 / 未命中计数（写入读取指标）。
 function recordCacheCount(name) {
   const metrics = readMetricsScope.getStore();
   if (metrics) metrics.counts[name] = (metrics.counts[name] || 0) + 1;
 }
 
+// 身份缓存的键：Token 的 sha256（不保存 Token 原文）。
 function identityCacheKey(accessToken) {
   return crypto.createHash('sha256').update('shike-identity-cache:' + String(accessToken)).digest('hex');
 }
 
+// 当前操作是否允许使用身份缓存（只读且不在排除列表中）。
 function identityCacheable() {
   const operation = operationScope.getStore() || '';
   return readOnlyOperation(operation) && !IDENTITY_CACHE_EXCLUDED_OPERATIONS.has(operation);
 }
 
+// 读取未过期的身份缓存。
 function cachedIdentity(key) {
   const entry = identityCache.get(key);
   if (!entry) return null;
@@ -54,6 +72,7 @@ function cachedIdentity(key) {
   return entry;
 }
 
+// 记住已验证的身份（不超过 Token 到期时间，超过容量时淘汰最旧的）。
 function rememberIdentity(key, providerUid, canonicalUid, tokenExpiresAt) {
   const now = Date.now();
   let expiresAt = now + IDENTITY_CACHE_TTL_MS;
@@ -64,14 +83,15 @@ function rememberIdentity(key, providerUid, canonicalUid, tokenExpiresAt) {
   identityCache.set(key, { providerUid, canonicalUid, expiresAt });
 }
 
+// 删除某业务 UID 的身份缓存（密码修改、退出等身份状态变化后）。
 function forgetIdentity(canonicalUid) {
   for (const [key, entry] of identityCache) {
     if (entry.canonicalUid === canonicalUid) identityCache.delete(key);
   }
 }
 
-// Guests have no viewer-specific fields, so their first page (no cursor) can be shared for a few seconds.
-// The cursor inside a cached page still carries the original snapshot time, so paging stays consistent.
+// 游客没有个人化字段，所以首页第一页（无游标）可以共享几秒钟；缓存页里的游标仍携带原始快照时间，翻页保持一致。
+// 游客首页第一页的实例内缓存（30 秒，最多 50 条、512KB）。
 async function guestFirstPage(operation, payload, load) {
   const key = operation + ':' + JSON.stringify(payload || {});
   const entry = guestPageCache.get(key);
@@ -87,14 +107,15 @@ async function guestFirstPage(operation, payload, load) {
   return result;
 }
 
-// Every operation runs inside this scope. Any non-read operation drops this instance's guest pages so a
-// publish, edit or delete handled here is visible to guests immediately (other instances: within 30 s).
+// 所有操作都在这个作用域内运行。非只读操作会清掉本实例的游客页缓存，使这里处理的发布、修改、删除立即对游客可见（其他实例最长 30 秒）。
+// 在操作上下文中执行；非只读操作会清空本实例的游客首页缓存。
 function runOperation(operation, action) {
   if (!readOnlyOperation(operation)) guestPageCache.clear();
   return operationScope.run(operation, action);
 }
 const { withCursorContext } = require('./stages47-common');
-const { requestId, errorCode, errorResponse, readStage, READ_OPT_VERSION, shouldReadMetrics } = require('./shared/read-errors');
+const { requestId, errorCode, readStage, READ_OPT_VERSION, shouldReadMetrics } = require('./shared/read-errors');
+// 在指定的读取阶段中执行（用于错误定位与耗时统计）。
 function withReadPhase(phase, action) {
   return readPhaseScope.run(phase, async () => {
     const metrics = readMetricsScope.getStore();
@@ -102,23 +123,15 @@ function withReadPhase(phase, action) {
     if (metrics) metrics.phaseCalls[phase] = (metrics.phaseCalls[phase] || 0) + 1;
     try { return await action(); }
     catch (error) {
-      // Keep the innermost failing phase when an outer phase unwinds.
+      // 外层阶段退出时，保留最内层失败的阶段名。
       try { if (error && typeof error === 'object' && !error.readStage) error.readStage = phase; } catch (_) { }
       throw error;
     } finally {
-      // Inclusive wall time per phase; nested phases must not be summed as total time.
+      // 记录每个阶段的总耗时（含嵌套），嵌套阶段不能累加成总耗时。
       if (metrics) metrics.phaseMs[phase] = (metrics.phaseMs[phase] || 0) + Date.now() - started;
     }
   });
 }
-const NEARBY_CARD_HYDRATION_CONCURRENCY = 4;
-const NEARBY_CACHE_TTL_SECONDS = 25;
-const NEARBY_CACHE_TIMEOUT_MS = 400;
-const NEARBY_CACHE_RETRY_DELAY_MS = 30000;
-const NEARBY_CACHE_VERSION = 'v3';
-let nearbyRedis = null;
-let nearbyRedisConnecting = null;
-let nearbyRedisRetryAfter = 0;
 const MAX_CARD_REVIEW_LENGTH = 600;
 const MAX_SOCIAL_RESULTS = 50;
 const MAX_SOCIAL_PAGE_SIZE = 50;
@@ -138,29 +151,9 @@ const DEFAULT_SERVICE_CARD_DAILY_PUSH_LIMIT = 2;
 const VALID_CATEGORY = new Set(['staple', 'bakery', 'drink', 'snack', 'fresh', 'other']);
 const PERSONALIZED = /新客|首单|白条|补贴|会员|账号|用户专享|个人专享/;
 
-// Server-side Cloud DB models. Their field types, primary keys and indexes must
-// stay aligned with CloudProgram/clouddb/objecttype/*.json.
-class CloudDbModel {
-  getFieldTypeMap() {
-    return new Map(Object.entries(this.constructor.fieldTypes));
-  }
-
-  getClassName() {
-    return this.constructor.name;
-  }
-
-  getPrimaryKeyList() {
-    return [...this.constructor.primaryKeys];
-  }
-
-  getIndexList() {
-    return [...this.constructor.indexes];
-  }
-
-  getEncryptedFieldList() {
-    return [];
-  }
-}
+// 【分区 2：Cloud DB 模型】服务端模型类，字段类型、主键与索引必须与 CloudProgram/clouddb/objecttype/*.json 保持一致。
+// Cloud DB 模型基类（shared/image-models.js）：AGC 服务端 SDK 通过它取得字段类型、类名（等于 objecttype 名称）、主键与索引。下面每个子类对应一个对象类型。
+const { CloudDbModel, CardMedia } = require('./shared/image-models');
 
 class UserProfile extends CloudDbModel {}
 UserProfile.fieldTypes = Object.freeze({"uid": "String", "nickname": "String", "avatarUrl": "String", "nicknameValue": "String", "avatarMediaId": "String", "avatarStorageUid": "String", "coverMediaId": "String", "coverStorageUid": "String", "friendCode": "String", "accountStatus": "String", "publishCount": "Integer", "createdAt": "Long", "updatedAt": "Long", "contentSequence": "Long", "deletionJobId": "String"});
@@ -168,7 +161,7 @@ UserProfile.primaryKeys = Object.freeze(['uid']);
 UserProfile.indexes = Object.freeze(["nicknameValue", "friendCode"]);
 
 class FoodCard extends CloudDbModel {}
-// Legacy CloudDB columns remain for deployed-schema compatibility; public reads ignore them.
+// 旧的 Cloud DB 列为兼容已部署结构而保留；公开读取不使用它们。
 FoodCard.fieldTypes = Object.freeze({"id": "String", "ownerUid": "String", "productName": "String", "brand": "String", "priceFen": "Integer", "priceLabel": "String", "originalPriceFen": "Integer", "specification": "String", "shop": "String", "sellingPointsJson": "Text", "publicOffersJson": "Text", "reviewText": "Text", "tasteScore": "Integer", "sourceLink": "Text", "category": "String", "mediaId": "String", "latE3": "Integer", "lonE3": "Integer", "district": "String", "geohash": "String", "status": "String", "createdAt": "Long", "updatedAt": "Long", "schemaVersion": "Integer", "migrationSource": "String", "consumptionMode": "String", "visibility": "String", "merchantId": "String", "merchantNameSnapshot": "String", "merchantAddressSnapshot": "Text", "categoryV2": "String", "categoryVersion": "Integer", "itemPriceFen": "Long", "dineInAvgFen": "Long", "orderTotalFen": "Long", "deliveryFeeFen": "Long", "queryPriceFen": "Long", "deliveryPlatformKey": "String", "deliveryPlatformLabelSnapshot": "String", "consumedAt": "Date", "publishedAt": "Date", "modifiedAt": "Date", "edited": "Boolean", "friendVisibilitySince": "Date", "friendVisibilitySequence": "Long", "reviewState": "String", "deletedAt": "Date", "purgeAt": "Date", "lifecycleGeneration": "Long", "searchTextNormalized": "Text", "reviewReason": "String"});
 FoodCard.primaryKeys = Object.freeze(['id']);
 FoodCard.indexes = Object.freeze(["status,createdAt,id", "status,category,createdAt,id", "ownerUid,createdAt", "ownerUid,status,createdAt", "status,latE3,lonE3,createdAt", "status,createdAt", "merchantId,id", "ownerUid,merchantId,id", "visibility,status,publishedAt,id", "visibility,status,queryPriceFen,publishedAt,id", "visibility,status,queryPriceFen,publishedAt,id", "merchantId,visibility,status,publishedAt,id", "visibility,status,tasteScore,publishedAt,id", "ownerUid,status,createdAt,id", "merchantId,status,tasteScore,publishedAt,id"]);
@@ -204,8 +197,6 @@ Merchant.fieldTypes = Object.freeze({
 Merchant.primaryKeys = Object.freeze(['merchantId']);
 Merchant.indexes = Object.freeze(["provider,providerPoiId", "verificationStatus,createdAt,merchantId", "createdByUid,createdAt,merchantId", "mapVisible,latitudeE6,merchantId", "coordinateSystem,latitudeE6,merchantId"]);
 
-const { CardMedia } = require('./shared/image-models');
-
 class Report extends CloudDbModel {}
 Report.fieldTypes = Object.freeze({"id": "String", "reporterUid": "String", "cardId": "String", "reason": "String", "status": "String", "createdAt": "Long", "targetType": "String", "targetId": "String", "updatedAt": "Long", "resolutionAction": "String", "resolutionReason": "String", "resolvedByUid": "String", "resolvedAt": "Long", "reasonType": "String", "description": "String", "cardTitle": "String", "reportedRevision": "String", "submissionRequestId": "String", "submissionPayloadHash": "String", "resolutionRequestId": "String", "resolutionPayloadHash": "String", "resolvedCardRevision": "String"});
 Report.primaryKeys = Object.freeze(['id']);
@@ -227,7 +218,7 @@ CardAction.indexes = Object.freeze([
   'cardId,kind,id'
 ]);
 
-// Retired comment storage remains registered for historical lifecycle cleanup.
+// 已退役的评论存储仍需注册，用于历史数据的生命周期清理。
 class CardComment extends CloudDbModel {}
 CardComment.fieldTypes = Object.freeze({"id": "String", "cardId": "String", "authorUid": "String", "parentId": "String", "replyToNickname": "String", "replyToUid": "String", "content": "Text", "status": "String", "createdAt": "Long", "updatedAt": "Long"});
 CardComment.primaryKeys = Object.freeze(['id']);
@@ -462,7 +453,7 @@ MaintenanceJob.fieldTypes = Object.freeze({"jobId": "String", "jobType": "String
 MaintenanceJob.primaryKeys = Object.freeze(['jobId']);
 MaintenanceJob.indexes = Object.freeze(["status,runAfterAt,jobId", "status,leaseUntilAt,jobId", "ownerUid,jobType,jobId", "entityId,jobType,generation", "status,jobType,runAfterAt,jobId", "status,jobType,leaseUntilAt,jobId"]);
 
-// Retired preference/list/state types remain for migration and account cleanup.
+// 已退役的偏好 / 清单 / 状态类型仍需保留，用于迁移与注销清理。
 class TastePreference extends CloudDbModel {}
 TastePreference.fieldTypes = Object.freeze({"uid": "String", "likedCategoriesJson": "Text", "lessCategoriesJson": "Text", "preferredMode": "String", "budgetMinFen": "Long", "budgetMaxFen": "Long", "updatedAt": "Date", "version": "Long"});
 TastePreference.primaryKeys = Object.freeze(["uid"]);
@@ -527,6 +518,7 @@ const OBJECT_TYPES = Object.freeze({
   CardReaction, PublishRequestRecord, FoodCardRevision, MaintenanceJob, Merchant
 });
 
+// 【分区 3：私信加密】读取必需的环境变量，缺失时抛错。
 function required(env, name) {
   const value = env[name] || process.env[name];
   if (!value) throw new Error(`云端部署单元缺少环境变量 ${name}`);
@@ -534,11 +526,9 @@ function required(env, name) {
 }
 
 /**
- * Private-message values must remain queryable by the trusted cloud object,
- * but Cloud DB sensitive fields are not returned by a query and do not
- * support Text. Store authenticated ciphertext in the Administrator-only
- * object instead. The deployment key never reaches the app or Cloud DB.
+ * 私信内容必须能被受信任的云函数查询，但 Cloud DB 的敏感字段查询时不会返回、也不支持 Text 类型，所以改为在只有 Administrator 能访问的对象中保存“带认证的密文”。密钥只存在于部署配置中，永远不会到达 App 或 Cloud DB。
  */
+// 私信加密密钥（SHIKE_MESSAGE_ENCRYPTION_KEY，Base64 的 32 字节）。
 function privateTextKey(env) {
   const encoded = String(required(env, 'SHIKE_MESSAGE_ENCRYPTION_KEY')).trim();
   const isBase64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded);
@@ -552,6 +542,7 @@ function privateTextKey(env) {
   return key;
 }
 
+// AES-256-GCM 加密；context 作为附加认证数据，防止把密文挪用到别的消息。
 function encryptPrivateText(value, context, env) {
   const plaintext = String(value || '');
   if (!plaintext) return '';
@@ -563,6 +554,7 @@ function encryptPrivateText(value, context, env) {
   return `v1:${iv.toString('base64')}:${tag.toString('base64')}:${ciphertext.toString('base64')}`;
 }
 
+// 解密（认证失败时抛错）。
 function decryptPrivateText(value, context, env) {
   const encoded = String(value || '');
   if (!encoded) return '';
@@ -584,18 +576,22 @@ function decryptPrivateText(value, context, env) {
   }
 }
 
+// 【分区 4：Push 与桌面卡片】校验设备标识。
 function validPushDeviceId(value) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
+// 校验 Push Token。
 function validPushToken(value) {
   return value.length >= 20 && value.length <= 4096 && /^\S+$/.test(value);
 }
 
+// Push 登记行的主键。
 function pushRegistrationId(uid, deviceId) {
   return crypto.createHash('sha256').update(`push:${uid}:${deviceId}`).digest('hex');
 }
 
+// 登记本设备 Push Token（加密保存）。
 async function registerPushDevice(uid, payload, env) {
   const deviceId = String(payload.deviceId || '').trim();
   const token = String(payload.token || '').trim();
@@ -615,6 +611,7 @@ async function registerPushDevice(uid, payload, env) {
   return { success: true };
 }
 
+// 删除本设备 Push 登记。
 async function unregisterPushDevice(uid, payload, env) {
   const deviceId = String(payload.deviceId || '').trim();
   if (!validPushDeviceId(deviceId)) throw new Error('通知设备标识格式无效。');
@@ -625,10 +622,12 @@ async function unregisterPushDevice(uid, payload, env) {
   return { success: true };
 }
 
+// 校验桌面卡片实例 id。
 function validServiceCardFormId(value) {
   return /^[1-9][0-9]{0,9}$/.test(value) && Number(value) <= MAX_SERVICE_CARD_FORM_ID;
 }
 
+// 解析请求中的卡片实例 id 列表。
 function serviceCardFormIds(payload) {
   const raw = Array.isArray(payload.formIds) ? payload.formIds : [];
   if (raw.length > MAX_SERVICE_CARD_FORM_REGISTRATIONS) {
@@ -643,15 +642,18 @@ function serviceCardFormIds(payload) {
   return ids;
 }
 
+// 桌面卡片登记行的主键。
 function widgetRegistrationId(uid, deviceId, formId) {
   return crypto.createHash('sha256').update(`widget:${uid}:${deviceId}:${formId}`).digest('hex');
 }
 
+// 校验非负整数。
 function nonNegativeInteger(value) {
   const numeric = Number(value);
   return Number.isInteger(numeric) && numeric >= 0 ? numeric : 0;
 }
 
+// 登记本设备的桌面卡片实例（每设备最多 16 张、每账号最多 100 张）。
 async function syncServiceCardForms(uid, payload, env) {
   const deviceId = String(payload.deviceId || '').trim();
   const token = String(payload.token || '').trim();
@@ -663,9 +665,7 @@ async function syncServiceCardForms(uid, payload, env) {
     .equalTo('deviceId', deviceId).limit(MAX_SERVICE_CARD_FORM_REGISTRATIONS + 1).get();
   const wanted = new Set(formIds);
   const staleRows = existingRows.filter((row) => !wanted.has(String(row.formId || '')));
-  // Keep the global account boundary independent from the per-device limit.
-  // Query one extra row and fail closed if a malformed or legacy deployment
-  // has already exceeded the documented maximum.
+  // 账号级上限独立于每设备上限；多查一行，如果异常或旧部署已经超过文档规定的最大值，直接拒绝（失败即关闭）。
   const accountRows = await registrations.query().equalTo('ownerUid', uid)
     .limit(MAX_SERVICE_CARD_REGISTRATIONS_PER_ACCOUNT + 1).get();
   const accountRegistrationIds = new Set();
@@ -707,6 +707,7 @@ async function syncServiceCardForms(uid, payload, env) {
   return { success: true, registeredFormCount: formIds.length };
 }
 
+// 删除本设备的桌面卡片登记。
 async function unregisterServiceCardForms(uid, payload, env) {
   const deviceId = String(payload.deviceId || '').trim();
   if (!validPushDeviceId(deviceId)) throw new Error('桌面卡片设备标识格式无效。');
@@ -717,11 +718,12 @@ async function unregisterServiceCardForms(uid, payload, env) {
   return { success: true };
 }
 
+// Base64URL 编码。
 function base64Url(value) {
-  return Buffer.from(value).toString('base64')
-    .replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+  return Buffer.from(value).toString('base64url');
 }
 
+// 读取 Push Kit 服务账号配置。
 function pushConfiguration(env) {
   const source = env || {};
   const projectId = String(source.SHIKE_PUSH_PROJECT_ID || process.env.SHIKE_PUSH_PROJECT_ID || '').trim();
@@ -733,11 +735,13 @@ function pushConfiguration(env) {
   return { projectId, subAccount, keyId, privateKeyBase64 };
 }
 
+// Push 是否已配置。
 function pushConfigured(config) {
   return config.projectId.length > 0 && config.subAccount.length > 0 &&
     config.keyId.length > 0 && config.privateKeyBase64.length > 0;
 }
 
+// 生成 Push Kit 服务账号 JWT。
 function pushJwt(config) {
   const now = Math.floor(Date.now() / 1000);
   const header = base64Url(JSON.stringify({ kid: config.keyId, typ: 'JWT', alg: 'PS256' }));
@@ -767,6 +771,7 @@ function pushJwt(config) {
   return `${signingInput}.${base64Url(signature)}`;
 }
 
+// 读取某用户全部设备的 Push Token（解密）。
 async function pushTokensFor(uid, env) {
   const profile = await one(collection(env, 'UserProfile').query().equalTo('uid', uid));
   if (!isAccountActive(profile)) return [];
@@ -781,6 +786,29 @@ async function pushTokensFor(uid, env) {
   return tokens;
 }
 
+// 调用 Push Kit 发送接口（pushType：0 通知消息，1 卡片刷新）；label 用于错误提示。
+async function postPushMessage(config, pushType, body, label) {
+  const response = await fetch(`https://push-api.cloud.huawei.com/v3/${config.projectId}/messages:send`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${pushJwt(config)}`,
+      'push-type': pushType
+    },
+    body: JSON.stringify(body)
+  });
+  let result = {};
+  try {
+    result = JSON.parse(await response.text());
+  } catch (_error) {
+    throw new Error(`Push Kit ${label}返回了无法解析的响应，HTTP ${response.status}。`);
+  }
+  if (!response.ok || String(result.code || '') !== '80000000') {
+    throw new Error(`Push Kit ${label}失败，HTTP ${response.status}，业务码 ${String(result.code || 'unknown')}。`);
+  }
+}
+
+// 向某用户发送通知。
 async function sendPushToUser(uid, title, body, routeData, env) {
   const config = pushConfiguration(env);
   if (!pushConfigured(config)) return;
@@ -788,45 +816,18 @@ async function sendPushToUser(uid, title, body, routeData, env) {
   if (tokens.length === 0) return;
   const target = { token: tokens };
   if (uid.length <= 64) target.profileId = uid;
-  const response = await fetch(`https://push-api.cloud.huawei.com/v3/${config.projectId}/messages:send`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${pushJwt(config)}`,
-      'push-type': '0'
-    },
-    body: JSON.stringify({
-      payload: {
-        notification: {
-          category: 'IM',
-          title,
-          body,
-          clickAction: {
-            actionType: 0,
-            data: routeData
-          }
-        }
-      },
-      target
-    })
-  });
-  let result = {};
-  try {
-    result = JSON.parse(await response.text());
-  } catch (_error) {
-    throw new Error(`Push Kit 返回了无法解析的响应，HTTP ${response.status}。`);
-  }
-  if (!response.ok || String(result.code || '') !== '80000000') {
-    throw new Error(`Push Kit 发送失败，HTTP ${response.status}，业务码 ${String(result.code || 'unknown')}.`);
-  }
+  await postPushMessage(config, '0', {
+    payload: { notification: { category: 'IM', title, body, clickAction: { actionType: 0, data: routeData } } },
+    target
+  }, '通知发送');
 }
 
+// 尽力发送通知：失败只记日志，不影响业务结果。
 async function bestEffortPush(uid, title, body, routeData, env) {
   try {
     await sendPushToUser(uid, title, body, routeData, env);
   } catch (error) {
-    // A notification transport failure must never roll back the completed
-    // friend or message operation. Never log tokens or request bodies.
+    // 通知发送失败绝不能回滚已经完成的好友或消息操作；绝不记录 Token 或请求体。
     console.error(`push notification failed: ${safeLogError(error)}`);
   }
 }
@@ -837,6 +838,7 @@ const SOCIAL_PUSH_TEXT = Object.freeze({
   DIRECT_MESSAGE: { title: '新的食刻私信', body: '打开食刻查看好友消息。' },
   GROUP_MESSAGE: { title: '群聊有新消息', body: '打开食刻查看群聊。' },
 });
+// 发送社交通知（好友申请、私信、群消息）。
 async function sendSocialPush(recipientUid, actorUid, kind, targetId, env) {
   const copy=SOCIAL_PUSH_TEXT[kind];
   if(!recipientUid||recipientUid===actorUid||!copy)return;
@@ -851,6 +853,7 @@ async function sendSocialPush(recipientUid, actorUid, kind, targetId, env) {
   } catch(error) { console.error(`social push failed: ${safeLogError(error)}`); }
 }
 
+// 桌面卡片上的分类名称。
 function serviceCardCategoryLabel(category) {
   if (category === 'staple') return '米饭';
   if (category === 'bakery') return '汤粉';
@@ -860,6 +863,7 @@ function serviceCardCategoryLabel(category) {
   return '其他';
 }
 
+// 桌面卡片远程更新的数据（公开摘要 + 图片身份）。
 function serviceCardFormData(card, primaryPhoto = { path: '', bucket: '' }) {
   const mode = String(card.consumptionMode || 'UNSPECIFIED');
   const currentPrice = mode === 'DINE_IN' ? card.dineInAvgFen : card.itemPriceFen;
@@ -876,17 +880,18 @@ function serviceCardFormData(card, primaryPhoto = { path: '', bucket: '' }) {
     priceText: known || priceFen > 0 ? `¥${(priceFen / 100).toFixed(2)}${unit}` : mode === 'DINE_IN' ? '人均待补充' : '价格待补充',
     locationText: String(card.merchantAddressSnapshot || card.district || '').trim().slice(0, 24) || '未关联店铺',
     categoryText: card.categoryV2 ? labels[card.categoryV2] || '其他' : serviceCardCategoryLabel(String(card.category || '')),
-    // Identity only: bytes stay in the app's approved-media cache and are bound
-    // through Form Kit. A remote change must not display an unrelated old cover.
+    // 这里只有图片身份：字节保存在 App 的已通过图片缓存中，通过 Form Kit 绑定；远程更新绝不能显示一张不相关的旧封面。
     photoPath: String(primaryPhoto.path || '').trim(),
     photoBucket: String(primaryPhoto.bucket || '').trim()
   };
 }
 
+// 推送日（用于每日次数限制）。
 function serviceCardPushDay(now) {
   return new Date(now).toISOString().slice(0, 10);
 }
 
+// 每个卡片实例每日推送次数上限（1–5，默认 2）。
 function serviceCardDailyPushLimit(env) {
   const raw = Number((env && env.SHIKE_SERVICE_CARD_DAILY_PUSH_LIMIT) ||
     process.env.SHIKE_SERVICE_CARD_DAILY_PUSH_LIMIT || DEFAULT_SERVICE_CARD_DAILY_PUSH_LIMIT);
@@ -894,17 +899,20 @@ function serviceCardDailyPushLimit(env) {
   return Math.max(1, Math.min(5, raw));
 }
 
+// 联调用的测试消息开关。
 function serviceCardTestMessage(env) {
   const raw = String((env && env.SHIKE_SERVICE_CARD_TEST_MESSAGE) ||
     process.env.SHIKE_SERVICE_CARD_TEST_MESSAGE || '').trim().toLowerCase();
   return raw === 'true';
 }
 
+// 下一个卡片数据版本。
 function nextServiceCardVersion(row, now) {
   const previous = nonNegativeInteger(row.updateVersion);
   return Math.max(now, previous + 1);
 }
 
+// 向一张桌面卡片发送更新。
 async function sendServiceCardUpdate(token, formId, version, formData, env) {
   const config = pushConfiguration(env);
   if (!pushConfigured(config)) return false;
@@ -920,27 +928,11 @@ async function sendServiceCardUpdate(token, formId, version, formData, env) {
     target: { token: [token] }
   };
   if (serviceCardTestMessage(env)) body.pushOptions = { testMessage: true };
-  const response = await fetch(`https://push-api.cloud.huawei.com/v3/${config.projectId}/messages:send`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${pushJwt(config)}`,
-      'push-type': '1'
-    },
-    body: JSON.stringify(body)
-  });
-  let result = {};
-  try {
-    result = JSON.parse(await response.text());
-  } catch (_error) {
-    throw new Error(`Push Kit 卡片更新返回了无法解析的响应，HTTP ${response.status}。`);
-  }
-  if (!response.ok || String(result.code || '') !== '80000000') {
-    throw new Error(`Push Kit 卡片更新失败，HTTP ${response.status}，业务码 ${String(result.code || 'unknown')}。`);
-  }
+  await postPushMessage(config, '1', body, '卡片更新');
   return true;
 }
 
+// push-service-card-update：把当前推荐推送到本账号登记的桌面卡片。
 async function pushServiceCardUpdate(uid, payload, env) {
   const cardId = String(payload.cardId || '').trim();
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cardId)) {
@@ -969,7 +961,7 @@ async function pushServiceCardUpdate(uid, payload, env) {
   try {
     photos = await publicPhotos(card, env, true);
   } catch (_error) {
-    // A metadata lookup failure may clear the cover but must not suppress text updates.
+    // 读取元数据失败可以清掉封面，但不能阻止文字更新。
     console.warn('service-card cover identity was unavailable.');
   }
   const formData = serviceCardFormData(card, photos[0]);
@@ -990,8 +982,7 @@ async function pushServiceCardUpdate(uid, payload, env) {
     }
     if (!validPushToken(token)) continue;
     const version = nextServiceCardVersion(row, now);
-    // Persist the version and the attempted-send count before the network
-    // request. A lost Push API response must never cause a duplicate version.
+    // 在网络请求之前先保存版本号与已尝试发送次数：Push 接口响应丢失时也绝不会产生重复的版本。
     await registrations.upsert({
       id,
       ownerUid: uid,
@@ -1008,14 +999,14 @@ async function pushServiceCardUpdate(uid, payload, env) {
       const delivered = await sendServiceCardUpdate(token, String(row.formId), version, formData, env);
       if (delivered) result.deliveredFormCount += 1;
     } catch (error) {
-      // A remote card refresh is optional and must not change the selected
-      // local recommendation. Never log its token or request body.
+      // 远程卡片刷新是可选的，不能改变本机已选的推荐；绝不记录其 Token 或请求体。
       console.error(`service-card remote update failed: ${safeLogError(error)}`);
     }
   }
   return result;
 }
 
+// 【分区 5：基础设施】脱敏错误日志（去掉 Token、签名、请求体）。
 function safeLogError(error) {
   const name = error && error.name ? String(error.name) : 'Error';
   const code = error && error.code !== undefined ? ` code=${String(error.code).slice(0, 32)}` : '';
@@ -1029,21 +1020,7 @@ function safeLogError(error) {
   return `${name}${code}: ${redacted}${integrity}`;
 }
 
-function parseBody(event) {
-  if (!event) return { accessToken: '', payload: {} };
-  let candidate = event;
-  if (event.request && event.request.body !== undefined) candidate = event.request.body;
-  else if (event.body !== undefined) candidate = event.body;
-  else if (event.data !== undefined) candidate = event.data;
-  if (typeof candidate === 'string') candidate = JSON.parse(candidate);
-  return {
-    accessToken: typeof candidate.accessToken === 'string' ? candidate.accessToken : '',
-    readRequestId: candidate.readRequestId,
-    readAttempt: candidate.readAttempt === 2 ? 2 : 1,
-    payload: candidate.payload && typeof candidate.payload === 'object' ? candidate.payload : {}
-  };
-}
-
+// 取得 Cloud DB 对象类型的集合（存储区 SHIKE_DB_ZONE，默认 shike），并包装读取计量。
 function collection(env, name) {
   const zoneName = env.SHIKE_DB_ZONE || process.env.SHIKE_DB_ZONE || 'shike';
   const objectType = OBJECT_TYPES[name];
@@ -1053,7 +1030,7 @@ function collection(env, name) {
   if (!metrics) return target;
   return new Proxy(target, { get(object, property) {
     if (property === 'query') return (...args) => measuredQuery(object.query(...args), name, metrics);
-    // Count transaction invocations, leaving the SDK transaction and callback intact.
+    // 统计事务调用次数，保持 SDK 事务与回调本身不变。
     if (property === 'runTransaction') return (...args) => measuredDependency('transaction', () => object.runTransaction(...args));
     const value = Reflect.get(object, property, object);
     if (property === 'constructor') return value;
@@ -1061,6 +1038,7 @@ function collection(env, name) {
   } });
 }
 
+// 给查询包装计量（次数、耗时、行数）。
 function measuredQuery(target, name, metrics) {
   const proxy = new Proxy(target, { get(object, property) {
     if (property === 'get') return async (...args) => {
@@ -1105,6 +1083,7 @@ function measuredQuery(target, name, metrics) {
   return proxy;
 }
 
+// 计量一次外部依赖调用（Auth、Media、Push 等）。
 async function measuredDependency(kind, action) {
   const metrics = readMetricsScope.getStore();
   if (!metrics) return action();
@@ -1122,6 +1101,7 @@ async function measuredDependency(kind, action) {
   } finally { counter.ms += Date.now() - started; metrics.inFlightDependencies -= 1; }
 }
 
+// 累加读取计数。
 function recordReadCounts(values) {
   const metrics = readMetricsScope.getStore();
   if (!metrics) return;
@@ -1131,6 +1111,7 @@ function recordReadCounts(values) {
   }
 }
 
+// 记录功能就绪判断。
 function recordReadReadiness(feature, enabled, reason, facts = {}) {
   const metrics = readMetricsScope.getStore();
   if (!metrics || !['search', 'map'].includes(feature)) return;
@@ -1142,6 +1123,7 @@ function recordReadReadiness(feature, enabled, reason, facts = {}) {
   }
 }
 
+// 为一次操作收集读取指标并在结束时输出一行日志。
 async function withReadMetrics(operation, env, action, id, attempt = 1) {
   if (!shouldReadMetrics(env, id)) return action();
   const metrics = { queryGetCount: 0, queriedRows: 0, queryFailures: 0, busyErrors: 0, dbMs: 0, inFlightQueries: 0, inFlightDependencies: 0,
@@ -1167,7 +1149,7 @@ async function withReadMetrics(operation, env, action, id, attempt = 1) {
       throw error;
     }
     finally {
-      // Logical SDK calls only: transaction internals, Storage bytes and SDK retries are not measured.
+      // 只统计逻辑上的 SDK 调用：事务内部、Storage 字节和 SDK 自身重试都不计入。
       console.info(`read.metrics metricsVersion=o0-20261008-v1 operation=${operation} requestId=${id || 'not-provided'} attempt=${attempt} functionVersion=${READ_OPT_VERSION} outcome=${outcome} code=${code || 'OK'} failureStage=${failureStage || 'none'} failureCollection=${failureCollection || 'none'} returnedCount=${returnedCount} scanned=${metrics.counts.scannedCandidateCount || 0} consumed=${metrics.counts.consumedCandidateCount || 0} fetched=${metrics.counts.fetchedCandidateCount || 0} queryGetCount=${metrics.queryGetCount} ` +
         `queriedRows=${metrics.queriedRows} queryFailures=${metrics.queryFailures} busyErrors=${metrics.busyErrors} ` +
         `dbMs=${metrics.dbMs} totalMs=${Date.now() - started} metricsComplete=${metrics.inFlightQueries === 0 && metrics.inFlightDependencies === 0} pendingQueryGetCount=${metrics.inFlightQueries} pendingDependencyCallCount=${metrics.inFlightDependencies} queryScope=wrapped-query-get dependencyScope=logical-sdk-calls ` +
@@ -1181,11 +1163,13 @@ async function withReadMetrics(operation, env, action, id, attempt = 1) {
   });
 }
 
+// 取查询结果的第一行。
 async function one(query) {
   const rows = await query.limit(1).get();
   return rows.length > 0 ? rows[0] : null;
 }
 
+// 【分区 6：卡片读取辅助】按 id 批量读取卡片。
 async function readCardRowsByIds(ids, env) {
   const unique = [...new Set(ids.filter(Boolean))];
   const result = new Map();
@@ -1197,10 +1181,12 @@ async function readCardRowsByIds(ids, env) {
   return result;
 }
 
+// 创建内容策略实例（shared/content-policy.js）。
 function contentPolicy(env) {
   return createContentPolicy((name) => collection(env, name), one);
 }
 
+// 生成单调递增的逻辑写入时间（不早于已有时间）。
 function logicalWriteTime(...values) {
   let now = Date.now();
   for (const value of values) {
@@ -1214,19 +1200,20 @@ function logicalWriteTime(...values) {
   return now;
 }
 
+// 资料行写入前的整理（恢复 Cloud DB 读不到的敏感镜像字段）。
 function profileForWrite(row, now) {
-  // Cloud DB may omit sensitive mirrors on read. Restore them from the
-  // existing non-sensitive server-only fields during a profile update.
+  // Cloud DB 读取时可能不返回敏感镜像字段；更新资料时用已有的、非敏感的服务端字段恢复它们。
   const nickname = String(row.nicknameValue || row.nickname || '食刻用户');
   const avatarMediaId = String(row.avatarMediaId || '');
   return Object.assign(new UserProfile(), row, {
     nickname, nicknameValue: nickname,
     avatarUrl: avatarMediaId ? approvedObjectKey(String(row.avatarStorageUid || row.uid), avatarMediaId) : '',
-    // Keep the deployed legacy column; it no longer controls content reads.
+    // 保留已部署的旧列；它已不再控制内容读取。
     contentSequence: 0, updatedAt: now
   });
 }
 
+// 事务内读取双方资料（社交操作用）。
 async function pairProfiles(transaction, uid, otherUid, env, requireOtherActive = false) {
   const pair = socialPair(uid, otherUid);
   const profiles = [];
@@ -1241,6 +1228,7 @@ async function pairProfiles(transaction, uid, otherUid, env, requireOtherActive 
   return profiles;
 }
 
+// 事务内使用的内容策略（复用已读的资料）。
 function transactionPolicy(transaction, env, profiles = []) {
   return createContentPolicy((name) => collection(env, name), async (query) => {
     const rows = await transaction.executeQuery(query.limit(1));
@@ -1248,11 +1236,13 @@ function transactionPolicy(transaction, env, profiles = []) {
   }, { profiles });
 }
 
+// 过滤出查看者可读的卡片行。
 async function readableCardRows(rows, viewerUid, env, _publicOnly = false, readContext = null) {
   const context = readContext || await createCardReadContext(rows, viewerUid, env);
   return rows.filter(row => readableCardState(row) && isAccountActive(context.profiles.get(String(row.ownerUid))));
 }
 
+// 若可读，转换为返回给客户端的卡片。
 async function readCardIfAllowed(row, env, distanceKm = 0, includePhoto = true, viewerUid = '',
   includeActions = false, maxPhotoCount = MAX_CARD_PHOTOS, metrics = null, readContext = null) {
   try {
@@ -1263,8 +1253,8 @@ async function readCardIfAllowed(row, env, distanceKm = 0, includePhoto = true, 
   }
 }
 
-// Offsets count consumed database rows, including denied rows. A bounded scan
-// continues past hidden content and returns a continuation when its budget ends.
+// 偏移量统计的是已消费的数据库行（包括被拒绝的行）。有上限的扫描会越过隐藏内容，预算用完时返回续页。
+// 带扫描上限的卡片分页：跳过不可见的行，预算用完时返回续页信息。
 async function scanCardPage(queryFactory, viewerUid, env, offset, pageSize, publicOnly = false, photoCount = 1, maxBatchSize = 50) {
   const cards = [];
   const sourceRows = [];
@@ -1297,6 +1287,7 @@ async function scanCardPage(queryFactory, viewerUid, env, offset, pageSize, publ
   return finish(true);
 }
 
+// 卡片中客户端协议需要的字段。
 function cardContractFields(row) {
   const output = {
     contentRevision: require('./shared/content-policy').cardContentRevision(row),
@@ -1328,17 +1319,20 @@ function cardContractFields(row) {
   return output;
 }
 
+// 【分区 7：身份】IdentityBinding 主键：provider + providerUid 的 sha256。
 function identityBindingId(provider, providerUid) {
   return crypto.createHash('sha256')
     .update(`shike-identity:${String(provider)}:${String(providerUid)}`)
     .digest('hex');
 }
 
+// 读取身份绑定。
 async function identityBinding(provider, providerUid, env) {
   return one(collection(env, 'IdentityBinding').query()
     .equalTo('id', identityBindingId(provider, providerUid)));
 }
 
+// 确保身份绑定存在（同一认证身份不能绑定到两个业务账号）。
 async function ensureIdentityBinding(provider, providerUid, canonicalUid, env) {
   const normalizedProvider = String(provider || '').trim();
   const normalizedProviderUid = String(providerUid || '').trim();
@@ -1364,6 +1358,7 @@ async function ensureIdentityBinding(provider, providerUid, canonicalUid, env) {
   });
 }
 
+// 校验 AGC Access Token（可选检查是否被撤销），返回 provider UID 与到期时间。
 async function verifiedAgcToken(accessToken, checkRevoked = true) {
   if (!accessToken || String(accessToken).length > 8192) {
     throw accessError('未登录或登录状态已失效。', 'AUTH_REQUIRED');
@@ -1382,20 +1377,20 @@ async function verifiedAgcToken(accessToken, checkRevoked = true) {
     } catch (_) { expiresAt = 0; }
     return { uid, expiresAt };
   } catch (_error) {
-    // Account Kit access tokens are intentionally not accepted here.
+    // 这里刻意不接受 Account Kit（华为账号）的 Access Token，只接受 AGC Token。
     throw accessError('登录凭证无效或已撤销，请重新登录。', 'AUTH_REQUIRED');
   }
 }
 
+// 校验 Token 并只返回 provider UID。
 async function verifiedAgcUid(accessToken) {
   const verified = await verifiedAgcToken(accessToken, true);
   return verified.uid;
 }
 
+// 校验 Token → 查 IdentityBinding → 得到业务 canonical UID，并确认账号有效（只读操作可使用 90 秒身份缓存）。
 async function verifiedIdentity(accessToken, env, readOnly = false) {
-  // Read operations reuse a verified identity for up to 90 s in this instance (never past token expiry):
-  // no token round trip, IdentityBinding or UserProfile read. Writes and account operations always verify
-  // in full, including the revocation check.
+  // 只读操作在本实例内最多复用已验证身份 90 秒（且不超过 Token 到期时间）：省去 Token 校验、IdentityBinding 与 UserProfile 的读取。写操作与账号操作始终完整校验（包括撤销检查）。
   const cacheable = readOnly && identityCacheable() && !!accessToken;
   const cacheKey = cacheable ? identityCacheKey(accessToken) : '';
   if (cacheKey) {
@@ -1416,12 +1411,11 @@ async function verifiedIdentity(accessToken, env, readOnly = false) {
       if (!seeds) { seeds = new Map(); scope.set('verified-profiles', seeds); }
       seeds.set(canonicalUid, profile);
     }
-    // The binding above is already validated. Ordinary mutations must not
-    // re-query and rewrite an unchanged identity on every button press.
+    // 上面的绑定已经校验过；普通写操作不能每次点击都重新查询并重写一个没有变化的身份绑定。
     if (!readOnly && !binding) await ensureIdentityBinding('AGC', providerUid, canonicalUid, env);
     if (cacheKey) {
       recordCacheCount('identityCacheMiss');
-      // Only an ACTIVE account reaches this point (assertAccountActive above).
+      // 能走到这里的一定是有效账号（上面已 assertAccountActive）。
       rememberIdentity(cacheKey, providerUid, canonicalUid, verified.expiresAt);
     }
     if (IDENTITY_STATE_OPERATIONS.has(operationScope.getStore() || '')) forgetIdentity(canonicalUid);
@@ -1429,21 +1423,25 @@ async function verifiedIdentity(accessToken, env, readOnly = false) {
   });
 }
 
+// 最常用的入口：返回业务 UID。
 async function verifiedUid(accessToken, env, readOnly = false) {
   const identity = await verifiedIdentity(accessToken, env, readOnly);
   return identity.canonicalUid;
 }
 
+// Base64URL 解码。
 function fromBase64Url(value) {
   const encoded = String(value || '').replace(/-/g, '+').replace(/_/g, '/');
   const padding = '='.repeat((4 - encoded.length % 4) % 4);
   return Buffer.from(encoded + padding, 'base64');
 }
 
+// 迁移票据密钥（SHIKE_IDENTITY_TICKET_KEY，与 shike-auth 相同）。
 function identityTicketKey(env) {
   return crypto.createHash('sha256').update(required(env, 'SHIKE_IDENTITY_TICKET_KEY')).digest();
 }
 
+// 解密并校验迁移票据（10 分钟有效）。
 function decryptIdentityTicket(ticket, env) {
   const parts = String(ticket || '').split('.');
   if (parts.length !== 4 || parts[0] !== 'v1') {
@@ -1471,6 +1469,7 @@ function decryptIdentityTicket(ticket, env) {
   }
 }
 
+// 加密生成票据。
 function sealIdentityTicket(payload, env) {
   const now = Math.floor(Date.now() / 1000);
   const body = {
@@ -1489,6 +1488,7 @@ function sealIdentityTicket(payload, env) {
   return `v1.${iv.toString('base64url')}.${ciphertext.toString('base64url')}.${cipher.getAuthTag().toString('base64url')}`;
 }
 
+// 确认票据未被使用过（一次性）。
 async function assertMigrationTicketAvailable(ticket, kind, env) {
   if (String(ticket.kind || '') !== kind) throw new Error('迁移凭证用途不匹配。');
   const existing = await one(collection(env, 'AuthMigrationTicket').query()
@@ -1496,6 +1496,7 @@ async function assertMigrationTicketAvailable(ticket, kind, env) {
   if (existing) throw new Error('迁移凭证已使用或正在处理。');
 }
 
+// 记录票据已被使用。
 async function recordMigrationTicket(ticket, kind, sourceProviderUid, targetProviderUid, canonicalUid, env) {
   const issuedAtSeconds = Number(ticket.issuedAt);
   const expiresAtSeconds = Number(ticket.expiresAt);
@@ -1512,6 +1513,7 @@ async function recordMigrationTicket(ticket, kind, sourceProviderUid, targetProv
   });
 }
 
+// complete-legacy-login：华为兼容登录的最后一步，用票据把华为身份绑定到业务账号。
 async function completeLegacyLogin(accessToken, payload, env) {
   const agcUid = await verifiedAgcUid(accessToken);
   const ticket = decryptIdentityTicket(payload.ticket, env);
@@ -1539,6 +1541,7 @@ async function completeLegacyLogin(accessToken, payload, env) {
   return { success: true };
 }
 
+// start-email-binding：为当前华为账号签发邮箱绑定票据。
 async function startEmailBinding(accessToken, env) {
   const agcUid = await verifiedAgcUid(accessToken);
   const canonicalUid = await verifiedUid(accessToken, env);
@@ -1553,6 +1556,7 @@ async function startEmailBinding(accessToken, env) {
   };
 }
 
+// complete-email-binding：用票据把新建的邮箱身份绑定到当前账号。
 async function completeEmailBinding(accessToken, payload, env) {
   const agcUid = await verifiedAgcUid(accessToken);
   const ticket = decryptIdentityTicket(payload.ticket, env);
@@ -1573,6 +1577,7 @@ async function completeEmailBinding(accessToken, payload, env) {
   return { success: true };
 }
 
+// 【分区 8：工具】把值转为数组。
 function safeArray(value) {
   if (Array.isArray(value)) return value.map((item) => String(item)).slice(0, 8);
   if (typeof value !== 'string' || value.length === 0) return [];
@@ -1584,6 +1589,7 @@ function safeArray(value) {
   }
 }
 
+// 历史发布位置取整（只用于旧数据，新发布不再记录坐标）。
 function roundedLocation(payload) {
   const latE3 = Number(payload.latE3);
   const lonE3 = Number(payload.lonE3);
@@ -1594,16 +1600,7 @@ function roundedLocation(payload) {
   return { latE3, lonE3 };
 }
 
-function haversineKm(aLatE3, aLonE3, bLatE3, bLonE3) {
-  const rad = Math.PI / 180;
-  const lat1 = aLatE3 / 1000 * rad;
-  const lat2 = bLatE3 / 1000 * rad;
-  const dLat = lat2 - lat1;
-  const dLon = (bLonE3 - aLonE3) / 1000 * rad;
-  const value = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
-  return 6371.0088 * 2 * Math.atan2(Math.sqrt(value), Math.sqrt(1 - value));
-}
-
+// 计算 geohash。
 function geohash(latitude, longitude, precision = 6) {
   const alphabet = '0123456789bcdefghjkmnpqrstuvwxyz';
   let lat = [-90, 90];
@@ -1635,10 +1632,7 @@ function geohash(latitude, longitude, precision = 6) {
 }
 
 /**
- * shike-service owns business authorization and Cloud DB state; shike-media
- * owns every Cloud Storage SDK call. The HMAC body prevents a caller from
- * using the media Cloud Object as a general-purpose storage proxy, even
- * though both Cloud Objects are reached through the same AGC gateway.
+ * 【分区 9：调用 shike-media】shike-service 负责业务授权与 Cloud DB 状态，shike-media 负责所有 Cloud Storage SDK 调用。请求体带 HMAC 签名（SHIKE_MEDIA_INTERNAL_KEY，60 秒有效），防止调用方把媒体云对象当作通用存储代理——尽管两个云对象都经同一个 AGC 网关访问。
  */
 async function callMedia(action, payload, env) {
   return measuredDependency('mediaGateway', async () => {
@@ -1666,12 +1660,9 @@ async function callMedia(action, payload, env) {
 }
 
 /**
- * Object keys are derived from non-sensitive Cloud DB fields because AGC
- * Cloud DB intentionally returns an empty value for sensitive fields. Clients
- * upload only to their server-authorized public/approved path. The cloud
- * function still verifies that the expected object exists before it exposes a
- * card or avatar through Cloud DB.
+ * 对象路径由 Cloud DB 中的非敏感字段推导，因为 AGC Cloud DB 对敏感字段会刻意返回空值。客户端只能上传到服务端授权的 public/approved 路径；云函数在通过 Cloud DB 公开某张卡片或头像之前，仍会确认对应对象确实存在。
  */
+// 对象路径：{prefix}/{ownerUid}/{mediaId}.jpg。
 function mediaObjectKey(prefix, ownerUid, mediaId) {
   const uid = String(ownerUid || '');
   const id = String(mediaId || '');
@@ -1682,18 +1673,22 @@ function mediaObjectKey(prefix, ownerUid, mediaId) {
   return `${prefix}/${uid}/${id}.jpg`;
 }
 
+// 暂存区路径 private/pending/...。
 function pendingObjectKey(ownerUid, mediaId) {
   return mediaObjectKey('private/pending', ownerUid, mediaId);
 }
 
+// 公开路径 public/approved/...。
 function approvedObjectKey(ownerUid, mediaId) {
   return mediaObjectKey('public/approved', ownerUid, mediaId);
 }
 
+// 某图片记录的公开路径。
 function approvedObjectKeyForMedia(media) {
   return approvedObjectKey(media && (media.storageUid || media.ownerUid), media && media.id);
 }
 
+// 从公开路径中解析 mediaId。
 function mediaIdFromApprovedObjectKey(objectKey) {
   const match = /^public\/approved\/[^/]+\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jpg$/i
     .exec(String(objectKey || ''));
@@ -1701,23 +1696,23 @@ function mediaIdFromApprovedObjectKey(objectKey) {
 }
 
 /**
- * Approved media is read through the app-signed Cloud Object, which
- * validates the database record and writes bytes into the app-private cache.
- * The object itself is never exposed as a direct Storage URL, so read access
- * stays independent of the device's local login implementation.
+ * 已通过的图片通过 App 签名鉴权的云对象读取：它校验数据库记录后把字节写入 App 私有缓存。对象本身从不以 Storage 直链形式暴露，读取权限与设备本地的登录实现无关。get-public-media：游客读取公开图片。
  */
 
 
+// get-public-media：游客读取公开图片（按公开模式校验权限）。
 async function getPublicMedia(_uid, payload, env) {
   if (String(payload.bucketName || '').trim() !== required(env, 'SHIKE_STORAGE_BUCKET')) throw new Error('图片所属存储实例无效。');
   const key = String(payload.cloudPath || ''), mediaId = mediaIdFromApprovedObjectKey(key);
   if (!mediaId) throw new Error('图片路径无效。');
   return require('./shared/image-reader').readLegacy({ ...payload, key, mediaId, mode: 'PUBLIC', viewerUid: '' }, env);
 }
+// get-revision-media：读取修订中的图片（仅作者）。
 async function getRevisionMedia(uid, payload, env) {
   return require('./shared/image-reader').readLegacy({ ...payload, viewerUid: uid, mode: 'REVISION', variant: 'ORIGINAL' }, env);
 }
 
+// 旧数据兼容：把暂存区的图片提升为公开图片（委托 shike-media）。
 async function promotePendingMedia(media, env) {
   const storageUid = String(media && (media.storageUid || media.ownerUid) || '').trim();
   const pendingKey = pendingObjectKey(storageUid, media && media.id);
@@ -1727,6 +1722,7 @@ async function promotePendingMedia(media, env) {
   return approvedKey;
 }
 
+// 【分区 10：用户资料】规范化昵称。
 function normalizedNickname(value) {
   const nickname = String(value || '').trim();
   if (nickname.length === 0 || nickname.length > 24) {
@@ -1735,33 +1731,28 @@ function normalizedNickname(value) {
   return nickname;
 }
 
+// 由 UID 生成食刻号。
 function friendCodeForUid(uid) {
   const digest = crypto.createHash('sha256').update(`shike-friend:${String(uid || '')}`).digest('hex')
     .slice(0, 12).toUpperCase();
   return `SK-${digest.slice(0, 4)}-${digest.slice(4, 8)}-${digest.slice(8, 12)}`;
 }
 
+// 资料图片（头像 / 主页背景）的公开路径；没有图片或记录格式无效时返回空串。
+function profileMediaPath(record, mediaField, storageField) {
+  const mediaId = String(record[mediaField] || '');
+  if (!mediaId) return '';
+  try {
+    return approvedObjectKey(String(record[storageField] || record.uid || ''), mediaId);
+  } catch (_error) {
+    return '';
+  }
+}
+
+// 资料的返回视图。
 function profileResponse(record, env) {
-  const avatarMediaId = String(record.avatarMediaId || '');
-  const avatarStorageUid = String(record.avatarStorageUid || record.uid || '');
-  const coverMediaId = String(record.coverMediaId || '');
-  const coverStorageUid = String(record.coverStorageUid || record.uid || '');
-  let avatarPath = '';
-  if (avatarMediaId) {
-    try {
-      avatarPath = approvedObjectKey(avatarStorageUid, avatarMediaId);
-    } catch (_error) {
-      avatarPath = '';
-    }
-  }
-  let coverPath = '';
-  if (coverMediaId) {
-    try {
-      coverPath = approvedObjectKey(coverStorageUid, coverMediaId);
-    } catch (_error) {
-      coverPath = '';
-    }
-  }
+  const avatarPath = profileMediaPath(record, 'avatarMediaId', 'avatarStorageUid');
+  const coverPath = profileMediaPath(record, 'coverMediaId', 'coverStorageUid');
   return {
     uid: String(record.uid || ''),
     nickname: String(record.nicknameValue || record.nickname || '食刻用户'),
@@ -1778,14 +1769,35 @@ function profileResponse(record, env) {
   };
 }
 
+// 把调用者本人上传的图片绑定为资料图片（mediaCardId 为 profile:uid 或 profile-cover:uid）：校验归属、提升暂存上传、写入关联。
+// 返回图片所在的存储 UID。旧的资料图片保留到注销清理时；昵称冲突或并发保存绝不能删除当前仍被引用的图片。
+async function claimProfileMedia(uid, mediaId, mediaCardId, label, env) {
+  const mediaStore = collection(env, 'CardMedia');
+  const media = await one(mediaStore.query().equalTo('id', mediaId));
+  if (!media || media.ownerUid !== uid || (media.cardId && media.cardId !== mediaCardId)) {
+    throw new Error(`${label}图片不存在、不属于当前用户或已用于其他${label === '头像' ? '卡片' : '内容'}。`);
+  }
+  const mediaStorageUid = String(media.storageUid || uid).trim();
+  if (String(media.status || '') === 'PENDING_UPLOAD') {
+    await promotePendingMedia(media, env);
+  } else if (String(media.status || '') !== 'APPROVED') {
+    throw new Error(`${label}图片状态无效，请重新选择。`);
+  }
+  if (media.cardId !== mediaCardId) {
+    media.cardId = mediaCardId;
+    await mediaStore.upsert(media);
+  }
+  return mediaStorageUid;
+}
+
+// upsert-profile：读取或更新资料（readOnly=true 时只读取；首次登录时创建资料）。
 async function upsertProfile(uid, payload, env, trustedProfile = false) {
   const users = collection(env, 'UserProfile');
   const existing = await one(users.query().equalTo('uid', uid));
   if (existing && !isAccountActive(existing)) throw accessError('账号已停用或正在注销。', 'ACCOUNT_INACTIVE');
   if (!trustedProfile && payload && payload.readOnly === true) {
     if (existing) return profileResponse(existing, env);
-    // AGC Auth has already verified the caller's UID. Create the local app
-    // profile on first sign-in without storing email or provider details.
+    // AGC Auth 已经校验过调用者的 UID；首次登录时创建食刻资料，不保存邮箱或认证方信息。
     return upsertProfile(uid, { nickname: '食刻用户' }, env, true);
   }
   if (String(env.SHIKE_NICKNAME_MIGRATING || '') === 'true') throw accessError('账号资料正在维护，请稍后重试。', 'FEATURE_NOT_READY');
@@ -1800,8 +1812,7 @@ async function upsertProfile(uid, payload, env, trustedProfile = false) {
   let coverStorageUid = String((existing && existing.coverStorageUid) || uid).trim();
 
   if (trustedProfile) {
-    // Login does not request account profile scopes. Preserve app-owned values
-    // once they exist instead of overwriting them with a later login response.
+    // 登录不申请账号资料权限；资料一旦存在就保留 App 自己的值，不被之后的登录响应覆盖。
     if (!nickname) {
       const trustedValue = String((payload && payload.nickname) || '').trim();
       nickname = nicknameAuth.enabled(env) ? '食刻' + crypto.createHash('sha256').update(uid).digest('hex').slice(0, 22)
@@ -1811,64 +1822,23 @@ async function upsertProfile(uid, payload, env, trustedProfile = false) {
     nickname = normalizedNickname(payload && payload.nickname);
     const requestedMediaId = String((payload && payload.avatarMediaId) || '').trim();
     if (requestedMediaId.length > 0) {
-      const mediaStore = collection(env, 'CardMedia');
-      const media = await one(mediaStore.query().equalTo('id', requestedMediaId));
-      const profileMediaCardId = `profile:${uid}`;
-      if (!media || media.ownerUid !== uid || (media.cardId && media.cardId !== profileMediaCardId)) {
-        throw new Error('头像图片不存在、不属于当前用户或已用于其他卡片。');
-      }
-      // Confirms and promotes the caller-owned pending upload before the image
-      // is referenced by a profile.
-      const mediaStorageUid = String(media.storageUid || uid).trim();
-      if (String(media.status || '') === 'PENDING_UPLOAD') {
-        await promotePendingMedia(media, env);
-      } else if (String(media.status || '') !== 'APPROVED') {
-        throw new Error('头像图片状态无效，请重新选择。');
-      }
-      if (media.cardId !== profileMediaCardId) {
-        media.cardId = profileMediaCardId;
-        await mediaStore.upsert(media);
-      }
-      // Keep prior profile media until account cleanup; a conflicting nickname
-      // or concurrent profile save must never delete the currently referenced image.
+      avatarStorageUid = await claimProfileMedia(uid, requestedMediaId, `profile:${uid}`, '头像', env);
       avatarMediaId = requestedMediaId;
-      avatarStorageUid = mediaStorageUid;
     }
     const requestedCoverMediaId = String((payload && payload.coverMediaId) || '').trim();
-    const coverMediaCardId = `profile-cover:${uid}`;
     if (payload && payload.clearCover === true) {
-      // Keep prior profile media until account cleanup; a conflicting nickname
-      // or concurrent profile save must never delete the currently referenced image.
+      // 旧的资料图片保留到注销清理时。
       coverMediaId = '';
       coverStorageUid = '';
     } else if (requestedCoverMediaId.length > 0) {
-      const mediaStore = collection(env, 'CardMedia');
-      const media = await one(mediaStore.query().equalTo('id', requestedCoverMediaId));
-      if (!media || media.ownerUid !== uid || (media.cardId && media.cardId !== coverMediaCardId)) {
-        throw new Error('主页背景图片不存在、不属于当前用户或已用于其他内容。');
-      }
-      const mediaStorageUid = String(media.storageUid || uid).trim();
-      if (String(media.status || '') === 'PENDING_UPLOAD') {
-        await promotePendingMedia(media, env);
-      } else if (String(media.status || '') !== 'APPROVED') {
-        throw new Error('主页背景图片状态无效，请重新选择。');
-      }
-      if (media.cardId !== coverMediaCardId) {
-        media.cardId = coverMediaCardId;
-        await mediaStore.upsert(media);
-      }
-      // Keep prior profile media until account cleanup; a conflicting nickname
-      // or concurrent profile save must never delete the currently referenced image.
+      coverStorageUid = await claimProfileMedia(uid, requestedCoverMediaId, `profile-cover:${uid}`, '主页背景', env);
       coverMediaId = requestedCoverMediaId;
-      coverStorageUid = mediaStorageUid;
     }
   }
 
   const record = {
     uid,
-    // These sensitive mirrors remain compatible with the existing Cloud DB
-    // schema. The non-sensitive counterparts are only readable by the cloud
-    // function because direct Cloud DB permissions are disabled for app users.
+    // 这些敏感镜像字段为兼容现有 Cloud DB 结构而保留；对应的非敏感字段只有云函数能读取，因为 App 用户的直连权限已全部关闭。
     nickname,
     avatarUrl: avatarMediaId ? approvedObjectKey(avatarStorageUid || uid, avatarMediaId) : '',
     nicknameValue: nickname,
@@ -1916,104 +1886,17 @@ async function upsertProfile(uid, payload, env, trustedProfile = false) {
   return profileResponse(saved, env);
 }
 
+// 重新统计作者的发布数。
 async function refreshPublishCount(uid, env) {
   try {
     await upsertProfile(uid, {}, env, true);
   } catch (error) {
-    // The card change has already committed. Do not report it as failed and
-    // invite a duplicate publish or delete retry for a derived profile count.
+    // 卡片变更已经提交；不要把它报告为失败，否则会诱发重复发布或重复删除，而这里只是一个派生的发布数。
     console.error(`publish count refresh failed: ${safeLogError(error)}`);
   }
 }
 
-async function prepareCardPhoto(uid, storageUid, payload, env) {
-  if (payload.mimeType !== 'image/jpeg') throw new Error('实拍图必须处理为 JPEG。');
-  if (!Number.isInteger(payload.byteSize) || payload.byteSize <= 0 || payload.byteSize > MAX_PHOTO_BYTES) {
-    throw new Error('实拍图不得超过 2MB。');
-  }
-  if (!Number.isInteger(payload.width) || !Number.isInteger(payload.height) ||
-    payload.width < 1 || payload.height < 1 || Math.max(payload.width, payload.height) > 1600) {
-    throw new Error('实拍图长边不得超过 1600px。');
-  }
-  if (!/^[a-f0-9]{64}$/i.test(String(payload.sha256 || ''))) throw new Error('实拍图摘要无效。');
-  const mediaId = crypto.randomUUID();
-  const objectKey = approvedObjectKey(storageUid, mediaId);
-  const media = {
-    id: mediaId,
-    cardId: '',
-    ownerUid: uid,
-    storageUid,
-    objectKey,
-    sha256: String(payload.sha256),
-    preparedSha256: String(payload.sha256),
-    mimeType: 'image/jpeg',
-    byteSize: payload.byteSize,
-    width: payload.width,
-    height: payload.height,
-    status: 'PENDING_UPLOAD',
-    createdAt: Date.now()
-  };
-  await collection(env, 'CardMedia').insert(media);
-  return { mediaId, cloudPath: objectKey, bucketName: required(env, 'SHIKE_STORAGE_BUCKET') };
-}
-
-function uploadBytesFromBase64(value) {
-  const encoded = String(value || '');
-  const maximumLength = Math.ceil(MAX_PHOTO_BYTES / 3) * 4 + 4;
-  if (encoded.length === 0 || encoded.length > maximumLength || encoded.length % 4 !== 0 ||
-    !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) {
-    throw new Error('上传图片内容不是有效的 Base64 数据。');
-  }
-  const bytes = Buffer.from(encoded, 'base64');
-  if (bytes.length === 0 || bytes.length > MAX_PHOTO_BYTES ||
-    bytes[0] !== 0xff || bytes[1] !== 0xd8 || bytes[2] !== 0xff ||
-    bytes[bytes.length - 2] !== 0xff || bytes[bytes.length - 1] !== 0xd9) {
-    throw new Error('上传图片必须是有效的 JPEG，且不得超过 2MB。');
-  }
-  return bytes;
-}
-
-async function saveApprovedPhoto(env, objectKey, bytes, sha256) {
-  await callMedia('write-approved', {
-    key: objectKey,
-    dataBase64: bytes.toString('base64'),
-    sha256
-  }, env);
-}
-
-async function uploadCardPhoto(uid, payload, env) {
-  const mediaId = String(payload && payload.mediaId || '').trim();
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(mediaId)) {
-    throw new Error('图片上传标识无效。');
-  }
-  const declaredSha256 = String(payload && payload.sha256 || '').trim().toLowerCase();
-  if (!/^[a-f0-9]{64}$/.test(declaredSha256)) throw new Error('图片摘要无效。');
-  const mediaStore = collection(env, 'CardMedia');
-  const media = await one(mediaStore.query().equalTo('id', mediaId));
-  if (!media || String(media.ownerUid || '') !== uid || String(media.cardId || '')) {
-    throw new Error('图片不存在、不属于当前用户或已被使用。');
-  }
-  if (String(media.status || '') !== 'PENDING_UPLOAD') {
-    throw new Error('图片已上传或状态无效，请重新选择。');
-  }
-  const bytes = uploadBytesFromBase64(payload && payload.dataBase64);
-  if (bytes.length !== Number(media.byteSize || 0)) {
-    throw new Error('图片长度与准备记录不一致，请重新选择。');
-  }
-  const actualSha256 = crypto.createHash('sha256').update(bytes).digest('hex');
-  if (actualSha256 !== declaredSha256) throw new Error('图片摘要校验失败，请重新选择。');
-  const preparedSha256 = String(media.preparedSha256 || '').toLowerCase();
-  if (!/^[a-f0-9]{64}$/.test(preparedSha256)) {
-    throw new Error('图片准备记录版本已过期，请重新选择。');
-  }
-  if (actualSha256 !== preparedSha256) {
-    throw new Error('图片内容与准备记录不一致，请重新选择。');
-  }
-  const objectKey = approvedObjectKey(String(media.storageUid || uid), mediaId);
-  await saveApprovedPhoto(env, objectKey, bytes, actualSha256);
-  return { success: true };
-}
-
+// 【分区 11：发布】校验 HTTPS 链接。
 function validHttpsUrl(value) {
   try {
     const parsed = new URL(String(value || '').trim());
@@ -2025,6 +1908,7 @@ function validHttpsUrl(value) {
   }
 }
 
+// 校验卡片内容（名称、点评 ≤600 字、评分 1–10、来源链接等）。
 function validateCard(payload) {
   const productName = String(payload.productName || '').trim();
   if (productName.length < 2 || productName.length > 100) throw new Error('商品名长度应为 2–100 个字符。');
@@ -2052,6 +1936,7 @@ function validateCard(payload) {
   return { productName, sourceLink, reviewText, tasteScore };
 }
 
+// publish-card：发布卡片（幂等回执 → 字段规范化 → 校验图片 → 一个事务写入卡片、图片关联、店铺计数、资料与回执）。
 async function publishCard(uid, payload, env) {
   const receiptSpec = stage1.publishReceiptSpec(uid, payload);
   const replay = await stage1.readPublishReceipt(uid, receiptSpec, env);
@@ -2069,9 +1954,7 @@ async function publishCard(uid, payload, env) {
       if (retry) return retry;
       throw new Error('实拍图不存在、不属于当前用户或已被使用。');
     }
-    // Confirm each caller-owned public upload before creating a public card.
-    // The compatibility branch also promotes an already-uploaded legacy
-    // private/pending object if one exists.
+    // 创建公开卡片前确认每张图片属于调用者且已上传；兼容分支还会把已上传的旧暂存区对象提升为公开对象。
     await promotePendingMedia(media, env);
     medias.push(media);
   }
@@ -2142,17 +2025,17 @@ async function publishCard(uid, payload, env) {
     }
   });
   if (!committed) throw new Error('推荐卡保存未完成，请重试。');
-  // Product decision: publish validated user content immediately.
-  // Rebuild through the profile helper so sensitive legacy mirrors are never
-  // accidentally cleared by a Cloud DB query during a publish-count update.
+  // 产品决定：校验通过的用户内容立即发布。通过资料辅助函数重建，避免发布数更新时因 Cloud DB 查询而意外清空敏感镜像字段。
   await refreshPublishCount(uid, env);
   return { cardId, status: 'APPROVED' };
 }
 
+// 互动记录的确定性主键。
 function actionId(scope, uid, targetId) {
   return crypto.createHash('sha256').update(`${scope}:${uid}:${targetId}`).digest('hex');
 }
 
+// 去重并校验请求中的图片 id（最多 6 张）。
 function uniqueMediaIds(payload) {
   const values = Array.isArray(payload.mediaIds) ? payload.mediaIds : [];
   const source = values.length > 0 ? values : (payload.mediaId ? [payload.mediaId] : []);
@@ -2171,6 +2054,7 @@ function uniqueMediaIds(payload) {
   return ids;
 }
 
+// 【分区 12：卡片读取组装】作者公开资料。
 async function publicProfile(uid, env, metrics = null, readContext = null) {
   const fallback = { nickname: '食刻用户', avatarPath: '', avatarBucket: '' };
   if (!uid) return fallback;
@@ -2187,18 +2071,18 @@ async function publicProfile(uid, env, metrics = null, readContext = null) {
     };
   } catch (_error) {
     if (metrics) metrics.profileFailures += 1;
-    // Profile fields are additive to every public view. A stale profile must
-    // never prevent a card or comment from being displayed.
+    // 资料字段只是附加到公开视图上；资料过期或缺失绝不能导致卡片无法显示。
     return fallback;
   }
 }
 
+// 卡片的公开图片列表（含描述符）。
 async function publicPhotos(row, env, includePhoto, maxPhotoCount = MAX_CARD_PHOTOS, metrics = null, readContext = null) {
   if (!includePhoto) return [];
   const photoLimit = Math.max(1, Math.min(MAX_CARD_PHOTOS,
     Math.floor(Number(maxPhotoCount) || MAX_CARD_PHOTOS)));
   const primary = readContext && photoLimit === 1 ? readContext.primaryMedia.get(String(row.mediaId || '')) : null;
-  // Card.mediaId is the recorded cover. Unlinked/legacy records retain the old query path.
+  // Card.mediaId 是记录的封面；没有关联的旧记录继续走旧的查询路径。
   const usePrimary = primary && primary.status === 'APPROVED' &&
     String(primary.cardId || '') === String(row.id || '') && String(primary.ownerUid || '') === String(row.ownerUid || '');
   if (metrics && !usePrimary) metrics.mediaDbQueries += 1;
@@ -2223,12 +2107,13 @@ async function publicPhotos(row, env, includePhoto, maxPhotoCount = MAX_CARD_PHO
         height: Number(media.height || 0)
       });
     } catch (_error) {
-      // Skip only the malformed photo and keep the remaining carousel usable.
+      // 只跳过格式错误的那张图，其余轮播仍可使用。
     }
   }
   return photos;
 }
 
+// 为一批卡片建立读取上下文（批量读作者、图片、店铺）。
 async function createCardReadContext(rows, viewerUid, env, metrics = null) {
   const scope = cardReadScope.getStore();
   const key = String(env.SHIKE_DB_ZONE || process.env.SHIKE_DB_ZONE || 'shike') + ':' + String(viewerUid || '');
@@ -2262,6 +2147,7 @@ async function createCardReadContext(rows, viewerUid, env, metrics = null) {
   return context;
 }
 
+// 预先读取首图。
 async function preparePrimaryPhotos(readContext, rows, env, metrics = null) {
   const ids = [...new Set(rows.map((row) => String(row.mediaId || '')).filter(Boolean))];
   const missing = ids.filter(id => !readContext.mediaRequests.has(id));
@@ -2279,6 +2165,7 @@ async function preparePrimaryPhotos(readContext, rows, env, metrics = null) {
   await Promise.all(ids.map(id => readContext.mediaRequests.get(id)));
 }
 
+// 按 id 批量读取店铺。
 async function readMerchantRowsByIds(ids, env, readContext = null) {
   const requests = readContext ? readContext.merchantRequests : new Map();
   const unique = [...new Set(ids.filter(Boolean).map(String))];
@@ -2294,6 +2181,7 @@ async function readMerchantRowsByIds(ids, env, readContext = null) {
   return new Map(await Promise.all(unique.map(async id => [id, await requests.get(id)])));
 }
 
+// 最终组装并再次校验可见性。
 async function finalizeCardReads(cards, sourceRows, viewerUid, env, friendsOnly = false) {
   if (cards.length === 0) return cards;
   const ids = cards.map((card) => String(card.id));
@@ -2307,7 +2195,7 @@ async function finalizeCardReads(cards, sourceRows, viewerUid, env, friendsOnly 
     const rows = await collection(env, 'CardMedia').query().in('id', batch).limit(batch.length).get();
     for (const row of rows) currentMedia.set(String(row.id), row);
   }
-  // Refresh cards after media hydration; never reuse the first-phase authority cache.
+  // 图片补全之后再刷新卡片数据；绝不复用第一阶段的权威缓存。
   for (let start = 0; start < ids.length; start += CARD_READ_BATCH_SIZE) {
     const batch = ids.slice(start, start + CARD_READ_BATCH_SIZE);
     const rows = await collection(env, 'FoodCard').query().in('id', batch).limit(batch.length).get();
@@ -2320,7 +2208,7 @@ async function finalizeCardReads(cards, sourceRows, viewerUid, env, friendsOnly 
     }
   }
   const policy = contentPolicy(env);
-  // Batch fresh author authority; do not seed from the first-phase read context.
+  // 批量读取最新的作者状态；不使用第一阶段读取上下文中的数据。
   const authorUids = [...new Set([...current.values()].map(row => String(row.ownerUid || '')).filter(Boolean))];
   const freshAuthors = new Map(authorUids.map(uid => [uid, null]));
   for (let start = 0; start < authorUids.length; start += SOCIAL_PROFILE_QUERY_BATCH_SIZE) {
@@ -2358,6 +2246,7 @@ async function finalizeCardReads(cards, sourceRows, viewerUid, env, friendsOnly 
   return result;
 }
 
+// 卡片预览视图。
 function previewCard(row, context, env) {
   const author = context.profiles.get(String(row.ownerUid)) || {};
   const media = context.primaryMedia.get(String(row.mediaId || ''));
@@ -2379,12 +2268,13 @@ function previewCard(row, context, env) {
     likeCount: 0, favoriteCount: 0, viewerLiked: false, viewerFavorited: false };
 }
 
+// 互动摘要。
 async function cardActionSummary(cardId, viewerUid, env) {
-  // Server-side COUNT queries; falls back to the exact relation scan while
-  // legacy LIKE history is incomplete or COUNT is unavailable.
+  // 服务端 COUNT 查询；旧 LIKE 历史尚未合并或 COUNT 不可用时，回退到精确的关系扫描。
   return cardInteractions.summary(cardId, viewerUid, env);
 }
 
+// 组装一张返回给客户端的卡片。
 async function publicCard(row, env, distanceKm = 0, includePhoto = false, viewerUid = '', includeActions = false,
   maxPhotoCount = MAX_CARD_PHOTOS, metrics = null, readContext = null, reviewAccess = false) {
   const context = readContext || await createCardReadContext([row], viewerUid, env, metrics);
@@ -2395,7 +2285,7 @@ async function publicCard(row, env, distanceKm = 0, includePhoto = false, viewer
     publicPhotos(row, env, includePhoto, maxPhotoCount, metrics, context),
     publicProfile(ownerUid, env, metrics, context)
   ];
-  // Finish optional-profile accounting even when the parallel media query fails.
+  // 即使并行的图片查询失败，也要完成可选资料的计数统计。
   if (metrics) await Promise.allSettled(parts);
   const [photos, author] = await Promise.all(parts);
   const primaryPhoto = photos.length > 0 ? photos[0] : {
@@ -2442,136 +2332,13 @@ async function publicCard(row, env, distanceKm = 0, includePhoto = false, viewer
       collectionStatus: actions.collectionStatus } : {}),
     district: row.district || '当前位置',
     distanceKm,
-    // Legacy rows with an unknown or retired status are not promoted by the
-    // test-mode path. Only explicitly approved rows are treated as public.
+    // 状态未知或已退役的旧数据不会被测试模式提升为公开；只有明确为 APPROVED 的行才视为公开。
     status: row.status === 'APPROVED' ? 'APPROVED' : 'REMOVED',
     createdAt: Number(row.createdAt || 0)
   };
 }
 
-function nearbyCacheFlag(env, name) {
-  const value = env && env[name] !== undefined ? env[name] : process.env[name];
-  return String(value || '').trim().toLowerCase() === 'true';
-}
-
-function nearbyCacheConfig(env) {
-  if (!nearbyCacheFlag(env, 'SHIKE_NEARBY_CLOUD_CACHE_ENABLED')) return null;
-  const host = String((env && env.SHIKE_NEARBY_CACHE_HOST) || process.env.SHIKE_NEARBY_CACHE_HOST || '').trim();
-  const port = Number((env && env.SHIKE_NEARBY_CACHE_PORT) || process.env.SHIKE_NEARBY_CACHE_PORT);
-  const username = String((env && env.SHIKE_NEARBY_CACHE_USERNAME) || process.env.SHIKE_NEARBY_CACHE_USERNAME || '').trim();
-  const password = String((env && env.SHIKE_NEARBY_CACHE_PASSWORD) || process.env.SHIKE_NEARBY_CACHE_PASSWORD || '');
-  const keySecret = String((env && env.SHIKE_NEARBY_CACHE_KEY_SECRET) || process.env.SHIKE_NEARBY_CACHE_KEY_SECRET || '');
-  if (!host || !Number.isInteger(port) || port < 1 || port > 65535 ||
-    !username || !password || keySecret.length < 32) return null;
-  return { host, port, username, password, keySecret };
-}
-
-function nearbyCacheTimed(promise) {
-  let timer;
-  return Promise.race([
-    promise,
-    new Promise((_resolve, reject) => {
-      timer = setTimeout(() => reject(new Error('nearby cache timeout')), NEARBY_CACHE_TIMEOUT_MS);
-    })
-  ]).finally(() => clearTimeout(timer));
-}
-
-function nearbyCacheUnavailable() {
-  // Concurrent failures share one cooldown; traffic must not keep extending it.
-  if (Date.now() >= nearbyRedisRetryAfter) {
-    nearbyRedisRetryAfter = Date.now() + NEARBY_CACHE_RETRY_DELAY_MS;
-  }
-  if (nearbyRedis) nearbyRedis.disconnect();
-  nearbyRedis = null;
-  nearbyRedisConnecting = null;
-}
-
-async function nearbyCacheClient(config) {
-  if (Date.now() < nearbyRedisRetryAfter) throw new Error('nearby cache cooldown');
-  if (!nearbyRedis) {
-    // Load the Redis dependency only when the feature is configured and used.
-    const Redis = require('ioredis');
-    nearbyRedis = new Redis({
-      host: config.host, port: config.port, username: config.username, password: config.password,
-      lazyConnect: true, enableReadyCheck: false, enableOfflineQueue: false,
-      connectTimeout: NEARBY_CACHE_TIMEOUT_MS, commandTimeout: NEARBY_CACHE_TIMEOUT_MS,
-      maxRetriesPerRequest: 0, retryStrategy: () => null,
-      autoResendUnfulfilledCommands: false, showFriendlyErrorStack: false
-    });
-    nearbyRedis.on('error', () => {});
-  }
-  const client = nearbyRedis;
-  if (client.status === 'ready') return client;
-  if (!nearbyRedisConnecting) {
-    const connecting = client.connect().finally(() => {
-      if (nearbyRedisConnecting === connecting) nearbyRedisConnecting = null;
-    });
-    nearbyRedisConnecting = connecting;
-  }
-  await nearbyCacheTimed(nearbyRedisConnecting);
-  if (nearbyRedis !== client || client.status !== 'ready') throw new Error('nearby cache unavailable');
-  return client;
-}
-
-function nearbyCacheKey(point, epoch, config) {
-  const query = `${NEARBY_CACHE_VERSION}:${point.latE3}:${point.lonE3}:${MAX_DISTANCE_KM}:200:${epoch}`;
-  const digest = crypto.createHmac('sha256', config.keySecret).update(query).digest('hex');
-  return `shike:nearby:${NEARBY_CACHE_VERSION}:${digest}`;
-}
-
-function nearbyCandidate(row) {
-  // Candidate IDs are reusable; content and authorization are always read live.
-  return { id: String(row.id || '') };
-}
-
-function nearbyCachedRows(value) {
-  const snapshot = JSON.parse(value);
-  if (!snapshot || snapshot.version !== NEARBY_CACHE_VERSION ||
-      !Number.isSafeInteger(snapshot.createdAt) || snapshot.createdAt > Date.now() ||
-      Date.now() - snapshot.createdAt >= NEARBY_CACHE_TTL_SECONDS * 1000 ||
-      !Array.isArray(snapshot.rows) || snapshot.rows.length > 200) throw new Error('invalid nearby snapshot');
-  const ids = new Set();
-  return snapshot.rows.map((raw) => {
-    if (!raw || typeof raw.id !== 'string' || !raw.id || ids.has(raw.id)) throw new Error('invalid nearby candidate');
-    ids.add(raw.id);
-    return nearbyCandidate(raw);
-  });
-}
-
-function nearbyPageToken(value) {
-  const token = String(value || '');
-  const cached = /^c1:(\d{1,12}):(\d{1,3})$/.exec(token);
-  const offset = Math.min(200, Math.max(0, Number.parseInt(cached ? cached[2] : token, 10) || 0));
-  const epoch = cached ? Number(cached[1]) : null;
-  const currentEpoch = Math.floor(Date.now() / (NEARBY_CACHE_TTL_SECONDS * 1000));
-  return { offset, epoch: epoch !== null && epoch >= currentEpoch - 1 && epoch <= currentEpoch
-    ? epoch : null, requestedSnapshot: cached !== null };
-}
-
-function nearbyCacheErrorCategory(error) {
-  // Never log Redis errors verbatim: messages can contain endpoints or keys.
-  const message = error instanceof Error ? error.message : '';
-  const code = error && typeof error.code === 'string' ? error.code : '';
-  if (/invalid nearby/.test(message) || error instanceof SyntaxError) return 'invalid_snapshot';
-  if (/timeout|timed out/i.test(message) || code === 'ETIMEDOUT') return 'timeout';
-  if (/WRONGPASS|NOAUTH|NOPERM/.test(message)) return 'auth';
-  if (code === 'MODULE_NOT_FOUND') return 'dependency';
-  if (['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EPIPE'].includes(code)) return 'connection';
-  return 'unavailable';
-}
-
-function nearbyCacheMetric(env, metrics, requestStarted) {
-  if (!nearbyCacheFlag(env, 'SHIKE_NEARBY_CACHE_METRICS_ENABLED')) return;
-  // One line per request permits aggregate count and latency analysis without identifiers.
-  console.info(`nearby.cache state=${metrics.state} outcome=${metrics.outcome} error=${metrics.error} ` +
-    `page=${metrics.page} candidateDbQueries=${metrics.candidateDbQueries} candidateDbMs=${metrics.candidateDbMs} ` +
-    `cacheReadMs=${metrics.cacheReadMs} cacheWriteMs=${metrics.cacheWriteMs} candidates=${metrics.candidates} ` +
-    `profileDbQueries=${metrics.profileDbQueries} mediaDbQueries=${metrics.mediaDbQueries} ` +
-    `profileFailures=${metrics.profileFailures} hydrationMs=${metrics.hydrationMs} cards=${metrics.cards} ` +
-    `totalMs=${Date.now() - requestStarted}`);
-}
-
-/** Ordinary public feed: page-sized metadata reads, one lookahead, bounded hidden-row scan. */
+// 【分区 14：推荐流】普通公开推荐流（首页）：按页读取元数据，多读一条判断是否有下一页，隐藏行的扫描有上限。游标格式 g1.<分类>.<快照时间>.<偏移>。
 async function listPublicRecommendations(payload, env, viewerUid = '') {
   const category = String(payload.category || 'all');
   if (category !== 'all' && !VALID_CATEGORY.has(category)) throw new Error('商品分类无效。');
@@ -2598,159 +2365,7 @@ async function listPublicRecommendations(payload, env, viewerUid = '') {
     scannedCandidateCount: page.scannedCandidateCount, fetchedCandidateCount: page.fetchedCandidateCount };
 }
 
-async function listNearby(uid, payload, env) {
-  const requestStarted = Date.now();
-  const metrics = {
-    state: nearbyCacheFlag(env, 'SHIKE_NEARBY_CLOUD_CACHE_ENABLED') ? 'unconfigured' : 'disabled',
-    outcome: 'error', error: 'none', page: payload.pageToken ? 'next' : 'first',
-    candidateDbQueries: 0, candidateDbMs: 0, cacheReadMs: 0, cacheWriteMs: 0,
-    candidates: 0, profileDbQueries: 0, mediaDbQueries: 0, profileFailures: 0,
-    hydrationMs: 0, cards: 0
-  };
-  try {
-    const point = roundedLocation(payload);
-    const page = nearbyPageToken(payload.pageToken);
-    const latDelta = Math.ceil(MAX_DISTANCE_KM / 111.0 * 1000);
-    const latitude = point.latE3 / 1000 * Math.PI / 180;
-    const lonDelta = Math.ceil(MAX_DISTANCE_KM / Math.max(1, 111.0 * Math.cos(latitude)) * 1000);
-    const config = nearbyCacheConfig(env);
-    const snapshotExpired = page.requestedSnapshot && page.epoch === null;
-    const epoch = page.epoch === null
-      ? Math.floor(Date.now() / (NEARBY_CACHE_TTL_SECONDS * 1000)) : page.epoch;
-    const key = config ? nearbyCacheKey(point, epoch, config) : '';
-    let rows = null;
-    let snapshotAvailable = false;
-    if (config && snapshotExpired) {
-      metrics.state = 'snapshot_expired';
-    } else if (config && Date.now() < nearbyRedisRetryAfter) {
-      // Skip Redis entirely during cooldown, without renewing the deadline.
-      metrics.state = 'cooldown';
-    } else if (config) {
-      const started = Date.now();
-      try {
-        const redis = await nearbyCacheClient(config);
-        const cached = await nearbyCacheTimed(redis.get(key));
-        rows = cached === null ? null : nearbyCachedRows(cached);
-        metrics.state = rows === null ? 'miss' : 'hit';
-        snapshotAvailable = rows !== null;
-      } catch (error) {
-        nearbyCacheUnavailable();
-        metrics.state = 'fallback';
-        metrics.error = nearbyCacheErrorCategory(error);
-      } finally {
-        metrics.cacheReadMs = Date.now() - started;
-      }
-    }
-    if (rows === null) {
-      const started = Date.now();
-      metrics.candidateDbQueries += 1;
-      try {
-        rows = await collection(env, 'FoodCard').query()
-          .equalTo('status', 'APPROVED')
-          .greaterThanOrEqualTo('latE3', point.latE3 - latDelta)
-          .lessThanOrEqualTo('latE3', point.latE3 + latDelta)
-          .greaterThanOrEqualTo('lonE3', point.lonE3 - lonDelta)
-          .lessThanOrEqualTo('lonE3', point.lonE3 + lonDelta)
-          .limit(200).get();
-      } finally {
-        metrics.candidateDbMs = Date.now() - started;
-      }
-      const remainingTtl = NEARBY_CACHE_TTL_SECONDS * 1000 - (Date.now() - started);
-      if (config && metrics.state === 'miss' && !page.requestedSnapshot && remainingTtl > 0 &&
-        rows.every((row) => row.status === 'APPROVED')) {
-        const writeStarted = Date.now();
-        try {
-          const redis = await nearbyCacheClient(config);
-          // NX protects a snapshot already referenced by a c1 pagination token.
-          const ttlAfterConnect = NEARBY_CACHE_TTL_SECONDS * 1000 - (Date.now() - started);
-          const stored = ttlAfterConnect > 0 ? await nearbyCacheTimed(redis.set(key, JSON.stringify({
-            version: NEARBY_CACHE_VERSION, createdAt: started, rows: rows.map(nearbyCandidate)
-          }), 'PX', ttlAfterConnect, 'NX')) : null;
-          snapshotAvailable = stored === 'OK';
-          if (!snapshotAvailable) {
-            const winner = await nearbyCacheTimed(redis.get(key));
-            if (winner !== null) {
-              rows = nearbyCachedRows(winner);
-              snapshotAvailable = true;
-              metrics.state = 'race_hit';
-            }
-          }
-        } catch (error) {
-          nearbyCacheUnavailable();
-          metrics.state = 'fallback';
-          metrics.error = nearbyCacheErrorCategory(error);
-        } finally {
-          metrics.cacheWriteMs = Date.now() - writeStarted;
-        }
-      } else if (page.requestedSnapshot && metrics.state === 'miss') {
-        metrics.state = 'snapshot_expired';
-      }
-    }
-    const currentRows = new Map();
-    const candidateIds = rows.map((row) => String(row.id || '')).filter(Boolean);
-    for (let start = 0; start < candidateIds.length; start += SOCIAL_PROFILE_QUERY_BATCH_SIZE) {
-      const ids = candidateIds.slice(start, start + SOCIAL_PROFILE_QUERY_BATCH_SIZE);
-      const fresh = await collection(env, 'FoodCard').query().in('id', ids).limit(ids.length).get();
-      metrics.candidateDbQueries += 1;
-      for (const row of fresh) currentRows.set(String(row.id || ''), row);
-    }
-    rows = candidateIds.map((id) => currentRows.get(id)).filter(Boolean);
-    // These legacy coordinates are a publication location, never Merchant
-    // coordinates. Stage 3 will query reliable Merchant coordinates instead.
-    rows = rows.filter((row) => !row.merchantId && !['DELIVERY', 'DINE_IN'].includes(row.consumptionMode));
-    const readContext = await createCardReadContext(rows, uid, env, metrics);
-    rows = await readableCardRows(rows, uid, env, true, readContext);
-    metrics.candidates = rows.length;
-    const matched = rows.map((row) => ({
-      row, distanceKm: haversineKm(point.latE3, point.lonE3, row.latE3, row.lonE3)
-    })).filter((item) => item.row.status === 'APPROVED' && item.distanceKm <= MAX_DISTANCE_KM)
-      .sort((a, b) => a.distanceKm - b.distanceKm || Number(b.row.createdAt) - Number(a.row.createdAt) ||
-        String(a.row.id).localeCompare(String(b.row.id)));
-    // Only photo-backed candidates occupy nearby recommendation slots.
-    const photoMatched = matched.filter((item) => String(item.row.mediaId || '').length > 0);
-    const offset = page.offset;
-    const requestedSize = Number(payload.pageSize || MAX_PAGE_SIZE);
-    const pageSize = Number.isFinite(requestedSize)
-      ? Math.floor(Math.min(MAX_PAGE_SIZE, Math.max(1, requestedSize))) : MAX_PAGE_SIZE;
-    const slice = photoMatched.slice(offset, offset + pageSize);
-    const cards = [];
-    const hydrationStarted = Date.now();
-    try {
-      await preparePrimaryPhotos(readContext, slice.map((item) => item.row), env, metrics);
-      for (let start = 0; start < slice.length; start += NEARBY_CARD_HYDRATION_CONCURRENCY) {
-        const batch = slice.slice(start, start + NEARBY_CARD_HYDRATION_CONCURRENCY);
-        // Settle the already-started queries before emitting failure metrics.
-        const results = await Promise.allSettled(batch.map((item) =>
-          readCardIfAllowed(item.row, env, Number(item.distanceKm.toFixed(3)), true, uid, false, 1, metrics, readContext)));
-        const failure = results.find((result) => result.status === 'rejected');
-        if (failure) throw failure.reason;
-        cards.push(...results.map((result) => result.value).filter(Boolean));
-      }
-    } finally {
-      metrics.hydrationMs = Date.now() - hydrationStarted;
-      metrics.cards = cards.length;
-    }
-    const finalCards = await finalizeCardReads(cards, slice.map((item) => item.row), uid, env);
-    metrics.cards = finalCards.length;
-    metrics.outcome = 'success';
-    return {
-      cards: finalCards,
-      nextPageToken: offset + pageSize < photoMatched.length
-        ? (snapshotAvailable ? `c1:${epoch}:${offset + pageSize}` : String(offset + pageSize)) : '',
-      district: String(payload.district || '')
-    };
-  } finally {
-    // Failed database/hydration calls must not disappear from the baseline.
-    nearbyCacheMetric(env, metrics, requestStarted);
-  }
-}
-
-/**
- * A category-free social ranking. The friendship lookup is the authorization
- * boundary: clients receive only approved, photo-backed cards owned by the
- * caller or by a user with an accepted friendship record. Pending requests
- * and stale/deleted friendship rows never enter the owner set.
- */
+// get-card-detail：卡片详情（作者被停用、卡片下架或删除时拒绝）。
 async function cardDetail(uid, payload, env) {
   const row = await one(collection(env, 'FoodCard').query().equalTo('id', String(payload.cardId || '')));
   await contentPolicy(env).assertCardReadable(uid, row);
@@ -2760,6 +2375,7 @@ async function cardDetail(uid, payload, env) {
   return current[0];
 }
 
+// list-my-cards：我的全部卡片。
 async function myCards(uid, env) {
   const rows = await collection(env, 'FoodCard').query().equalTo('ownerUid', uid).orderByDesc('createdAt').limit(100).get();
   const cards = [];
@@ -2770,6 +2386,7 @@ async function myCards(uid, env) {
   return { cards };
 }
 
+// get-friend-profile：好友主页。
 async function friendProfile(uid, payload, env) {
   const page = await stage7.userPage(uid, { userUid: String(payload.friendUid || ''),
     cursor: String(payload.pageToken || ''), pageSize: Number(payload.pageSize || 12) }, env);
@@ -2778,6 +2395,7 @@ async function friendProfile(uid, payload, env) {
     coverPath: page.profile.coverPath || '', coverBucket: page.profile.coverBucket || '' }, cards: page.cards, nextPageToken: page.nextCursor };
 }
 
+// 【分区 15：好友关系】两个 UID 排序后的组合。
 function socialPair(uid, otherUid) {
   const first = String(uid || '');
   const second = String(otherUid || '');
@@ -2787,6 +2405,7 @@ function socialPair(uid, otherUid) {
     : { memberAUid: second, memberBUid: first };
 }
 
+// 好友关系行主键。
 function socialPairId(prefix, uid, otherUid) {
   const pair = socialPair(uid, otherUid);
   return crypto.createHash('sha256')
@@ -2794,11 +2413,13 @@ function socialPairId(prefix, uid, otherUid) {
     .digest('hex');
 }
 
+// 读取双方关系。
 async function friendshipBetween(uid, otherUid, env) {
   const id = socialPairId('friend', uid, otherUid);
   return one(collection(env, 'Friendship').query().equalTo('id', id));
 }
 
+// 断言双方是好友。
 async function requireFriend(uid, otherUid, env) {
   await contentPolicy(env).assertAccountActive(uid);
   await contentPolicy(env).assertAccountActive(otherUid);
@@ -2809,6 +2430,7 @@ async function requireFriend(uid, otherUid, env) {
   return relationship;
 }
 
+// 从查看者角度的关系状态。
 function relationshipState(row, viewerUid) {
   if (!row) return 'NONE';
   if (String(row.status || '') === 'ACCEPTED') return 'FRIEND';
@@ -2817,12 +2439,14 @@ function relationshipState(row, viewerUid) {
   return String(row.requesterUid || '') === viewerUid ? 'OUTGOING' : 'INCOMING';
 }
 
+// 待处理的好友申请是否已过期。
 function pendingFriendRequestExpired(row, now = Date.now()) {
   return String(row && row.status || '') === 'PENDING'
     && Number(row && row.createdAt || 0) > 0
     && now - Number(row.createdAt || 0) >= FRIEND_REQUEST_TTL_MS;
 }
 
+// 把过期的申请标记为过期。
 async function expirePendingFriendships(rows, env) {
   const now = Date.now();
   const friendships = collection(env, 'Friendship');
@@ -2844,6 +2468,7 @@ async function expirePendingFriendships(rows, env) {
   }
 }
 
+// 社交场景中的用户视图。
 function socialUser(record, viewerUid, env, row = null) {
   const profile = profileResponse(record, env);
   return {
@@ -2860,12 +2485,14 @@ function socialUser(record, viewerUid, env, row = null) {
   };
 }
 
+// 按 UID 读取社交用户视图。
 async function socialUserByUid(targetUid, viewerUid, env, row = null) {
   const record = await one(collection(env, 'UserProfile').query().equalTo('uid', String(targetUid || '')));
   if (!record || String(record.accountStatus || 'ACTIVE') !== 'ACTIVE') return null;
   return socialUser(record, viewerUid, env, row);
 }
 
+// 解析分页参数。
 function socialPage(payload) {
   const requestedSize = Number(payload && payload.pageSize || MAX_SOCIAL_PAGE_SIZE);
   const pageSize = Math.floor(Math.min(MAX_SOCIAL_PAGE_SIZE, Math.max(1, requestedSize)));
@@ -2875,6 +2502,7 @@ function socialPage(payload) {
   return { pageSize, offset };
 }
 
+// 读取查询的全部行（有上限）。
 async function queryAllRows(queryFactory) {
   const output = [];
   let offset = 0;
@@ -2886,6 +2514,7 @@ async function queryAllRows(queryFactory) {
   }
 }
 
+// 某用户的全部关系行。
 async function friendshipRowsFor(uid, env) {
   const friendships = collection(env, 'Friendship');
   const [asMemberA, asMemberB] = await Promise.all([
@@ -2895,6 +2524,7 @@ async function friendshipRowsFor(uid, env) {
   return uniqueRows([...asMemberA, ...asMemberB]);
 }
 
+// 批量读取与若干目标用户的关系。
 async function relationshipRowsByTargetUid(uid, targetUids, env) {
   const ids = [];
   const targetById = new Map();
@@ -2919,6 +2549,7 @@ async function relationshipRowsByTargetUid(uid, targetUids, env) {
   return output;
 }
 
+// 批量读取社交用户视图。
 async function socialUsersByUid(targetUids, viewerUid, env, rowsByUid = new Map()) {
   const normalizedUids = [];
   const seen = new Set();
@@ -2946,6 +2577,7 @@ async function socialUsersByUid(targetUids, viewerUid, env, rowsByUid = new Map(
   return output;
 }
 
+// search-users：按食刻号或昵称搜索用户。
 async function searchUsers(uid, payload, env) {
   const keyword = String(payload.keyword || '').trim();
   if (keyword.length < 2 || keyword.length > 24) {
@@ -2972,6 +2604,7 @@ async function searchUsers(uid, payload, env) {
   return { users };
 }
 
+// 按主键去重。
 function uniqueRows(rows) {
   const output = [];
   const seen = new Set();
@@ -2985,6 +2618,7 @@ function uniqueRows(rows) {
   return output;
 }
 
+// list-friends：好友、收到 / 发出的申请、黑名单。
 async function listFriends(uid, payload, env) {
   const page = socialPage(payload);
   let rows = await friendshipRowsFor(uid, env);
@@ -3037,6 +2671,7 @@ async function listFriends(uid, payload, env) {
   };
 }
 
+// 在事务中读取并修改双方关系（双方资料一起校验）。
 async function friendshipTransaction(uid, otherUid, env, requireOtherActive, apply) {
   const pair = socialPair(uid, otherUid);
   const id = socialPairId('friend', uid, otherUid);
@@ -3063,6 +2698,7 @@ async function friendshipTransaction(uid, otherUid, env, requireOtherActive, app
   return result;
 }
 
+// 校验好友申请版本（防止处理过期的申请）。
 function assertFriendRequestVersion(row, payload) {
   if (payload.expectedCreatedAt != null && (!Number.isSafeInteger(Number(payload.expectedCreatedAt)) ||
       Number(payload.expectedCreatedAt) !== Number(row.createdAt))) {
@@ -3070,10 +2706,12 @@ function assertFriendRequestVersion(row, payload) {
   }
 }
 
+// 会话清理任务 id。
 function conversationCleanupId(friendshipId, cutoffAt) {
   return crypto.createHash('sha256').update('friend-cleanup:' + friendshipId + ':' + cutoffAt).digest('hex');
 }
 
+// 解除好友 / 拉黑时准备会话清理任务。
 async function prepareConversationCleanup(transaction, uid, otherUid, state, env) {
   const conversationId = socialPairId('conversation', uid, otherUid);
   const rows = await transaction.executeQuery(collection(env, 'Conversation').query().equalTo('id', conversationId).limit(1));
@@ -3088,6 +2726,7 @@ async function prepareConversationCleanup(transaction, uid, otherUid, state, env
   return { job, conversation: rows[0] || null };
 }
 
+// send-friend-request。
 async function sendFriendRequest(uid, payload, env) {
   const targetUid = String(payload.targetUid || '');
   const result = await friendshipTransaction(uid, targetUid, env, true, async (transaction, state) => {
@@ -3108,6 +2747,7 @@ async function sendFriendRequest(uid, payload, env) {
   return { success: true };
 }
 
+// respond-friend-request：同意或拒绝。
 async function respondFriendRequest(uid, payload, env) {
   const requestId = String(payload.requestId || '');
   const initial = await one(collection(env, 'Friendship').query().equalTo('id', requestId));
@@ -3149,6 +2789,7 @@ async function respondFriendRequest(uid, payload, env) {
   return { success: true };
 }
 
+// cancel-friend-request。
 async function cancelFriendRequest(uid, payload, env) {
   const requestId = String(payload.requestId || '');
   const initial = await one(collection(env, 'Friendship').query().equalTo('id', requestId));
@@ -3167,6 +2808,7 @@ async function cancelFriendRequest(uid, payload, env) {
   return { success: true };
 }
 
+// block-user：拉黑（同时解除好友）。
 async function blockUser(uid, payload, env) {
   const targetUid = String(payload.targetUid || '');
   const result = await friendshipTransaction(uid, targetUid, env, true, async (transaction, state) => {
@@ -3188,6 +2830,7 @@ async function blockUser(uid, payload, env) {
   return { success: true };
 }
 
+// unblock-user。
 async function unblockUser(uid, payload, env) {
   const targetUid = String(payload.targetUid || '');
   await friendshipTransaction(uid, targetUid, env, false, async (transaction, state) => {
@@ -3199,6 +2842,7 @@ async function unblockUser(uid, payload, env) {
   return { success: true };
 }
 
+// remove-friend：解除好友（requestId 幂等，之后清理双方私信）。
 async function removeFriend(uid, payload, env) {
   const friendUid = String(payload.friendUid || '');
   socialPair(uid, friendUid);
@@ -3213,6 +2857,7 @@ async function removeFriend(uid, payload, env) {
   const receiptId = requestId ? crypto.createHash('sha256').update('friend-remove:' + uid + ':' + requestId).digest('hex') : '';
   const payloadHash = crypto.createHash('sha256').update(JSON.stringify({ friendUid, expected })).digest('hex');
   const receipts = collection(env, 'PublishRequestRecord');
+  // 已有回执时：确认是同一用户的同一次“解除好友”，返回之前的结果（幂等）。
   function savedRemoval(receipt) {
     if (receipt.uid !== uid || receipt.operationType !== 'FRIEND_REMOVE' || receipt.payloadHash !== payloadHash || receipt.status !== 'COMMITTED') {
       throw accessError('请求标识已用于其他操作。', 'CONFLICT');
@@ -3253,6 +2898,7 @@ async function removeFriend(uid, payload, env) {
     cleanupPending: !cleanup.complete, cleanupJobId: result.jobId || '' };
 }
 
+// 执行好友会话清理任务。
 async function processFriendCleanup(jobId, env) {
   const jobs = collection(env, 'MaintenanceJob');
   let output = null;
@@ -3300,6 +2946,7 @@ async function processFriendCleanup(jobId, env) {
   return output;
 }
 
+// 尽力执行清理（失败留待后续）。
 async function bestEffortFriendCleanup(jobId, env) {
   try {
     return await processFriendCleanup(jobId, env);
@@ -3326,12 +2973,14 @@ async function bestEffortFriendCleanup(jobId, env) {
   }
 }
 
+// 【分区 16：私信】校验消息类型。
 function messageKind(value) {
   const kind = String(value || '');
   if (kind !== 'TEXT' && kind !== 'CARD' && kind !== 'LINK') throw new Error('不支持的消息类型。');
   return kind;
 }
 
+// 会话列表中显示的消息摘要。
 function messagePreview(kind, text, link) {
   if (kind === 'CARD') return '分享了一张美食推荐';
   if (kind === 'LINK') {
@@ -3340,6 +2989,7 @@ function messagePreview(kind, text, link) {
   return String(text || '').replace(/\s+/g, ' ').slice(0, 60);
 }
 
+// 消息的返回视图（解密正文）。
 async function publicMessage(row, viewerUid, env) {
   const messageId = String(row.id || '');
   const output = {
@@ -3363,6 +3013,7 @@ async function publicMessage(row, viewerUid, env) {
   return output;
 }
 
+// send-message：发送私信（只能发给好友；正文加密存储；更新双方会话摘要与未读数；发送通知）。
 async function sendMessage(uid, payload, env) {
   const friendUid = String(payload.friendUid || '');
   await requireFriend(uid, friendUid, env);
@@ -3448,6 +3099,7 @@ async function sendMessage(uid, payload, env) {
   return { message: await publicMessage(message, uid, env) };
 }
 
+// list-conversations：会话列表。
 async function listConversations(uid, payload, env) {
   const page = socialPage(payload);
   const conversations = collection(env, 'Conversation');
@@ -3501,6 +3153,7 @@ async function listConversations(uid, payload, env) {
   };
 }
 
+// list-messages：分页读取消息（并清零未读）。
 async function listMessages(uid, payload, env) {
   const friendUid = String(payload.friendUid || '');
   const relationship = await requireFriend(uid, friendUid, env);
@@ -3561,6 +3214,7 @@ async function listMessages(uid, payload, env) {
   };
 }
 
+// 【分区 17：群聊】群成员行主键。
 function groupMemberId(groupId, memberUid) {
   const normalizedGroupId = String(groupId || '');
   const normalizedMemberUid = String(memberUid || '');
@@ -3570,16 +3224,19 @@ function groupMemberId(groupId, memberUid) {
     .digest('hex');
 }
 
+// 校验群消息类型。
 function groupMessageKind(value) {
   const kind = String(value || '');
   if (kind !== 'TEXT' && kind !== 'CARD') throw new Error('群聊仅支持文字和美食卡片。');
   return kind;
 }
 
+// 读取群成员。
 async function groupMembersFor(groupId, env) {
   return queryAllRows(() => collection(env, 'GroupMember').query().equalTo('groupId', String(groupId || '')));
 }
 
+// 断言当前用户是群成员。
 async function requireGroupMember(uid, groupId, env) {
   const normalizedGroupId = String(groupId || '');
   const membership = await one(collection(env, 'GroupMember').query()
@@ -3594,6 +3251,7 @@ async function requireGroupMember(uid, groupId, env) {
   return { group, membership };
 }
 
+// 群会话的返回视图。
 async function publicGroupConversation(row, membership, env) {
   const groupId = String(row.id || '');
   const lastMessage = row.lastMessageId ? await one(collection(env, 'GroupMessage').query().equalTo('id', String(row.lastMessageId))) : null;
@@ -3613,6 +3271,7 @@ async function publicGroupConversation(row, membership, env) {
   };
 }
 
+// create-group-chat：创建群聊（成员必须是好友）。
 async function createGroupChat(uid, payload, env) {
   const name = String(payload.name || '').trim();
   if (name.length < 1 || name.length > MAX_GROUP_NAME_LENGTH) {
@@ -3683,6 +3342,7 @@ async function createGroupChat(uid, payload, env) {
   return { group: await publicGroupConversation(group, { unreadCount: 0 }, env) };
 }
 
+// list-group-conversations。
 async function listGroupConversations(uid, payload, env) {
   const page = socialPage(payload);
   const memberships = await queryAllRows(() => collection(env, 'GroupMember').query().equalTo('memberUid', uid));
@@ -3719,6 +3379,7 @@ async function listGroupConversations(uid, payload, env) {
   };
 }
 
+// get-group-chat：群资料与成员。
 async function getGroupChat(uid, payload, env) {
   const groupId = String(payload.groupId || '');
   const { group } = await requireGroupMember(uid, groupId, env);
@@ -3740,6 +3401,7 @@ async function getGroupChat(uid, payload, env) {
   return { group: await publicGroupConversation(group, { unreadCount: 0 }, env), members };
 }
 
+// 群消息的返回视图。
 async function publicGroupMessage(row, viewerUid, env, clientVersion = 1) {
   const messageId = String(row.id || '');
   const sender = await socialUserByUid(String(row.senderUid || ''), viewerUid, env);
@@ -3762,6 +3424,7 @@ async function publicGroupMessage(row, viewerUid, env, clientVersion = 1) {
   return output;
 }
 
+// list-group-messages。
 async function listGroupMessages(uid, payload, env) {
   const groupId = String(payload.groupId || '');
   const { membership } = await requireGroupMember(uid, groupId, env);
@@ -3786,6 +3449,7 @@ async function listGroupMessages(uid, payload, env) {
   };
 }
 
+// send-group-message（正文加密，更新成员未读数，发送通知）。
 async function sendGroupMessage(uid, payload, env) {
   const groupId = String(payload.groupId || '');
   await requireGroupMember(uid, groupId, env);
@@ -3863,6 +3527,7 @@ async function sendGroupMessage(uid, payload, env) {
   return { message: await publicGroupMessage(message, uid, env) };
 }
 
+// leave-group-chat：退出（群主退出时转让或解散）。
 async function leaveGroupChat(uid, payload, env) {
   const groupId = String(payload.groupId || '');
   const groups = collection(env, 'GroupConversation');
@@ -3890,6 +3555,7 @@ async function leaveGroupChat(uid, payload, env) {
   return { success: true };
 }
 
+// remove-group-member：群主移除成员。
 async function removeGroupMember(uid, payload, env) {
   const groupId = String(payload.groupId || '');
   const memberUid = String(payload.memberUid || '');
@@ -3921,10 +3587,12 @@ async function removeGroupMember(uid, payload, env) {
   return { success: true };
 }
 
+// 【分区 18】delete-own-card：软删除自己的卡片。
 async function deleteOwnCard(uid, payload, env) {
   return stage1.softDelete(uid, payload, env);
 }
 
+// delete-account-data：开始注销账号（停用账号并创建后台清理任务）。
 async function cleanupAccount(uid, env, accessToken = '') {
   const providerUid=accessToken ? await verifiedAgcUid(accessToken) : '';
   const credential=accessToken ? encryptPrivateText(accessToken,'delete-account:'+uid,env) : '';
@@ -3937,9 +3605,9 @@ async function cleanupAccount(uid, env, accessToken = '') {
   return result;
 }
 
+// 注销专用的身份校验（允许对已停用的绑定重试，用于响应丢失后的重试）。
 async function verifiedDeletionUid(accessToken, env) {
-  // Only the deletion entry may resolve an inactive binding, for a lost-response
-  // retry. It cannot create a profile or re-enable an account.
+  // 只有注销入口可以在“响应丢失后重试”时解析已停用的绑定；它不能创建资料，也不能重新启用账号。
   const providerUid = await verifiedAgcUid(accessToken);
   const binding = await identityBinding('AGC', providerUid, env);
   const canonicalUid = binding ? String(binding.canonicalUid || providerUid) : providerUid;
@@ -3947,6 +3615,7 @@ async function verifiedDeletionUid(accessToken, env) {
   return canonicalUid;
 }
 
+// 【分区 19：子模块装配】把本文件的公共函数作为 ctx 注入各子模块（依赖注入，便于测试）。
 const nicknameAuth = require('./nickname-auth').createNicknameAuth({ collection, one, models: OBJECT_TYPES, cloud,
   verifiedIdentity, profileForWrite, profileResponse, identityBindingId, logicalWriteTime,
   requestId: () => readRequestScope.getStore() || '' });
@@ -3990,16 +3659,20 @@ const contentLifecycleContext = { ...stages47Context, refreshPublishCount,
 };
 const cardReports = require('./card-report-services').createCardReportServices(contentLifecycleContext);
 const lifecycle = require('./lifecycle-services').createLifecycleServices(contentLifecycleContext);
+// get-review-media：审核用图片（仅审核员）。
 async function getReviewMedia(uid, payload, env) {
   return require('./shared/image-reader').readLegacy({ ...payload, viewerUid: uid, mode: 'REVIEW', variant: 'ORIGINAL' }, env);
 }
 
+// 【分区 20：操作表】键 = 客户端操作名，值 = 处理函数（入参 { accessToken, payload }）。verifiedUid(token, env, true) 的第三个参数表示只读（可用身份缓存）。
 const operations = {
+  // --- 昵称账号 ---
   'get-password-account': async ({ accessToken }, env) => nicknameAuth.status(accessToken, env),
   'configure-password-account': async ({ accessToken, payload }, env) => nicknameAuth.configure(accessToken, payload, env),
   'change-password-account': async ({ accessToken, payload }, env) => nicknameAuth.changePassword(accessToken, payload, env),
   'login-with-nickname': async ({ payload }, env) => nicknameAuth.login(payload, env),
   'logout-nickname': async ({ accessToken }, env) => nicknameAuth.logout(accessToken, env),
+  // --- 举报与审核 ---
   'get-card-report-access': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return cardReports.access(uid,env,false); },
   'get-card-report-context': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return cardReports.context(uid,payload,env); },
   'submit-card-report': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return cardReports.submit(uid,payload,env); },
@@ -4009,6 +3682,7 @@ const operations = {
   'get-card-review-report': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return cardReports.detail(uid,payload,env,true); },
   'resolve-card-report': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return cardReports.resolve(uid,payload,env); },
 
+  // --- 删除记录 / 审核图片 / 收藏 ---
   'list-deleted-cards': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return lifecycle.deleted(uid,payload,env); },
   'restore-deleted-card': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return lifecycle.restore(uid,payload,env); },
   'get-review-media': async ({accessToken,payload},env) => { const uid=await verifiedUid(accessToken,env,true); return getReviewMedia(uid,payload,env); },
@@ -4017,6 +3691,7 @@ const operations = {
   'get-personal-collection-migration': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env, true); return personalCollections.status(uid,env); },
   'start-personal-collection-migration': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return personalCollections.start(uid,env); },
   'resume-personal-collection-migration': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return personalCollections.resume(uid,payload,env); },
+  // --- 卡片互动 ---
   'get-card-interaction-state': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env, true); return cardInteractions.state(uid, payload, env); },
   'set-card-interaction': async ({ accessToken, payload, readRequestId }, env) => {
     const started = Date.now(); const uid = await verifiedUid(accessToken, env);
@@ -4026,11 +3701,13 @@ const operations = {
   'get-card-interaction-receipt': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env, true); return cardInteractions.receipt(uid, payload, env); },
   'get-card-interaction-counts': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env, true); return cardInteractions.counts(uid, payload, env); },
   'set-card-favorite': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return personalCollections.set(uid,payload,env,'FAVORITE'); },
+  // --- 今日吃什么 ---
   'get-random-food-pool': async ({ accessToken, payload }, env) => { const uid = accessToken ? await verifiedUid(accessToken, env, true) : ''; return randomFood.pool(uid,payload,env); },
   'get-random-food-cards': async ({ accessToken, payload }, env) => { const uid = accessToken ? await verifiedUid(accessToken, env, true) : ''; return randomFood.cards(uid,payload,env); },
   'save-food-choice': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return randomFood.saveChoice(uid,payload,env); },
   'list-food-choices': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return randomFood.history(uid,payload,env); },
   'delete-food-choice': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return randomFood.deleteChoice(uid,payload,env); },
+  // --- 群投票 ---
   'get-meal-candidates': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env, true); return stage6.candidates(uid,payload,env); },
   'create-meal-poll': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage6.createPoll(uid,payload,env); },
   'get-meal-poll': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage6.getPoll(uid,payload,env); },
@@ -4039,9 +3716,11 @@ const operations = {
   'close-meal-poll': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage6.mutatePoll(uid,payload,env,'CLOSE'); },
   'cancel-meal-poll': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage6.mutatePoll(uid,payload,env,'CANCEL'); },
   'stop-meal-poll-options': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage6.mutatePoll(uid,payload,env,'STOP'); },
+  // --- 用户主页 / 榜单 / 赞踩 ---
   'get-user-page': async ({ accessToken, payload }, env) => { const uid = accessToken ? await verifiedUid(accessToken, env, true) : ''; return stage7.userPage(uid,payload,env); },
   'list-food-rankings': async ({ accessToken, payload }, env) => { const uid = accessToken ? await verifiedUid(accessToken, env, true) : ''; return foodRankings.list(uid,payload,env); },
   'set-card-reaction-v2': async ({ accessToken, payload }, env) => { const uid = await verifiedUid(accessToken, env); return stage7.reaction(uid,payload,env); },
+  // --- 发现（地图、搜索、店铺推荐）---
   'get-discovery-capabilities': async ({ accessToken }, env) => {
     if (accessToken) await verifiedUid(accessToken, env, true);
     return stage3.capabilities(env);
@@ -4051,40 +3730,38 @@ const operations = {
     ? guestFirstPage('search-public-cards', payload, () => stage3.searchPublicCards('', payload, env))
     : stage3.searchPublicCards(accessToken ? await verifiedUid(accessToken, env, true) : '', payload, env),
   'get-merchant-recommendations': async ({ accessToken, payload }, env) => stage3.getMerchantRecommendations(accessToken ? await verifiedUid(accessToken, env, true) : '', payload, env),
+  // --- 店铺 ---
   'get-stage2-capabilities': async ({ accessToken }, env) => { await verifiedUid(accessToken, env); return stage2.capabilities(env); },
   'resolve-merchant': async ({ accessToken, payload }, env) => stage2.resolveMerchant(await verifiedUid(accessToken, env), payload, env),
   'create-user-merchant': async ({ accessToken, payload }, env) => stage2.createUserMerchant(await verifiedUid(accessToken, env), payload, env),
   'update-user-merchant': async ({ accessToken, payload }, env) => stage2.updateUserMerchant(await verifiedUid(accessToken, env), payload, env),
   'get-merchant': async ({ accessToken, payload }, env) => stage2.getMerchant(await verifiedUid(accessToken, env), payload, env),
+  // --- 作者修改 ---
   'get-card-edit-context': async ({ accessToken, payload }, env) => stage1.getEditContext(await verifiedUid(accessToken, env), payload, env),
   'get-revision-media': async ({ accessToken, payload }, env) => getRevisionMedia(await verifiedUid(accessToken, env), payload, env),
   'submit-card-revision': async ({ accessToken, payload }, env) => stage1.submitRevision(await verifiedUid(accessToken, env), payload, env),
   'withdraw-card-revision': async ({ accessToken, payload }, env) => stage1.withdrawRevision(await verifiedUid(accessToken, env), payload, env),
+  // --- 登录与资料 ---
   'complete-legacy-login': async ({ accessToken, payload }, env) =>
     completeLegacyLogin(accessToken, payload, env),
   'start-email-binding': async ({ accessToken }, env) => startEmailBinding(accessToken, env),
   'complete-email-binding': async ({ accessToken, payload }, env) =>
     completeEmailBinding(accessToken, payload, env),
   'upsert-profile': async ({ accessToken, payload }, env) => upsertProfile(await verifiedUid(accessToken, env), payload, env),
-  'prepare-card-photo': async ({ accessToken, payload }, env) => {
-    const identity = await verifiedIdentity(accessToken, env);
-    return prepareCardPhoto(identity.canonicalUid, identity.providerUid, payload, env);
-  },
-  'upload-card-photo': async ({ accessToken, payload }, env) =>
-    uploadCardPhoto(await verifiedUid(accessToken, env), payload, env),
+  // --- 卡片 ---
   'get-public-media': async ({ payload, readRequestId }, env) =>
     getPublicMedia('', { ...payload, readRequestId }, env),
   'publish-card': async ({ accessToken, payload }, env) => publishCard(await verifiedUid(accessToken, env), payload, env),
-  'list-nearby-cards': async ({ accessToken, payload }, env) => payload.scope === 'all'
-    ? ((!accessToken && !payload.pageToken)
-      ? guestFirstPage('list-nearby-cards', payload, () => listPublicRecommendations(payload, env, ''))
-      : listPublicRecommendations(payload, env, accessToken ? await verifiedUid(accessToken, env, true) : ''))
-    : listNearby(await verifiedUid(accessToken, env, true), payload, env),
+  // 公开推荐流（客户端固定传 scope=all；按发布位置的旧“附近”接口已下线）。
+  'list-nearby-cards': async ({ accessToken, payload }, env) => (!accessToken && !payload.pageToken)
+    ? guestFirstPage('list-nearby-cards', payload, () => listPublicRecommendations(payload, env, ''))
+    : listPublicRecommendations(payload, env, accessToken ? await verifiedUid(accessToken, env, true) : ''),
   'get-friend-profile': async ({ accessToken, payload }, env) =>
     friendProfile(await verifiedUid(accessToken, env, true), payload, env),
   'get-card-detail': async ({ accessToken, payload }, env) =>
     cardDetail(accessToken ? await verifiedUid(accessToken, env, true) : '', payload, env),
   'list-my-cards': async ({ accessToken }, env) => myCards(await verifiedUid(accessToken, env), env),
+  // --- 好友 ---
   'search-users': async ({ accessToken, payload }, env) => searchUsers(await verifiedUid(accessToken, env), payload, env),
   'list-friends': async ({ accessToken, payload }, env) =>
     listFriends(await verifiedUid(accessToken, env), payload, env),
@@ -4099,10 +3776,12 @@ const operations = {
   'unblock-user': async ({ accessToken, payload }, env) =>
     unblockUser(await verifiedUid(accessToken, env), payload, env),
   'remove-friend': async ({ accessToken, payload }, env) => removeFriend(await verifiedUid(accessToken, env), payload, env),
+  // --- 私信 ---
   'list-conversations': async ({ accessToken, payload }, env) =>
     listConversations(await verifiedUid(accessToken, env, true), payload, env),
   'list-messages': async ({ accessToken, payload }, env) => listMessages(await verifiedUid(accessToken, env), payload, env),
   'send-message': async ({ accessToken, payload }, env) => sendMessage(await verifiedUid(accessToken, env), payload, env),
+  // --- 群聊 ---
   'create-group-chat': async ({ accessToken, payload }, env) =>
     createGroupChat(await verifiedUid(accessToken, env), payload, env),
   'list-group-conversations': async ({ accessToken, payload }, env) =>
@@ -4117,6 +3796,7 @@ const operations = {
     leaveGroupChat(await verifiedUid(accessToken, env), payload, env),
   'remove-group-member': async ({ accessToken, payload }, env) =>
     removeGroupMember(await verifiedUid(accessToken, env), payload, env),
+  // --- 推送与桌面卡片 ---
   'register-push-device': async ({ accessToken, payload }, env) =>
     registerPushDevice(await verifiedUid(accessToken, env), payload, env),
   'unregister-push-device': async ({ accessToken, payload }, env) =>
@@ -4127,27 +3807,12 @@ const operations = {
     unregisterServiceCardForms(await verifiedUid(accessToken, env), payload, env),
   'push-service-card-update': async ({ accessToken, payload }, env) =>
     pushServiceCardUpdate(await verifiedUid(accessToken, env), payload, env),
+  // --- 删除与注销 ---
   'delete-own-card': async ({ accessToken, payload }, env) => deleteOwnCard(await verifiedUid(accessToken, env), payload, env),
   'delete-account-data': async ({ accessToken }, env) => cleanupAccount(await verifiedDeletionUid(accessToken, env), env, accessToken)
 };
 
-function createHandler(operation) {
-  if (!operations[operation]) throw new Error(`未知操作 ${operation}`);
-  return async function handler(event, context, callback, logger) {
-    let id = requestId(event);
-    try {
-      const input = parseBody(event);
-      const env = context && context.env ? context.env : {};
-      id = requestId(input);
-      const data = await runOperation(operation, () => withCursorContext(env, () => cardReadScope.run(new Map(), () => readRequestScope.run(id, () => withReadMetrics(operation, env, () => operations[operation](input, env), id, input.readAttempt)))));
-      return callback({ ok: true, data, message: '', requestId: id, operation, functionVersion: READ_OPT_VERSION, ...require('./shared/release-info').buildInfo });
-    } catch (error) {
-      logger.error(`${operation} requestId=${id} code=${errorCode(error)} stage=${readStage(error)} failed: ${safeLogError(error)}`);
-      return callback(errorResponse(error, operation, id));
-    }
-  };
-}
-
+// 【分区 21：入口】执行一个操作：建立请求上下文（操作名、游标签名、卡片读取缓存、请求号、读取计量）后调用 operations 表。
 async function executeOperation(operation, input, env = process.env) {
   if (!operations[operation]) throw new Error(`未知操作 ${operation}`);
   const safeInput = input && typeof input === 'object' ? input : {};
@@ -4158,8 +3823,7 @@ async function executeOperation(operation, input, env = process.env) {
   }, env || {}), id, safeInput.readAttempt === 2 ? 2 : 1)))));
 }
 
-// Explicit one-off worker action. Each batch is bounded and can be retried at the
-// same cursor: publicizing a row and reconciling a merchant are both idempotent.
+// 一次性的维护动作（维护函数 action=public-content）：每批有上限，可以用同一游标重试；把行改为公开与店铺计数对账都是幂等的。
 async function normalizePublicContent(env = process.env, cursor = '') {
   if (typeof cursor !== 'string' || cursor.length > 128) throw accessError('迁移游标无效。', 'VALIDATION_ERROR');
   let query = collection(env, 'FoodCard').query();
@@ -4174,7 +3838,7 @@ async function normalizePublicContent(env = process.env, cursor = '') {
       if (!current) return true;
       if (current.merchantId) merchants.add(String(current.merchantId));
       if (current.visibility !== 'PUBLIC') {
-        // Visibility no longer contributes to the content version or publication state.
+        // 可见性已不再影响内容版本或发布状态。
         tx.executeUpsert([Object.assign(new FoodCard(), current, { visibility: 'PUBLIC' })]);
         updated = true;
       }
@@ -4183,23 +3847,21 @@ async function normalizePublicContent(env = process.env, cursor = '') {
     if (!committed) throw accessError('公开整理未保存，请重试同一游标。', 'CONFLICT');
     if (updated) changed++;
   }
-  // Reconcile even rows that were already public, so a failed previous batch
-  // cannot skip a merchant whose counter update was not committed.
+  // 即使行本来就是公开的也要对账，这样上一批失败时不会漏掉计数未提交的店铺。
   for (const merchantId of merchants) await stage2.reconcileMerchantPublicCounters({ merchantId }, env);
   const hasMore = rows.length === 10;
   return { scanned: rows.length, changed, merchantsReconciled: merchants.size,
     nextCursor: hasMore ? String(rows[rows.length - 1].id) : '', hasMore };
 }
 
-module.exports = { migrateNicknameClaims: env => nicknameAuth.migrate(env || process.env), normalizePublicContent, maintainCardHistory: (payload, env) => {
+// 供 shike-maintenance 使用的导出：昵称迁移、公开内容整理、卡片 / 赞历史维护、生命周期 tick，以及 executeOperation、safeLogError。
+// 维护动作在独立的请求号与读取计量中执行。
+function maintenanceRun(name, env, action) {
   const source = env || process.env, id = crypto.randomUUID();
-  return readRequestScope.run(id, () => withReadMetrics('card-history-maintenance', source,
-    () => stage1.cardHistoryMaintenance(payload, source), id));
-}, maintainReactionHistory: (payload, env) => {
-  const source = env || process.env, id = crypto.randomUUID();
-  return readRequestScope.run(id, () => withReadMetrics('reaction-history-maintenance', source,
-    () => stage1.reactionHistoryMaintenance(payload, source), id));
-}, runMaintenance: env => {
-  const source = env || process.env, id = crypto.randomUUID();
-  return readRequestScope.run(id, () => withReadMetrics('maintenance-tick', source, () => lifecycle.tick(source), id));
-}, createHandler, executeOperation, safeLogError, haversineKm, geohash };
+  return readRequestScope.run(id, () => withReadMetrics(name, source, () => action(source), id));
+}
+module.exports = { migrateNicknameClaims: env => nicknameAuth.migrate(env || process.env), normalizePublicContent,
+  maintainCardHistory: (payload, env) => maintenanceRun('card-history-maintenance', env, source => stage1.cardHistoryMaintenance(payload, source)),
+  maintainReactionHistory: (payload, env) => maintenanceRun('reaction-history-maintenance', env, source => stage1.reactionHistoryMaintenance(payload, source)),
+  runMaintenance: env => maintenanceRun('maintenance-tick', env, source => lifecycle.tick(source)),
+  executeOperation, safeLogError };

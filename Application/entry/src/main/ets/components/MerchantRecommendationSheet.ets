@@ -1,8 +1,12 @@
+/**
+ * 【文件职责】地图上点开店铺后的底部面板：店铺信息与该店铺的推荐卡片列表。
+ */
 import { QuietActionStyle, SecondaryActionStyle } from '../common/Stage47Ui';
 import { FoodCard } from '../model/CloudContracts';
 import { MapMerchant } from '../model/DiscoveryModels';
 import { DiscoveryCard } from './DiscoveryCard';
 
+// 店铺推荐面板组件。
 @Component
 export struct MerchantRecommendationSheet {
   @Require @Prop merchant: MapMerchant;
@@ -14,6 +18,7 @@ export struct MerchantRecommendationSheet {
   onMore: () => void = (): void => {};
   onRetry: () => void = (): void => {};
   onOpen: (card: FoodCard) => void = (_card: FoodCard): void => {};
+  // 面板布局。
   build() {
     Column({ space: 8 }) {
       Row() {

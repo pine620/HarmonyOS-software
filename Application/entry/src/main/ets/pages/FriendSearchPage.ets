@@ -1,3 +1,6 @@
+/**
+ * 【文件职责】添加好友页面：显示并复制自己的食刻号，按食刻号或昵称搜索用户（search-users），发送好友申请。
+ */
 import { PagePaletteName, pageColor } from '../common/PagePaletteUi';
 import { NoteInputStyle, WarmNoteBackdrop } from '../common/WarmNoteUi';
 import { AppDestinationStyle } from '../common/AppPageUi';
@@ -10,6 +13,7 @@ import { AuthService } from '../service/AuthService';
 import { SocialAvatar } from '../components/social/SocialDisplay';
 import { ErrorDetail, errorText } from '../common/ErrorKit';
 
+// 添加好友页面。
 @Component
 export struct FriendSearchPage {
   @Prop palette: PagePaletteName = 'SOCIAL';
@@ -25,15 +29,18 @@ export struct FriendSearchPage {
   @State status: string = '';
   private repository: FriendRepository = new FriendRepository();
 
+  // 出现时清空状态。
   aboutToAppear(): void {
     this.profile = AuthService.profile();
   }
 
+  // 自己的食刻号。
   private ownFriendCode(): string {
     const code = this.profile?.friendCode;
     return typeof code === 'string' && code.length > 0 ? code : '部署新版云对象后生成';
   }
 
+  // 复制食刻号到剪贴板。
   private async copyOwnFriendCode(): Promise<void> {
     const code = this.ownFriendCode();
     if (code.startsWith('部署新版')) {
@@ -49,6 +56,7 @@ export struct FriendSearchPage {
     }
   }
 
+  // 搜索用户。
   private async search(): Promise<void> {
     const keyword = this.searchKeyword.trim();
     if (keyword.length < 2) {
@@ -71,6 +79,7 @@ export struct FriendSearchPage {
     }
   }
 
+  // 发送好友申请。
   private async sendRequest(user: SocialUser): Promise<void> {
     if (this.actionUid.length > 0) return;
     this.actionUid = user.uid;
@@ -87,6 +96,7 @@ export struct FriendSearchPage {
     }
   }
 
+  // 搜索结果按钮文字（加好友 / 已申请 / 已是好友等）。
   private searchActionText(user: SocialUser): string {
     if (user.friendshipState === 'FRIEND') return '发消息';
     if (user.friendshipState === 'OUTGOING') return '已申请';
@@ -94,16 +104,19 @@ export struct FriendSearchPage {
     return '加好友';
   }
 
+  // 按钮是否可点。
   private searchActionEnabled(user: SocialUser): boolean {
     return this.actionUid.length === 0
       && (user.friendshipState === 'NONE' || user.friendshipState === 'FRIEND');
   }
 
+  // 处理按钮点击。
   private handleSearchAction(user: SocialUser): void {
     if (user.friendshipState === 'FRIEND') this.onOpenChat(user);
     else if (user.friendshipState === 'NONE') this.sendRequest(user);
   }
 
+  // 一行搜索结果。
   @Builder
   private searchResultRow(user: SocialUser): void {
     Row({ space: 12 }) {
@@ -127,6 +140,7 @@ export struct FriendSearchPage {
     }.width('100%').padding({ top: 8, bottom: 8 });
   }
 
+  // 页面布局。
   build() {
     NavDestination() {
       Stack() {

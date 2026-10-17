@@ -1,14 +1,21 @@
+/**
+ * 【文件职责】「食刻推荐」桌面卡片（2×2 / 2×4）的数据层：在 App 前台把一张公开卡片的摘要与封面写入本机
+ * Preferences 与文件，卡片扩展（ServiceCardFormAbility，可能在另一个进程）只读取这些本地数据，不访问网络。
+ * 【数据流】NearbyPage 前台拿到推荐 → publishRecommendation() 先写文字摘要并刷新所有卡片 → 再准备封面
+ * （ServiceCardCoverCache）并以内存图片的形式绑定给 Form Kit。卡片被删除/下架或图片授权撤销时，revokePublished() 清掉封面。
+ * 【新人注意】Form Kit 只有在“内存图片名”变化时才会刷新图片，所以每次换图都会生成新的图片名；
+ * 传给 Form Kit 的文件描述符要保持打开直到卡片移除或更新完成。
+ */
 import { common } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
 import { fileIo } from '@kit.CoreFileKit';
 import { formBindingData, formProvider } from '@kit.FormKit';
-import util from '@ohos.util';
 import { FoodCard } from '../model/CloudContracts';
 import { cardPriceText } from '../model/CardPrice';
 import { foodCardCategoryLabel } from '../components/FoodCover';
 import { ImageDescriptors } from './ImageDescriptors';
 import { ImageDescriptor } from '../model/ImageModels';
-import { ServiceCardCoverCache } from './ServiceCardCoverCache';
+import { FormCoverImage, ServiceCardCoverCache } from './ServiceCardCoverCache';
 
 const STORE_OPTIONS: preferences.Options = { name: 'shike_service_card' };
 const DIMENSION_OPTIONS: preferences.Options = { name: 'shike_service_card_dimensions' };
@@ -31,6 +38,7 @@ const REMOTE_PROXY_KEYS: Array<string> = [
   'cardId', 'productName', 'scoreText', 'priceText', 'locationText', 'categoryText', 'photoPath', 'photoBucket'
 ];
 
+// 传给卡片页面（ServiceCard.ets 的 @LocalStorageProp）的数据，字段名必须与卡片页面一致。
 export class ServiceCardBindingData {
   formId: string = '';
   formDimension: number = 2;
@@ -49,38 +57,43 @@ export class ServiceCardBindingData {
   formImages: Record<string, number> = {};
 }
 
+// 一次图片绑定的“租约”：持有封面文件的描述符，直到 Form Kit 确认收到后再关闭。
 class ServiceCardBindingLease {
   data: ServiceCardBindingData = new ServiceCardBindingData();
   file: fileIo.File | undefined = undefined;
 
+  // 关闭封面文件描述符。
   close(): void {
-    if (this.file !== undefined) {
-      try { fileIo.closeSync(this.file); } catch (_error) { }
-      this.file = undefined;
-    }
+    ServiceCardCoverCache.closeFile(this.file);
+    this.file = undefined;
   }
 }
 
+// 打开卡片数据存储。
 function storeFor(context: common.Context): preferences.Preferences {
-  // The app and FormExtensionAbility may run in different processes.
+  // App 与卡片扩展可能运行在不同进程，每次都清掉进程内缓存后重新读取。
   preferences.removePreferencesFromCacheSync(context, STORE_OPTIONS);
   return preferences.getPreferencesSync(context, STORE_OPTIONS);
 }
 
+// 打开卡片尺寸记录存储（记录每个卡片实例是 2×2 还是 2×4）。
 function dimensionStore(context: common.Context): preferences.Preferences {
   preferences.removePreferencesFromCacheSync(context, DIMENSION_OPTIONS);
   return preferences.getPreferencesSync(context, DIMENSION_OPTIONS);
 }
 
+// 读取字符串值，类型不符时返回默认值。
 function stringValue(value: preferences.ValueType, fallback: string): string {
   return typeof value === 'string' ? value : fallback;
 }
 
+// 桌面推荐卡片数据（静态类）。
 export class ServiceCardStore {
   private static publicationGeneration: number = 0;
   private static initialBindings: Map<string, ServiceCardBindingLease> =
     new Map<string, ServiceCardBindingLease>();
 
+  // 撤销已发布的封面（mediaId 为空表示全部）：图片授权被撤销或卡片不可见时调用。
   static revokePublished(context: common.Context, mediaId: string = ''): void {
     const store: preferences.Preferences = storeFor(context);
     const photoPath: string = stringValue(store.getSync(PHOTO_PATH_KEY, ''), '');
@@ -91,6 +104,7 @@ export class ServiceCardStore {
     void ServiceCardStore.updateAllForms(context).catch((): void => {});
   }
 
+  // 读取当前要展示的卡片数据。
   static read(context: common.Context, snapshot?: preferences.Preferences): ServiceCardBindingData {
     const store: preferences.Preferences = snapshot === undefined ? storeFor(context) : snapshot;
     const data: ServiceCardBindingData = new ServiceCardBindingData();
@@ -110,6 +124,7 @@ export class ServiceCardStore {
     return data;
   }
 
+  // 为某个卡片实例创建一份绑定租约（读取数据并打开封面文件）。
   private static lease(context: common.Context, formId: string,
     initialDimension?: number): ServiceCardBindingLease {
     const lease: ServiceCardBindingLease = new ServiceCardBindingLease();
@@ -124,19 +139,16 @@ export class ServiceCardStore {
       data.coverPhotoPath !== data.photoPath || data.coverPhotoBucket !== data.photoBucket ||
       stringValue(store.getSync(PHOTO_VERSION_KEY, ''), '').length === 0 || store.getSync(PHOTO_VERSION_KEY, '') !== store.getSync(COVER_VERSION_KEY, '') ||
       !ServiceCardCoverCache.isUsable(context, path)) return lease;
-    try {
-      lease.file = fileIo.openSync(path, fileIo.OpenMode.READ_ONLY);
-      // Form Kit refreshes the Image only when the memory image name changes.
-      data.coverImageName = `shike_cover_${util.generateRandomUUID().replace(/-/g, '_')}`;
-      data.formImages[data.coverImageName] = lease.file.fd;
-    } catch (_error) {
-      lease.close();
-      data.coverImageName = '';
-      data.formImages = {};
+    const cover: FormCoverImage | undefined = ServiceCardCoverCache.openFormImage(path, 'shike_cover_');
+    if (cover !== undefined) {
+      lease.file = cover.file;
+      data.coverImageName = cover.imageName;
+      data.formImages[cover.imageName] = cover.file.fd;
     }
     return lease;
   }
 
+  // 把租约转换为 Form Kit 的绑定数据（文字 + 内存图片）。
   private static bind(lease: ServiceCardBindingLease): formBindingData.FormBindingData {
     const binding: formBindingData.FormBindingData = formBindingData.createFormBindingData(lease.data);
     if (lease.data.formId.length > 0) {
@@ -150,13 +162,14 @@ export class ServiceCardStore {
     return binding;
   }
 
+  // 生成某卡片实例的绑定数据（onAddForm 时使用，初始租约要保留到卡片移除或扩展停止）。
   static bindingData(context: common.Context, formId: string = '',
     initialDimension?: number): formBindingData.FormBindingData {
     const lease: ServiceCardBindingLease = ServiceCardStore.lease(context, formId, initialDimension);
     try {
       const binding: formBindingData.FormBindingData = ServiceCardStore.bind(lease);
       ServiceCardStore.releaseInitialBinding(formId);
-      // onAddForm returns before IPC transfers the fd. Retain it until removal/stop.
+      // onAddForm 返回时文件描述符还没有通过 IPC 传过去，要保留到卡片移除或扩展停止。
       ServiceCardStore.initialBindings.set(formId, lease);
       return binding;
     } catch (_error) {
@@ -165,32 +178,37 @@ export class ServiceCardStore {
     }
   }
 
+  // 释放某卡片实例的初始绑定租约。
   static releaseInitialBinding(formId: string): void {
     const lease: ServiceCardBindingLease | undefined = ServiceCardStore.initialBindings.get(formId);
     if (lease !== undefined) lease.close();
     ServiceCardStore.initialBindings.delete(formId);
   }
 
+  // 释放所有初始绑定租约（扩展停止时）。
   static releaseInitialBindings(): void {
     ServiceCardStore.initialBindings.forEach((lease: ServiceCardBindingLease): void => { lease.close(); });
     ServiceCardStore.initialBindings.clear();
   }
 
+  // 用最新数据刷新某个卡片实例。
   static async updateForm(context: common.Context, formId: string): Promise<void> {
     const lease: ServiceCardBindingLease = ServiceCardStore.lease(context, formId);
     try {
       await formProvider.updateForm(formId, ServiceCardStore.bind(lease));
     } finally {
-      // updateForm completion guarantees the descriptor has crossed the process boundary.
+      // updateForm 完成即保证描述符已跨进程传递，可以关闭。
       lease.close();
     }
   }
 
+  // 读取卡片实例的尺寸。
   static formDimension(context: common.Context, formId: string): number {
     const value: preferences.ValueType = dimensionStore(context).getSync(formId || 'preview', 2);
     return value === 3 ? 3 : 2;
   }
 
+  // 记录卡片实例的尺寸（2×2 或 2×4）。
   static setFormDimension(context: common.Context, formId: string, dimension: number): void {
     if (formId.length === 0) return;
     const store: preferences.Preferences = dimensionStore(context);
@@ -198,6 +216,7 @@ export class ServiceCardStore {
     store.flushSync();
   }
 
+  // 本机已添加的全部卡片实例 id。
   static formIds(context: common.Context): Array<string> {
     const value: preferences.ValueType = storeFor(context).getSync(FORM_IDS_KEY, []);
     if (!Array.isArray(value)) return [];
@@ -209,6 +228,7 @@ export class ServiceCardStore {
     return ids;
   }
 
+  // 记录新添加的卡片实例 id。
   static addFormId(context: common.Context, formId: string): void {
     if (formId.length === 0) return;
     const ids: Array<string> = ServiceCardStore.formIds(context);
@@ -218,6 +238,7 @@ export class ServiceCardStore {
     store.flushSync();
   }
 
+  // 移除卡片实例 id（同时释放租约与尺寸记录）。
   static removeFormId(context: common.Context, formId: string): void {
     ServiceCardStore.releaseInitialBinding(formId);
     const ids: Array<string> = ServiceCardStore.formIds(context)
@@ -230,22 +251,25 @@ export class ServiceCardStore {
     dimensions.flushSync();
   }
 
+  // 刷新所有卡片实例。
   private static async updateAllForms(context: common.Context): Promise<void> {
     for (const formId of ServiceCardStore.formIds(context)) {
       try {
         await ServiceCardStore.updateForm(context, formId);
       } catch (_error) {
-        // A removed/unavailable form does not block the recommendation surface.
+        // 某个卡片已删除或不可用时，不影响其他卡片刷新。
       }
     }
   }
 
+  // 封面版本标识（mediaId + 内容版本），用于判断是否需要换图。
   private static coverVersion(card: FoodCard): string {
     const id: string = card.photos?.[0]?.id || card.photoPath.split('/').pop()?.replace('.jpg', '') || '';
     const permit: ImageDescriptor | undefined = ImageDescriptors.read(id, 'PUBLIC', 'COVER_480');
     return permit === undefined ? '' : permit.variant + ':' + permit.sha256;
   }
 
+  // 写入一张推荐卡片的文字摘要；内容未变化时返回 false。
   private static writeRecommendation(context: common.Context, card: FoodCard): boolean {
     const store: preferences.Preferences = storeFor(context);
     const id: string = card.id.trim(); const version: string = ServiceCardStore.coverVersion(card);
@@ -275,12 +299,13 @@ export class ServiceCardStore {
     return reusable;
   }
 
+  // 发布推荐到桌面卡片：只接受已公开（APPROVED）的卡片；先写文字并刷新，再在后台准备封面。
   static async publishRecommendation(context: common.Context, card: FoodCard): Promise<void> {
     if (card.status !== 'APPROVED' || card.id.trim().length === 0) return;
     const generation: number = ++ServiceCardStore.publicationGeneration;
-    // Finish all preference operations before an await can invalidate this process's cache.
+    // 在任何 await 之前完成所有 Preferences 操作，避免进程内缓存在等待期间失效。
     const reusable: boolean = ServiceCardStore.writeRecommendation(context, card);
-    // Publish text first; slow/failed image work must not hide the recommendation.
+    // 先发布文字：图片慢或失败都不能导致推荐内容不显示。
     await ServiceCardStore.updateAllForms(context);
     if (reusable || generation !== ServiceCardStore.publicationGeneration) return;
     let path: string = '';
@@ -299,11 +324,12 @@ export class ServiceCardStore {
       await ServiceCardStore.updateAllForms(context);
       if (mayContinue()) ServiceCardCoverCache.prune(context, path);
     } catch (_error) {
-      // Keep the new text and its honest placeholder when media is unavailable.
+      // 图片不可用时保留新的文字，并如实显示占位图。
       console.warn('Service card cover was not prepared.');
     }
   }
 
+  // 记录已准备好的封面文件路径（期间若推荐已换成别的卡片则放弃）。
   private static storeCover(context: common.Context, card: FoodCard, path: string): boolean {
     const current: preferences.Preferences = storeFor(context);
     if (stringValue(current.getSync(CARD_ID_KEY, ''), '') !== card.id.trim() ||

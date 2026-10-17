@@ -1,3 +1,6 @@
+/**
+ * 【文件职责】用户主页内容：资料头部（头像、昵称、食刻号、主页背景）、与我的关系、公开卡片网格（分页 + 可见窗口懒加载）、发私信入口。数据来自 SocialDiscoveryRepository.get-user-page。
+ */
 import { PagePaletteName, pageColor } from '../common/PagePaletteUi';
 import { common } from '@kit.AbilityKit';
 import { FoodCard } from '../model/CloudContracts';
@@ -16,6 +19,7 @@ import { ReadRequestOptions } from '../service/ReadScheduler';
 import { CloudBusinessError } from '../service/CloudReadErrors';
 import { ErrorDetail, errorText } from '../common/ErrorKit';
 
+// 用户主页内容组件。
 @Component
 export struct UserProfileContent {
   @Prop palette: PagePaletteName = 'SOCIAL';
@@ -42,21 +46,28 @@ export struct UserProfileContent {
   private generation: number = 0;
   private owner: string = '';
   private session: number = 0;
+  // 取得 UIAbility 上下文。
   private context(): common.UIAbilityContext { return this.getUIContext().getHostContext() as common.UIAbilityContext; }
+  // 异步结果是否仍有效。
   private valid(generation: number): boolean { return this.active && this.foreground && this.appActive &&
     generation === this.generation && this.owner === (AuthService.profile()?.uid || '') && this.session === AuthSessionStore.generation(); }
+  // 出现时按当前环境加载。
   aboutToAppear(): void { this.onEnvironmentChanged(); }
+  // 消失时停用。
   aboutToDisappear(): void { this.deactivate(); }
+  // 停用：作废进行中的加载。
   private deactivate(): void {
     this.active = false; this.generation++; this.previews.reset(false); this.source.setRows([]);
     this.response = undefined; this.avatarUrl = ''; this.coverUrl = ''; this.count = 0; this.cursor = ''; this.busy = false;
   }
+  // App 前后台或账号变化时重新加载。
   private onEnvironmentChanged(): void {
     this.deactivate();
     if (!this.foreground || !this.appActive) return;
     this.active = true; this.owner = AuthService.profile()?.uid || ''; this.session = AuthSessionStore.generation();
     this.previews.reset(true); void this.load();
   }
+  // 加载资料与一页卡片（more=true 为下一页）。
   private async load(more: boolean = false): Promise<void> {
     if (this.busy || !this.active) return;
     this.busy = true; this.message = '';
@@ -83,6 +94,7 @@ export struct UserProfileContent {
       }
     } finally { if (this.valid(generation)) this.busy = false; }
   }
+  // 补全头部的头像与背景图。
   private async loadHeader(result: UserPageResponse, generation: number): Promise<void> {
     try {
       const avatar: string = await ImageRepository.getDownloadUrl(this.context(), result.profile.avatarBucket,
@@ -102,7 +114,9 @@ export struct UserProfileContent {
       }
     }
   }
+  // 可见范围变化时更新懒加载窗口。
   private window(first: number, last: number): void { if (this.active) this.previews.window(this.context(), first, last, false); }
+  // 打开与该用户的私信。
   private chat(): void {
     const result: UserPageResponse | undefined = this.response;
     if (result === undefined || result.relationshipState !== 'FRIEND') return;
@@ -111,6 +125,7 @@ export struct UserProfileContent {
       friendCode: this.profileCode(), friendshipState: 'FRIEND', requestId: '' };
     this.onOpenChat(friend);
   }
+  // 打开卡片详情。
   private async open(cardId: string): Promise<void> {
     if (this.busy || !this.active) return;
     const generation: number = this.generation; this.busy = true;
@@ -121,10 +136,12 @@ export struct UserProfileContent {
     } catch (error) { if (this.valid(generation)) { this.busy = false; void this.load(); } }
     finally { if (this.valid(generation)) this.busy = false; }
   }
+  // 食刻号显示文本。
   private profileCode(): string {
     if (this.response?.relationshipState === 'SELF') return AuthService.profile()?.friendCode || '';
     return this.response?.relationshipState === 'FRIEND' ? this.friendCode : '';
   }
+  // 资料头部区域。
   @Builder
   private profileHeader(): void {
     Column({ space: 12 }) {
@@ -153,6 +170,7 @@ export struct UserProfileContent {
       }.width('100%').padding({ left: 12, right: 12, bottom: 12 });
     }.width('100%').backgroundColor(pageColor(this.palette, 'surface')).borderRadius(22);
   }
+  // 页面布局。
   build() {
     Stack() {
       WarmNoteBackdrop({ palette: this.palette });

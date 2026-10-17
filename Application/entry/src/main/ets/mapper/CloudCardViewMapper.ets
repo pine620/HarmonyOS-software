@@ -1,9 +1,13 @@
+/**
+ * 【文件职责】把云端返回的 FoodCard 转换成卡片展示组件 ReviewCard 需要的视图数据（价格、时间、评分、标签等文案）。
+ */
 import { EvidenceTone, ReviewCardViewData } from '../components/review/ReviewDisplay';
 import { foodCardCategoryLabel } from '../components/FoodCover';
 import { FoodCard } from '../model/CloudContracts';
 import { cardPriceText } from '../model/CardPrice';
 import { tasteScoreText as formatTasteScore } from '../model/TasteScore';
 
+// 分转为“¥x.xx”文本。
 function formatFen(priceFen: number): string {
   const safeFen = Number.isFinite(priceFen) ? Math.max(0, Math.round(priceFen)) : 0;
   const yuan = Math.floor(safeFen / 100);
@@ -11,15 +15,18 @@ function formatFen(priceFen: number): string {
   return `¥${yuan}.${fen < 10 ? `0${fen}` : `${fen}`}`;
 }
 
+// 主价格文本。
 function priceText(card: FoodCard): string {
   return cardPriceText(card);
 }
 
+// 原价文本（有划线价时）。
 function originalPriceText(card: FoodCard): string {
   if (card.originalPriceFen <= 0 || card.originalPriceFen <= card.priceFen) return '';
   return formatFen(card.originalPriceFen);
 }
 
+// 卡片上展示的标签（分类、消费方式等）。
 function displayTags(card: FoodCard): Array<string> {
   const tags: Array<string> = [];
   const seen: Set<string> = new Set<string>();
@@ -36,9 +43,9 @@ function displayTags(card: FoodCard): Array<string> {
   return tags;
 }
 
+// 点评摘要。
 function reviewSummary(card: FoodCard): string {
-  // Existing cards returned by an older deployed cloud function do not yet
-  // contain reviewText. Treat that missing additive field as an empty note.
+  // 旧版云函数返回的卡片可能还没有 reviewText 字段，缺失时按空点评处理。
   const reviewText = typeof card.reviewText === 'string' ? card.reviewText.trim() : '';
   if (reviewText.length > 0) return reviewText;
   const points: Array<string> = [];
@@ -50,17 +57,20 @@ function reviewSummary(card: FoodCard): string {
   return card.specification.trim().length > 0 ? card.specification.trim() : '发布者暂未补充推荐理由。';
 }
 
+// 评分文本。
 function tasteScoreText(card: FoodCard): string {
   const score = typeof card.tasteScore === 'number' ? card.tasteScore : 0;
   return formatTasteScore(score);
 }
 
+// 发布日期“x月x日”；时间无效时显示“刚刚发布”。
 function timeLabel(timestamp: number): string {
   if (!Number.isFinite(timestamp) || timestamp <= 0) return '刚刚发布';
   const date = new Date(timestamp);
   return `${date.getMonth() + 1}月${date.getDate()}日`;
 }
 
+// 位置描述（店铺名或历史发布位置）。
 function locationLabel(card: FoodCard): string {
   if (card.merchantNameSnapshot !== undefined && card.merchantNameSnapshot.length > 0) return card.merchantNameSnapshot;
   if (card.consumptionMode === 'DELIVERY' || card.consumptionMode === 'DINE_IN') return '店铺未关联';
@@ -70,14 +80,17 @@ function locationLabel(card: FoodCard): string {
   return parts.join(' · ');
 }
 
+// 证据徽标的样式。
 function evidenceTone(card: FoodCard): EvidenceTone {
   return card.status === 'APPROVED' ? 'verified' : 'pending';
 }
 
+// 证据徽标文字：已公开的卡片显示“实拍公开”，否则“待公开”。
 function evidenceLabel(card: FoodCard): string {
   return card.status === 'APPROVED' ? '实拍公开' : '待公开';
 }
 
+// 转换入口。
 export function mapFoodCardToReviewCardViewData(card: FoodCard): ReviewCardViewData {
   const productName = card.productName.trim().length > 0 ? card.productName.trim() : '未命名美食';
   return {

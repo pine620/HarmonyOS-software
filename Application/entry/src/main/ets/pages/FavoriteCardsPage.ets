@@ -1,3 +1,6 @@
+/**
+ * 【文件职责】“我的收藏”页面：分页读取收藏（list-personal-collection），懒加载封面；旧收藏数据未迁移时提示“整理收藏”；可取消收藏、打开详情。
+ */
 import { AppDestinationStyle } from '../common/AppPageUi';
 import { common } from '@kit.AbilityKit';
 import { util } from '@kit.ArkTS';
@@ -14,6 +17,7 @@ import { ErrorDetail, errorText } from '../common/ErrorKit';
 import { ReadRequestOptions } from '../service/ReadScheduler';
 import { StateView } from '../common/StateViewUi';
 
+// 我的收藏页面。
 @Component
 export struct FavoriteCardsPage {
   onOpenCard: (card: FoodCard) => void = (_card: FoodCard): void => {};
@@ -21,6 +25,7 @@ export struct FavoriteCardsPage {
   @StorageLink('accountContentRevision') @Watch('onEnvironmentChanged') accountContentRevision: number = 0;
   @StorageLink('favoritesMutationRevision') @Watch('onCollectionMutation') favoritesMutationRevision: number = 0;
   private refreshAgain: boolean = false;
+  // 别处修改了收藏（例如详情页取消收藏）时刷新。
   private onCollectionMutation(): void {
     if (!this.visible || !this.active || !this.appActive) return;
     this.refreshAgain = true;
@@ -43,26 +48,34 @@ export struct FavoriteCardsPage {
   private session: number = 0;
   @State pendingRemove: SetPersonalCollectionRequest | undefined = undefined;
   private migrationRequestId: string = '';
+  // 取得 UIAbility 上下文。
   private context(): common.UIAbilityContext { return this.getUIContext().getHostContext() as common.UIAbilityContext; }
+  // 异步结果是否仍有效。
   private valid(generation: number): boolean { return this.active && this.appActive && generation === this.generation &&
     this.owner === (AuthService.profile()?.uid || '') && this.session === AuthSessionStore.generation(); }
+  // 激活页面并加载第一页。
   private activate(): void {
     if (this.active || !this.appActive) return;
     this.active = true; this.owner = AuthService.profile()?.uid || ''; this.session = AuthSessionStore.generation();
     this.generation++; this.previews.reset(true); void this.load();
   }
+  // 停用页面并清空受保护的数据。
   private deactivate(): void {
     this.refreshAgain = false; this.active = false; this.generation++; this.previews.reset(false); this.source.setRows([]);
     this.count = 0; this.cursor = ''; this.loaded = false; this.busy = false; this.migration = undefined;
   }
+  // App 前后台或账号变化时重新激活。
   private onEnvironmentChanged(): void {
     const sameOwner: boolean = this.owner === (AuthService.profile()?.uid || '');
     this.deactivate();
     if (!sameOwner) { this.pendingRemove = undefined; this.migrationRequestId = ''; }
     if (this.visible && this.appActive) this.activate();
   }
+  // 消失时停用。
   aboutToDisappear(): void { this.visible = false; this.deactivate(); }
+  // 可见范围变化时更新懒加载窗口。
   private window(first: number, last: number): void { if (this.active) this.previews.window(this.context(), first, last, false); }
+  // 加载一页收藏。
   private async load(more: boolean = false): Promise<void> {
     if (this.busy || !this.active || this.owner.length === 0) return;
     const generation: number = this.generation; const mutation: number = this.favoritesMutationRevision;
@@ -91,7 +104,7 @@ export struct FavoriteCardsPage {
       this.window(more ? Math.max(0, this.count - page.items.length) : 0, more ? this.count - 1 : 5);
     } catch (error) {
       if (this.valid(generation)) {
-        // Never retain earlier protected titles/images after a failed permission refresh.
+        // 权限刷新失败后，绝不保留之前受保护的标题或图片。
         this.source.setRows([]); this.count = 0; this.cursor = '';
         this.message = `收藏读取失败：${errorText(error as ErrorDetail)}`;
       }
@@ -100,6 +113,7 @@ export struct FavoriteCardsPage {
       if (this.refreshAgain) { this.refreshAgain = false; void this.load(); }
     } }
   }
+  // 整理旧收藏（开始 / 继续迁移）。
   private async organize(): Promise<void> {
     if (this.busy || !this.active) return;
     const generation: number = this.generation; this.busy = true;
@@ -122,6 +136,7 @@ export struct FavoriteCardsPage {
     } catch (error) { if (this.valid(generation)) this.message = `整理暂未完成，可继续：${errorText(error as ErrorDetail)}`; }
     finally { if (this.valid(generation)) this.busy = false; }
   }
+  // 取消收藏。
   private async remove(cardId: string): Promise<void> {
     if (this.busy || !this.active) return;
     if (this.pendingRemove !== undefined && this.pendingRemove.cardId !== cardId) {
@@ -138,6 +153,7 @@ export struct FavoriteCardsPage {
     } catch (error) { if (this.valid(generation)) this.message = `移除结果未确认，点击同一条目重试：${errorText(error as ErrorDetail)}`; }
     finally { if (this.valid(generation)) this.busy = false; }
   }
+  // 打开卡片详情。
   private async open(cardId: string): Promise<void> {
     if (this.busy || !this.active) return;
     const generation: number = this.generation; this.busy = true;
@@ -148,6 +164,7 @@ export struct FavoriteCardsPage {
     } catch (error) { if (this.valid(generation)) { this.message = errorText(error as ErrorDetail); this.busy = false; void this.load(); } }
     finally { if (this.valid(generation)) this.busy = false; }
   }
+  // 页面布局。
   build() {
     NavDestination() {
       Column({ space: 12 }) {

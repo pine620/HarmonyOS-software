@@ -2,27 +2,32 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-// User-run release check. Reads sources and performs syntax checks; never loads
-// handlers, credentials, devices or cloud clients and never deploys anything.
+/**
+ * 【文件职责】发布前源码检查（npm run check:release-source，由负责人手动运行）：只读取源码并做语法检查，
+ * 不加载 handler、不接触凭据 / 设备 / 云端，也不部署任何东西。检查内容：schema.json 与 objecttype 定义一致、必需索引存在、
+ * 敏感字段与已部署字段保留、shike-service 模块齐全且语法正确、四处方法表一致、已退役操作没有被加回、维护函数配置等。
+ * 报告默认写到仓库外的 docs/ 目录。
+ */
 const cloud=resolve(dirname(fileURLToPath(import.meta.url)),'..'),root=dirname(cloud);
 const reportPath=process.argv[2] ? resolve(process.argv[2]) : join(dirname(root),'docs','image-pipeline-rebuild-20261009','execution','user-release-source-report.json');
 const results=[];
+// 记录一项检查结果。
 function check(name,ok,detail=''){results.push({name,ok:Boolean(ok),detail});}
+// 读取仓库中的源文件。
 function source(path){return readFileSync(join(root,path),'utf8');}
-// AGC's aggregate export includes explicit false flags and numeric/Boolean defaults as
-// strings; objecttype files use omitted flags and JSON numbers/booleans. Compare their
-// meaning without reformatting or replacing the deployed schema definitions.
+// AGC 导出的汇总 schema 会显式写出 false 标记，并把数字 / 布尔默认值写成字符串；objecttype 文件则省略这些标记并使用 JSON 数字 / 布尔。这里比较含义，而不重新格式化或替换已部署的定义。
+// 把字段定义规范化后用于比较。
 function fieldShape(fields){return fields.map(field=>{
   const value={...field};
   for(const key of ['belongPrimaryKey','notNull','isNeedEncrypt','isSensitive'])value[key]=field[key]===true;
   if(value.defaultValue!==undefined&&['Byte','Short','Integer','Long','Float','Double','Boolean'].includes(value.fieldType))value.defaultValue=String(value.defaultValue);
   return Object.fromEntries(Object.keys(value).sort().map(key=>[key,value[key]]));
 }).sort((a,b)=>a.fieldName.localeCompare(b.fieldName));}
+// 把索引定义规范化后用于比较。
 function indexShape(indexes){return (indexes||[]).map(index=>({name:index.indexName,fields:index.indexList.map(field=>[field.fieldName,field.sortType||'ASC'])})).sort((a,b)=>a.name.localeCompare(b.name));}
 const schema=JSON.parse(source('CloudProgram/AppScope/resources/rawfile/schema.json'));
 check('schema version',Number.isSafeInteger(schema.schemaVersion)&&schema.schemaVersion>0,'Source version is recorded; compare the actual deployment export before changing it.');
-// This retired table stays in the deployment snapshot to preserve historical
-// data. Its removed permission feature must not be restored as an active model.
+// 这个已退役的表保留在部署快照中以保存历史数据；它对应的已删除权限功能不能作为活动模型恢复。
 const retiredSchemaObjects=new Set(['FriendContentAccessGrant']);
 for(const object of schema.objectTypes){
   const file=join(cloud,'clouddb/objecttype',object.objectTypeName+'.json');
@@ -42,7 +47,7 @@ for(const object of schema.objectTypes){
   check('index names '+object.objectTypeName,indexNames.every(name=>typeof name==='string'&&/^[A-Za-z][A-Za-z0-9_]{0,29}$/.test(name))&&new Set(indexNames.map(name=>String(name).toLowerCase())).size===indexNames.length,'Index names must contain 1-30 letters, digits or underscores, start with a letter and be unique ignoring case.');
   check('index shape '+object.objectTypeName,(object.indexes||[]).length<=16&&(object.indexes||[]).every(index=>index.indexList.length<=5&&index.indexList.every(field=>fields.has(field.fieldName))));
 }
-// Keep shared deployed index definitions and require the new ranking indexes.
+// 保留已部署的共用索引定义，并要求新的榜单索引存在。
 for(const [name,indexName,expected] of [
   ['FoodCard','public_time',[['visibility','ASC'],['status','ASC'],['publishedAt','DESC'],['id','ASC']]],
   ['FoodCard','public_price_asc',[['visibility','ASC'],['status','ASC'],['queryPriceFen','ASC'],['publishedAt','DESC'],['id','ASC']]],
@@ -59,8 +64,7 @@ for(const [name,indexName,expected] of [
 }
 const cardMedia=schema.objectTypes.find(object=>object.objectTypeName==='CardMedia');
 for(const name of ['objectKey','sha256'])check('preserve sensitivity CardMedia.'+name,cardMedia?.fields?.find(field=>field.fieldName===name)?.isSensitive===true);
-// Removing the friend permission feature must not remove or redefine columns
-// already present in CloudDB. They are storage compatibility only, not an ACL.
+// 删除好友权限功能时不能删除或重新定义 Cloud DB 中已有的列；它们只为存储兼容而保留，不是访问控制。
 const foodCard=schema.objectTypes.find(object=>object.objectTypeName==='FoodCard');
 for(const [fieldName,fieldType] of [['friendVisibilitySince','Date'],['friendVisibilitySequence','Long']]){
   const field=foodCard?.fields?.find(field=>field.fieldName===fieldName);
@@ -74,20 +78,27 @@ for(const module of modules){
   const result=spawnSync(process.execPath,['--check',file],{encoding:'utf8',shell:false});
   check('syntax '+module,!result.error&&result.status===0,(result.stderr||'').trim());
 }
+// 需要在四处方法表中同时存在的操作（方法名 → 操作名）。
 const methods={listDeletedCards:'list-deleted-cards',restoreDeletedCard:'restore-deleted-card',getReviewMedia:'get-review-media'};
 Object.assign(methods,{getCardReportAccess:'get-card-report-access',getCardReportContext:'get-card-report-context',submitCardReport:'submit-card-report',listMyCardReports:'list-my-card-reports',getMyCardReport:'get-my-card-report',listCardReviewReports:'list-card-review-reports',getCardReviewReport:'get-card-review-report',resolveCardReport:'resolve-card-report'});
 Object.assign(methods,{getRandomFoodPool:'get-random-food-pool',getRandomFoodCards:'get-random-food-cards',saveFoodChoice:'save-food-choice',listFoodChoices:'list-food-choices',deleteFoodChoice:'delete-food-choice'});
 Object.assign(methods,{getCardPreviews:'get-card-previews',listPersonalCollection:'list-personal-collection',getPersonalCollectionMigration:'get-personal-collection-migration',startPersonalCollectionMigration:'start-personal-collection-migration',resumePersonalCollectionMigration:'resume-personal-collection-migration',setCardFavorite:'set-card-favorite',getMealCandidates:'get-meal-candidates',createMealPoll:'create-meal-poll',getMealPoll:'get-meal-poll',addMealPollOption:'add-meal-poll-option',voteMealPoll:'vote-meal-poll',closeMealPoll:'close-meal-poll',cancelMealPoll:'cancel-meal-poll',stopMealPollOptions:'stop-meal-poll-options',getUserPage:'get-user-page',listFoodRankings:'list-food-rankings',setCardReactionV2:'set-card-reaction-v2'});
 const entry=source(service+'shikeService.ts'),runtime=source(service+'runtime.js'),gateway=source('Application/entry/src/main/ets/service/CloudGateway.ets'),routes=source('Application/entry/src/main/ets/service/CloudRoutes.ets');
+// 已退役的操作：不能再出现在 runtime 操作表、shikeService.ts、CloudGateway 或 CloudRoutes 中。
 const retiredOperations=['get-stage89-capabilities','list-moderation-queue','get-moderation-detail','decide-moderation','list-lifecycle-jobs','get-lifecycle-job','retry-lifecycle-job','confirm-auth-cleanup','run-lifecycle-job','list-moderation-merchants','moderate-merchant','reconcile-merchant-counters','list-moderation-revisions','moderate-card-revision','start-migration-job','process-migration-job','get-migration-status','list-maintenance-jobs','get-maintenance-job','retry-maintenance-job','validate-lifecycle-job','process-friend-cleanup-job','list-moderation-cards','moderate-card','list-notifications','mark-notification-read','mark-all-notifications-read','open-notification','get-taste-preference','update-taste-preference','clear-taste-preference','list-personalized-recommendations',
   'list-food-lists','create-food-list','update-food-list','delete-food-list','list-food-list-items','add-food-list-item','remove-food-list-item',
   'reorder-food-list-items','get-personal-food-state','update-personal-food-state','list-friend-rankings','list-merchant-rankings','list-received-comments',
   'create-card-comment','delete-card-comment','toggle-comment-reaction',
-  // 2026-10-16: no client caller.
+  // 2026-10-16：客户端已无调用者。
   'report-card','report-user','report-merchant','set-card-reaction','get-card-revision','get-stage47-capabilities','toggle-card-action',
-  'list-my-favorite-cards','list-my-reports','list-own-review-requests','check-location'];
+  'list-my-favorite-cards','list-my-reports','list-own-review-requests','check-location',
+];
 for(const operation of retiredOperations)check('retired contract '+operation,
   !runtime.includes("'"+operation+"':")&&!entry.includes("executeCloudOperation('"+operation+"'")&&!gateway.includes("case '"+operation+"':")&&!routes.includes("['"+operation+"',"));
+  // 2026-10-17：图片准备 / 上传只由 shike-media 提供（CloudGateway 仍直接分派给 media），所以单独检查：不能出现在 runtime 操作表、shikeService.ts 与 CloudRoutes 中，但 CloudGateway 必须仍能分派。
+for(const operation of ['prepare-card-photo','upload-card-photo'])check('media-only contract '+operation,
+  !runtime.includes("'"+operation+"':")&&!entry.includes("executeCloudOperation('"+operation+"'")&&!routes.includes("['"+operation+"',")&&
+  gateway.includes("case '"+operation+"':"));
 for(const module of ['stage4-services.js','stage5-services.js','content-status-services.js'])check('retired module '+module,!existsSync(join(root,service,module)));
 for(const [method,operation]of Object.entries(methods))check('contract '+operation,entry.includes(method+'(input: CloudEnvelope)')&&entry.includes("executeCloudOperation('"+operation+"'")&&runtime.includes("'"+operation+"':")&&routes.includes("['"+operation+"', '"+method+"',"));
 for(const name of ['content-policy.js','media-descriptor.js','read-errors.js','release-info.js','image-models.js','image-reader.js','card-review-access.js']) {

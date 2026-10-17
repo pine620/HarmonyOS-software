@@ -1,13 +1,20 @@
+/**
+ * 【文件职责】发布页“选择店铺位置”：调用 Map Kit 地点选择器，由用户主动选点；
+ * 起始中心使用已选店铺或上次选点位置（只存内存），绝不自动请求设备定位。
+ */
 import { common } from '@kit.AbilityKit';
 import { mapCommon, sceneMap } from '@kit.MapKit';
 import { Merchant, MerchantChoice } from '../model/MerchantModels';
 
+// 店铺选点（静态类）。
 export class MerchantLocationPicker {
+  // 上次选点的地图中心（只在内存中，App 重启即丢失）。
   private static lastCenter: mapCommon.LatLng | undefined = undefined;
+  // 清除上次选点中心（退出发布页时）。
   static clearSelectionCenter(): void { MerchantLocationPicker.lastCenter = undefined; }
+  // 打开地点选择器，返回用户选择的地点信息；用户取消返回 undefined。
   static async choose(context: common.UIAbilityContext, selected?: Merchant): Promise<MerchantChoice | undefined> {
-    // Explicit fixed center, never an omitted center that requests device location.
-    // This is a browsing starting point, not a user's location or saved Merchant.
+    // 显式给定固定的起始中心，而不是省略中心（省略会触发请求设备定位）。这只是浏览起点，不是用户位置，也不会保存为店铺。
     const center: mapCommon.LatLng = { latitude: 39.9042, longitude: 116.4074 };
     void selected;
     const last: mapCommon.LatLng | undefined = MerchantLocationPicker.lastCenter;

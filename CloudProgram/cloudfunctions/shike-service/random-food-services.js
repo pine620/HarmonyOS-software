@@ -1,12 +1,17 @@
+/**
+ * 【文件职责】「今日吃什么」：候选池（get-random-food-pool）、翻牌内容（get-random-food-cards）、保存 / 列出 / 删除选择记录（MealChoiceHistory）。
+ */
 'use strict';
 const crypto = require('crypto');
 const { isAccountActive, readableCardState, dateMillis } = require('./shared/content-policy');
 const { fail, hash, id, uuid, token, encode, afterTuple } = require('./stages47-common');
 const SOURCES = ['MY', 'PUBLIC', 'FRIENDS'];
+// 校验来源参数（MY / PUBLIC / FRIENDS）。
 function source(value) {
   if (!SOURCES.includes(value)) throw fail('推荐来源无效。');
   return value;
 }
+// 洗牌（随机打乱顺序）。
 function shuffle(values) {
   const result = values.slice();
   for (let i = result.length - 1; i > 0; i--) {
@@ -15,15 +20,18 @@ function shuffle(values) {
   }
   return result;
 }
+// 创建模块：ctx 由 runtime.js 注入。
 function createRandomFoodServices(ctx) {
   const { collection, models } = ctx;
   const model = (name, row) => Object.assign(new models[name](), row);
+  // 校验当前用户可以使用该来源（我的收藏、好友需要登录）。
   async function requireSource(uid, selected, env) {
     if (selected !== 'PUBLIC' && !uid) throw fail('此来源需要登录。', 'AUTH_REQUIRED');
     if (uid) await ctx.contentPolicy(env).assertAccountActive(uid);
     if (selected === 'MY' && !(await ctx.collections().status(uid, env)).collectionReady)
       throw fail('请先在收藏中完成历史整理。', 'COLLECTION_MIGRATING');
   }
+  // 候选卡片是否仍符合该来源（仍被收藏 / 仍是好友发布）。
   async function sourceMatches(uid, selected, rows, env) {
     if (selected === 'PUBLIC') return rows;
     if (selected === 'FRIENDS') {
@@ -41,12 +49,14 @@ function createRandomFoodServices(ctx) {
     }
     return rows.filter(row => present.has(row.id));
   }
+  // 过滤出当前仍可见且符合来源的卡片。
   async function currentRows(uid, selected, rows, env) {
     const matched = await sourceMatches(uid, selected, rows.filter(readableCardState), env);
     if (!matched.length) return [];
     const context = await ctx.createCardReadContext(matched, uid, env);
     return ctx.readableCardRows(matched, uid, env, true, context);
   }
+  // 生成本轮候选池（卡片 id 列表）。
   async function pool(uid, payload, env) {
     const selected = source(payload.source), roundId = uuid(payload.roundId);
     await requireSource(uid, selected, env);
@@ -83,6 +93,7 @@ function createRandomFoodServices(ctx) {
     return { source: selected, roundId, cardIds, poolSize: cardIds.length, poolLimit: 60,
       rangeLabel, preparedAt: Date.now(), scannedCandidateCount: scanned, coverage: 'BOUNDED' };
   }
+  // 读取翻开的卡片内容（不可见的返回 unavailableCardIds）。
   async function cards(uid, payload, env) {
     const selected = source(payload.source);
     await requireSource(uid, selected, env);
@@ -101,6 +112,7 @@ function createRandomFoodServices(ctx) {
     const output = fresh.filter(card => allowed.has(card.id));
     return { cards: output, unavailableCardIds: ids.filter(cardId => !output.some(card => card.id === cardId)) };
   }
+  // 保存一次选择（同一轮次幂等）。
   async function saveChoice(uid, payload, env) {
     const selected = source(payload.source), drawId = uuid(payload.drawId), roundId = uuid(payload.roundId), cardId = id(payload.cardId);
     await requireSource(uid, selected, env);
@@ -137,6 +149,7 @@ function createRandomFoodServices(ctx) {
     if (!committed || !output) throw fail('选择尚未保存，请重试。', 'REQUEST_FAILED');
     return output;
   }
+  // 分页读取选择记录。
   async function history(uid, payload, env) {
     await ctx.contentPolicy(env).assertAccountActive(uid);
     const signature = hash(['food-choice-history-v1', uid]), saved = token(payload.cursor, signature), at = saved ? saved.at : Date.now();
@@ -164,6 +177,7 @@ function createRandomFoodServices(ctx) {
     const last = page[page.length - 1];
     return { items, nextCursor: rows.length > 20 && last ? encode(signature, at, { selectedAt: dateMillis(last.selectedAt), historyId: last.historyId }) : '' };
   }
+  // 删除一条选择记录。
   async function deleteChoice(uid, payload, env) {
     const historyId = id(payload.historyId);
     const committed = await collection(env, 'MealChoiceHistory').runTransaction({ apply: async tx => {

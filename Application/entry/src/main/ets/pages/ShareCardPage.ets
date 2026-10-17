@@ -1,14 +1,19 @@
+/**
+ * 【文件职责】“发给好友”页面：重新读取卡片确认仍可分享，列出好友与群聊，选择后以卡片消息发送（send-message / send-group-message）。
+ */
 import { AppDestinationStyle } from '../common/AppPageUi';
 import { CardRepository } from '../repository/CardRepository';
 import { AccountRequestGuard } from '../service/AccountRequestGuard';
 import { common } from '@kit.AbilityKit';
 import { FoodCard } from '../model/CloudContracts';
+import { legacyPriceText } from '../model/CardPrice';
 import { GroupConversationSummary, SendMessageRequest, SocialUser } from '../model/FriendModels';
 import { FriendRepository } from '../repository/FriendRepository';
 import { SocialAvatar } from '../components/social/SocialDisplay';
 import { foodCardCategoryLabel, coverFor } from '../components/FoodCover';
 import { ErrorDetail, errorText } from '../common/ErrorKit';
 
+// 空卡片占位。
 function emptyCard(): FoodCard {
   return {
     id: '', productName: '', brand: '', priceFen: 0, priceLabel: '', originalPriceFen: 0,
@@ -20,16 +25,20 @@ function emptyCard(): FoodCard {
   };
 }
 
+// 分享页面。
 @Component
 export struct ShareCardPage {
   @StorageLink('stage47AppActive') @Watch('onAppActiveChanged') appActive: boolean = true;
   private shareVisible: boolean = true;
+  // App 前后台切换时暂停 / 恢复。
   private onAppActiveChanged(): void { if (!this.appActive) this.aboutToDisappear(); else if (this.shareVisible) this.aboutToAppear(); }
 
   @StorageLink('accountContentRevision') @Watch('onAccountChanged') accountContentRevision: number = 0;
   @State contentAllowed: boolean = false;
   private generation: number = 0;
+  // 账号变化时清空并重新加载。
   private onAccountChanged(): void { this.aboutToDisappear(); if (this.shareVisible && this.appActive) this.aboutToAppear(); }
+  // 消失时作废进行中的请求并清空数据。
   aboutToDisappear(): void { this.generation++; this.contentAllowed = false; this.friends = []; this.groups = []; }
   @Prop card: FoodCard = emptyCard();
   onOpenChat: (friend: SocialUser) => void = (_friend: SocialUser): void => {};
@@ -45,6 +54,7 @@ export struct ShareCardPage {
   @State status: string = '';
   private repository: FriendRepository = new FriendRepository();
 
+  // 出现时加载卡片、好友与群聊。
   aboutToAppear(): void {
     this.generation++; this.contentAllowed = false;
     void this.loadCurrentCard();
@@ -52,8 +62,10 @@ export struct ShareCardPage {
     this.loadGroups();
   }
 
+  // 重新读取当前卡片（确认仍可见）。
   private async loadCurrentCard(): Promise<void> { const generation: number = this.generation; try { const card: FoodCard = await new CardRepository().detail(this.getUIContext().getHostContext() as common.UIAbilityContext, this.card.id); if (generation !== this.generation) return; this.card = card; this.contentAllowed = true; } catch (error) { if (generation === this.generation) { this.contentAllowed = false; this.status = errorText(error as ErrorDetail); } } }
 
+  // 读取好友列表。
   private async loadFriends(): Promise<void> {
     if (this.loading) return;
     this.loading = true; const generation: number = this.generation; const owner: string = AccountRequestGuard.owner();
@@ -70,6 +82,7 @@ export struct ShareCardPage {
     }
   }
 
+  // 读取群聊列表。
   private async loadGroups(): Promise<void> {
     if (this.groupsLoading) return;
     this.groupsLoading = true; const generation: number = this.generation; const owner: string = AccountRequestGuard.owner();
@@ -85,6 +98,7 @@ export struct ShareCardPage {
     }
   }
 
+  // 发送给某个好友。
   private async shareWith(friend: SocialUser): Promise<void> {
     if (!this.contentAllowed || this.sendingUid.length > 0) return;
     this.sendingUid = friend.uid;
@@ -103,10 +117,7 @@ export struct ShareCardPage {
     }
   }
 
-  private priceText(): string {
-    return this.card.priceFen > 0 ? `¥${(this.card.priceFen / 100).toFixed(2)}` : '价格待补充';
-  }
-
+  // 好友行按钮点击。
   private handleFriendAction(friend: SocialUser): void {
     if (this.sentUid === friend.uid) {
       this.onOpenChat(friend);
@@ -115,6 +126,7 @@ export struct ShareCardPage {
     this.shareWith(friend);
   }
 
+  // 发送到某个群聊。
   private async shareWithGroup(group: GroupConversationSummary): Promise<void> {
     if (!this.contentAllowed || this.sendingGroupId.length > 0) return;
     this.sendingGroupId = group.id;
@@ -132,6 +144,7 @@ export struct ShareCardPage {
     }
   }
 
+  // 群聊行按钮点击。
   private handleGroupAction(group: GroupConversationSummary): void {
     if (this.sentGroupId === group.id) {
       this.onOpenGroup(group);
@@ -140,6 +153,7 @@ export struct ShareCardPage {
     this.shareWithGroup(group);
   }
 
+  // 卡片预览区域。
   @Builder
   private cardPreview(): void {
     Row({ space: 12 }) {
@@ -159,7 +173,7 @@ export struct ShareCardPage {
         Text(this.card.productName || '食刻卡片').fontSize(17).fontWeight(FontWeight.Bold)
           .fontColor($r('app.color.social_ink')).width('100%').maxLines(2)
           .textOverflow({ overflow: TextOverflow.Ellipsis });
-        Text(`${foodCardCategoryLabel(this.card)} · ${this.priceText()}`)
+        Text(`${foodCardCategoryLabel(this.card)} · ${legacyPriceText(this.card)}`)
           .fontSize(13).fontColor($r('app.color.social_muted')).width('100%');
       }.layoutWeight(1).alignItems(HorizontalAlign.Start);
     }
@@ -167,6 +181,7 @@ export struct ShareCardPage {
     .border({ width: 1, color: $r('app.color.social_line') });
   }
 
+  // 一行好友。
   @Builder
   private friendRow(friend: SocialUser): void {
     Row({ space: 12 }) {
@@ -186,6 +201,7 @@ export struct ShareCardPage {
     .width('100%').padding({ top: 10, bottom: 10 });
   }
 
+  // 一行群聊。
   @Builder
   private groupRow(group: GroupConversationSummary): void {
     Row({ space: 12 }) {
@@ -206,6 +222,7 @@ export struct ShareCardPage {
     .width('100%').padding({ top: 10, bottom: 10 });
   }
 
+  // 页面布局。
   build() {
     NavDestination() {
       Column({ space: 16 }) {

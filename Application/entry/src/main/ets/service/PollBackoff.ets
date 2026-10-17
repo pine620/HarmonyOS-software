@@ -1,19 +1,24 @@
-// Foreground polling with back-off: 12 s, then 30 s, then 60 s while nothing changes.
-// A change, a send or the page becoming visible again restarts at 12 s. Stopped pages never reschedule.
+/**
+ * 【文件职责】前台轮询的退避调度（私信、群聊、投票页面使用）：没有新内容时间隔依次为 12 秒、30 秒、60 秒；
+ * 有新内容、发送消息或页面重新可见时回到 12 秒。页面停止后绝不再安排下一次。收到 IM 推送时页面会立即刷新，轮询只是兜底。
+ */
 export const POLL_BACKOFF_STEPS_MS: Array<number> = [12000, 30000, 60000];
 
+// 退避轮询器：每个页面 new 一个，start / reset / stop 控制。
 export class PollBackoff {
+  // 当前退避档位、是否运行中、会话标识（防止旧定时器继续执行）与定时器 id。
   private step: number = 0;
   private timer: number | undefined = undefined;
   private active: boolean = false;
   private session: number = 0;
   private poll: () => Promise<boolean>;
 
-  // `poll` returns true when it saw new content.
+  // poll 返回 true 表示看到了新内容。
   constructor(poll: () => Promise<boolean>) {
     this.poll = poll;
   }
 
+  // 开始轮询（会先停止旧的轮询）。
   start(): void {
     this.stop();
     this.active = true;
@@ -22,12 +27,13 @@ export class PollBackoff {
     this.schedule(this.session);
   }
 
-  // Restart the fastest interval without an immediate request (after a send or a new message).
+  // 回到最快的间隔，但不立即请求（发送消息或收到新消息之后调用）。
   reset(): void {
     if (!this.active) return;
     this.start();
   }
 
+  // 停止轮询并清除定时器。
   stop(): void {
     this.active = false;
     if (this.timer !== undefined) {
@@ -36,6 +42,7 @@ export class PollBackoff {
     }
   }
 
+  // 安排下一次轮询。
   private schedule(session: number): void {
     if (!this.active || session !== this.session) return;
     const delay: number = POLL_BACKOFF_STEPS_MS[Math.min(this.step, POLL_BACKOFF_STEPS_MS.length - 1)];
@@ -45,6 +52,7 @@ export class PollBackoff {
     }, delay);
   }
 
+  // 执行一次轮询，根据是否有新内容调整下一次间隔。
   private async run(session: number): Promise<void> {
     let changed: boolean = false;
     try {

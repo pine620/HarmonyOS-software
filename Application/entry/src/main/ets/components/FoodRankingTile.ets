@@ -1,5 +1,9 @@
+/**
+ * 【文件职责】榜单中的一行：名次徽章、封面、名称与评分；前三名使用“印章”样式。
+ */
 import { PersonalPreviewRow } from '../service/PersonalPreviewLoader';
 
+// 榜单行组件。
 @Component
 export struct FoodRankingTile {
   @ObjectLink row: PersonalPreviewRow;
@@ -9,27 +13,33 @@ export struct FoodRankingTile {
   @Prop photoSize: number = 84;
   @Prop largeText: boolean = false;
   onOpen: (cardId: string) => void = (_cardId: string): void => {};
+  // 图片的无障碍描述。
   private photoLabel(): string {
     if (this.row.card === undefined || this.row.state === 'UNAVAILABLE') return '暂不可访问';
     if (this.row.state === 'ERROR') return '图片未加载';
     return this.row.state === 'NO_IMAGE' ? '暂无图片' : '加载中';
   }
+  // 是否为前三名。
   private topRank(): boolean { return this.rank >= 1 && this.rank <= 3; }
-  // Rows after the podium stay pictured but slightly smaller, so the top three read first.
+  // 前三名之后的行仍显示图片但稍小，让前三名更醒目。
   private resolvedPhotoSize(): number { return this.topRank() ? this.photoSize : Math.round(this.photoSize * 0.78); }
+  // 评分文本。
   private score(): string { return this.row.card === undefined ? '—' : this.row.card.tasteScore.toString(); }
+  // 名次徽章背景色。
   private rankBackground(): ResourceColor {
     if (this.rank === 1) return $r('app.color.food_ranking_rank_top');
     if (this.rank === 2) return $r('app.color.food_ranking_rank_second');
     if (this.rank === 3) return $r('app.color.food_ranking_rank_third');
     return $r('app.color.food_ranking_rank');
   }
+  // 整行的无障碍朗读文本。
   private accessibleLabel(): string {
     if (this.row.card === undefined) return '第 ' + this.rank.toString() + ' 名，卡片暂不可访问';
     return '第 ' + this.rank.toString() + ' 名，' + this.row.card.productName +
       '，' + (this.merchantName.length > 0 ? this.merchantName + '，' : '') +
       (this.row.card.authorNickname || '食刻用户') + '推荐，口味 ' + this.score() + ' 分，打开详情';
   }
+  // 封面图（无图时显示分类兜底封面）。
   @Builder private photo() {
     Stack({ alignContent: Alignment.TopStart }) {
       if (this.row.state === 'READY' && this.row.card !== undefined && this.row.card.photoUrl.length > 0) {
@@ -44,7 +54,7 @@ export struct FoodRankingTile {
           .backgroundColor($r('app.color.food_ranking_placeholder')).borderRadius(10);
       }
       if (this.topRank()) {
-        // Podium ranks use a hand-stamped seal: dashed ring, slightly tilted.
+        // 领奖台名次使用“手盖印章”样式：虚线圆环，略微倾斜。
         Text(this.rank.toString()).fontSize(15).maxFontScale(1.4).fontWeight(FontWeight.Bold).maxLines(1)
           .width(30).height(30).textAlign(TextAlign.Center).offset({ x: -4, y: -4 })
           .fontColor($r('app.color.food_ranking_accent')).backgroundColor($r('app.color.food_ranking_surface'))
@@ -60,6 +70,7 @@ export struct FoodRankingTile {
       }
     }.width(this.resolvedPhotoSize()).height(this.resolvedPhotoSize()).accessibilityLevel('no-hide-descendants');
   }
+  // 评分数字。
   @Builder private scoreNumber() {
     Row({ space: 2 }) {
       Text(this.score()).fontSize(26).maxFontScale(1.4).fontWeight(FontWeight.Bold).maxLines(1)
@@ -67,6 +78,7 @@ export struct FoodRankingTile {
       Text('分').fontSize(13).maxFontScale(1.4).fontColor($r('app.color.food_ranking_accent')).margin({ bottom: 3 });
     }.alignItems(VerticalAlign.Bottom);
   }
+  // 整行布局。
   build() {
     Button({ type: ButtonType.Normal, stateEffect: true }) {
       Row({ space: 12 }) {

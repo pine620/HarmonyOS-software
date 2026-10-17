@@ -1,3 +1,7 @@
+/**
+ * 【文件职责】推荐页的地图视图（Map Kit）：显示视野内的店铺标记、选中店铺、“定位到我”。
+ * 相机移动或尺寸变化后读取视野边界回调给 DiscoveryFeed，由其查询 list-map-merchants；定位只在用户确认后执行一次，不缓存坐标。
+ */
 import { FeaturePerformanceTrace } from '../service/FeaturePerformanceTrace';
 import { common } from '@kit.AbilityKit';
 import { AsyncCallback, BusinessError } from '@kit.BasicServicesKit';
@@ -6,8 +10,10 @@ import { DiscoveryCamera, DiscoveryViewport, MapMerchant } from '../model/Discov
 import { LocationService } from '../service/LocationService';
 import { ErrorDetail, errorText } from '../common/ErrorKit';
 
+// 地图上的一个店铺标记。
 interface MerchantMarker { merchantId: string; marker: map.Marker; selected: boolean; }
 
+// 地图组件。
 @Component
 export struct DiscoveryMap {
   @Prop @Watch('onMerchantsChanged') merchants: Array<MapMerchant> = [];
@@ -38,6 +44,7 @@ export struct DiscoveryMap {
   };
   private renderTrace: number | undefined = undefined;
   private loaded: () => void = (): void => { this.finishRenderTrace(); this.readViewport(); };
+  // 结束首帧渲染的性能打点。
   private finishRenderTrace(): void { if (this.renderTrace !== undefined) { FeaturePerformanceTrace.finish('map_first_render', this.renderTrace); this.renderTrace = undefined; } }
   private idle: () => void = (): void => this.readViewport();
   private clicked: (marker: map.Marker) => void = (marker: map.Marker): void => {
@@ -58,12 +65,14 @@ export struct DiscoveryMap {
       this.onCameraChanged(); void this.replaceMarkers();
     } catch (failure) { this.finishRenderTrace(); this.status = errorText(failure as ErrorDetail); }
   };
+  // 创建地图控制器与回调。
   aboutToAppear(): void {
     this.active = true; this.lifetime++; this.finishRenderTrace(); this.renderTrace = FeaturePerformanceTrace.start('map_first_render');
     const target: mapCommon.LatLng = { latitude: this.camera.latitude, longitude: this.camera.longitude };
     const position: mapCommon.CameraPosition = { target, zoom: this.camera.zoom };
     this.options = { position, rotateGesturesEnabled: false, tiltGesturesEnabled: false, scaleControlsEnabled: true };
   }
+  // 销毁时移除标记与监听。
   aboutToDisappear(): void {
     this.finishRenderTrace(); this.active = false; this.lifetime++; this.markerGeneration++;
     if (this.sizeTimer !== undefined) clearTimeout(this.sizeTimer);
@@ -74,6 +83,7 @@ export struct DiscoveryMap {
     for (const value of this.markers) { try { value.marker.remove(); } catch (_error) { } }
     this.markers = []; this.events = undefined; this.controller = undefined; this.ready = false; this.locating = false;
   }
+  // 读取当前视野边界并通知父组件。
   private readViewport(): void {
     const controller: map.MapComponentController | undefined = this.controller;
     if (controller === undefined || !this.active) return;
@@ -86,18 +96,23 @@ export struct DiscoveryMap {
       this.onViewport(viewport, camera);
     } catch (failure) { this.status = errorText(failure as ErrorDetail); }
   }
+  // 相机移动结束。
   private onCameraChanged(): void {
     const controller: map.MapComponentController | undefined = this.controller;
     if (controller === undefined || !this.active) return;
     const target: mapCommon.LatLng = { latitude: this.camera.latitude, longitude: this.camera.longitude };
     try { controller.moveCamera(map.newLatLng(target, this.camera.zoom)); } catch (failure) { this.status = errorText(failure as ErrorDetail); }
   }
+  // 组件尺寸变化。
   private onSizeChanged(): void {
     if (this.sizeTimer !== undefined) clearTimeout(this.sizeTimer);
     this.sizeTimer = setTimeout((): void => { if (this.active) this.readViewport(); }, 100);
   }
+  // 店铺列表变化时重建标记。
   private onMerchantsChanged(): void { void this.replaceMarkers(); }
+  // 选中店铺变化时更新标记样式。
   private onSelectionChanged(): void { void this.updateSelection(); }
+  // 更新选中/未选中标记的图标。
   private async updateSelection(): Promise<void> {
     this.selectionPending = true;
     if (this.selectionRunning) return;
@@ -120,6 +135,7 @@ export struct DiscoveryMap {
       }
     } finally { this.selectionRunning = false; }
   }
+  // 清除旧标记并按当前店铺列表添加新标记。
   private async replaceMarkers(): Promise<void> {
     const controller: map.MapComponentController | undefined = this.controller;
     if (controller === undefined || !this.active) return;
@@ -140,11 +156,13 @@ export struct DiscoveryMap {
     }
     if (this.active && generation === this.markerGeneration) void this.updateSelection();
   }
+  // 弹出确认后执行“定位到我”。
   private confirmLocation(): void {
     const dialog: AlertDialogParamWithConfirm = { title: '定位到我', message: '仅用于把地图移动到当前位置，不上传设备定位。拒绝授权仍可手动浏览。',
       confirm: { value: '继续定位', action: (): void => { void this.locate(); } } };
     AlertDialog.show(dialog);
   }
+  // 定位并把相机移动到当前位置（失败时提示）。
   private async locate(): Promise<void> {
     if (this.locating || !this.ready) return;
     const generation: number = this.lifetime; this.locating = true;
@@ -158,6 +176,7 @@ export struct DiscoveryMap {
     } catch (failure) { if (this.active && generation === this.lifetime) this.status = errorText(failure as ErrorDetail); }
     finally { if (this.active && generation === this.lifetime) this.locating = false; }
   }
+  // 地图与浮动按钮。
   build() {
     Stack({ alignContent: Alignment.Top }) {
       MapComponent({ mapOptions: this.options, mapCallback: this.callback }).width('100%').height('100%')

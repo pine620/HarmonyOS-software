@@ -1,3 +1,6 @@
+/**
+ * 【文件职责】举报列表：admin=false 为“我的举报”，admin=true 为管理员审核列表（先检查审核权限）；按状态（待处理 / 已处理）筛选并分页。
+ */
 import { PagePaletteName, pageColor } from '../common/PagePaletteUi';
 import { NoteActionStyle, WarmNoteBackdrop } from '../common/WarmNoteUi';
 import { ChoiceActionStyle } from '../common/Stage47Ui';
@@ -9,8 +12,11 @@ import { CardReportStatus, CardReportRow, CardReportList, CardReportRoute, CardR
 import { CardReportRepository } from '../repository/CardReportRepository';
 import { ContentPageGuard, ContentPageTicket } from '../service/ContentPageGuard';
 import { PagedDataSource } from '../service/PagedDataSource';
+// 审核权限检查状态。
 type CardReportAccessState = 'CHECKING' | 'ALLOWED' | 'DENIED' | 'ERROR';
+// 权限检查错误。
 interface CardReportAccessError { code?: string | number; }
+// 举报列表页面。
 @Component
 export struct CardReportListPage {
   @Prop palette: PagePaletteName = AppPageSurface.palette;
@@ -30,11 +36,16 @@ export struct CardReportListPage {
   private source: PagedDataSource<CardReportRow> = new PagedDataSource<CardReportRow>();
   private guard: ContentPageGuard = new ContentPageGuard();
   private repo: CardReportRepository = new CardReportRepository();
+  // 清空列表。
   private clear(): void { this.source.replace([]); this.count = 0; this.cursor = ''; this.busy = false; this.message = ''; this.permitted = false; this.accessState = 'CHECKING'; }
+  // 页面变为可见：重置并加载。
   private shown(): void { this.visible = true; this.reset(); }
+  // 页面隐藏：清空。
   private hidden(): void { this.visible = false; this.guard.close(); this.clear(); }
   aboutToDisappear(): void { this.hidden(); }
+  // 环境变化时重置。
   private onEnvironmentChanged(): void { this.reset(); }
+  // 重置：（管理员模式下）重新检查权限后加载第一页。
   private reset(): void {
     this.guard.close(); this.clear();
     if (!this.visible || !this.appActive) return;
@@ -44,7 +55,9 @@ export struct CardReportListPage {
     }
     void this.load(false);
   }
+  // 切换状态筛选。
   private select(status: CardReportStatus): void { if (this.busy || this.status === status) return; this.status = status; this.reset(); }
+  // 加载一页举报。
   private async load(more: boolean): Promise<void> {
     const ticket: ContentPageTicket = this.guard.ticket(); if (this.busy || !this.guard.valid(ticket)) return;
     this.busy = true; this.message = this.admin && !this.permitted ? '正在校验管理员权限…' : '正在读取…';
@@ -77,10 +90,12 @@ export struct CardReportListPage {
     }
     finally { if (this.guard.valid(ticket)) this.busy = false; }
   }
+  // 打开举报详情。
   private open(row: CardReportRow): void {
     if (!this.permitted || !this.guard.valid(this.guard.ticket())) return;
     const route: CardReportRoute = { reportId: row.id }; this.pathStack.pushPathByName(this.admin ? 'card-review-detail' : 'report-detail', route);
   }
+  // 一条举报。
   @Builder private reportCard(row: CardReportRow) {
     Column({ space: 12 }) {
       Row({ space: 12 }) {
@@ -101,11 +116,13 @@ export struct CardReportListPage {
     }.width('100%').padding(18).alignItems(HorizontalAlign.Start).backgroundColor(pageColor(this.palette, 'surface')).borderRadius(24)
       .border({ width: 1, color: pageColor(this.palette, 'line') })
   }
+  // 权限提示标题。
   private accessTitle(): string {
     if (this.accessState === 'DENIED') return '暂无权限';
     if (this.accessState === 'ERROR') return '暂时无法打开';
     return '正在打开管理员系统';
   }
+  // 无权限 / 检查失败时的提示区域。
   @Builder private accessNotice() {
     Column({ space: 16 }) {
       if (this.busy) { LoadingProgress().width(36).height(36).color(pageColor(this.palette, 'action')) }
@@ -118,6 +135,7 @@ export struct CardReportListPage {
       .border({ width: 1, color: pageColor(this.palette, 'line') }).accessibilityGroup(true)
       .accessibilityText(this.accessTitle() + '。' + this.message)
   }
+  // 页面布局。
   build() {
     NavDestination() { Stack({ alignContent: Alignment.TopStart }) { WarmNoteBackdrop({ palette: this.palette })
       Column({ space: 14 }) {

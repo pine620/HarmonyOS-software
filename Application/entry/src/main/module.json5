@@ -1,13 +1,20 @@
+/**
+ * 【文件职责】entry 模块配置：入口 Ability、支持的设备、权限、系统入口（Deep Link / Push）、两个桌面卡片扩展、AGC client_id。
+ * 修改后需要重新构建安装；切换 AGC 应用时必须同步修改 metadata 中的 client_id。
+ */
 {
   "module": {
     "name": "entry",
     "type": "entry",
     "description": "$string:module_desc",
+    // 应用启动时打开的 Ability。
     "mainElement": "EntryAbility",
     "deviceTypes": ["phone", "tablet", "2in1"],
     "deliveryWithInstall": true,
     "installationFree": false,
+    // 页面清单：resources/base/profile/main_pages.json（只有 pages/Index，其他页面都是它的子页面）。
     "pages": "$profile:main_pages",
+    // 权限：联网；模糊定位与精确定位（仅地图“定位到我”使用，使用时申请）。
     "requestPermissions": [
       {
         "name": "ohos.permission.INTERNET"
@@ -29,6 +36,7 @@
         }
       }
     ],
+    // 主 Ability：EntryAbility（入口代码 ets/entryability/EntryAbility.ets）。
     "abilities": [
       {
         "name": "EntryAbility",
@@ -38,7 +46,9 @@
         "startWindowIcon": "$media:app_icon",
         "startWindowBackground": "$color:start_window_background",
         "exported": true,
+        // 允许跨设备接续。
         "continuable": true,
+        // 系统入口：桌面图标启动；shike://card 分享链接（碰一碰）；Push 消息监听。
         "skills": [
           {
             "entities": ["entity.system.home"],
@@ -55,6 +65,7 @@
         ]
       }
     ],
+    // 扩展能力：两个桌面卡片（服务卡片），卡片配置在 resources/base/profile/ 下的 form_config.json 与 random_food_form_config.json。
     "extensionAbilities": [
       {
         "name": "ServiceCardFormAbility",
@@ -83,6 +94,7 @@
         ]
       }
     ],
+    // AGC 应用 ID（client_id），必须与 agconnect-services.json 属于同一个应用。
     "metadata": [
       {
         "name": "client_id",

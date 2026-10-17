@@ -1,3 +1,6 @@
+/**
+ * 【文件职责】提交卡片举报：读取举报上下文（卡片摘要），选择原因并填写说明后提交（submit-card-report）。
+ */
 import { PagePaletteName, pageColor } from '../common/PagePaletteUi';
 import { NoteActionStyle, WarmNoteBackdrop } from '../common/WarmNoteUi';
 import { ChoiceActionStyle } from '../common/Stage47Ui';
@@ -9,6 +12,7 @@ import { CARD_REPORT_REASONS, CardReportReason, CardReportReasonChoice, CardRepo
   SubmitCardReportRequest, CardReportResult, CardReportRoute } from '../model/CardReportModels';
 import { CardReportRepository } from '../repository/CardReportRepository';
 import { ContentPageGuard, ContentPageTicket } from '../service/ContentPageGuard';
+// 举报页面。
 @Component
 export struct ReportContentPage {
   @Prop palette: PagePaletteName = AppPageSurface.palette;
@@ -29,11 +33,16 @@ export struct ReportContentPage {
   private pending: SubmitCardReportRequest | undefined = undefined;
   private guard: ContentPageGuard = new ContentPageGuard();
   private repo: CardReportRepository = new CardReportRepository();
+  // 清空表单与卡片数据。
   private clear(): void { this.card = undefined; this.description = ''; this.reasonType = 'INACCURATE'; this.message = ''; this.busy = false; this.submitted = false; this.resultId = ''; this.pending = undefined; }
+  // 页面变为可见：重新加载。
   private shown(): void { this.visible = true; this.guard.close(); this.clear(); if (this.appActive) { this.guard.open(); void this.load(); } }
+  // 页面隐藏：清空。
   private hidden(): void { this.visible = false; this.guard.close(); this.clear(); }
   aboutToDisappear(): void { this.hidden(); }
+  // App 前后台或账号变化时重新加载。
   private onEnvironmentChanged(): void { this.guard.close(); this.clear(); if (this.visible && this.appActive) { this.guard.open(); void this.load(); } }
+  // 读取被举报卡片的摘要。
   private async load(): Promise<void> {
     const ticket: ContentPageTicket = this.guard.ticket(); if (!this.guard.valid(ticket) || this.busy) return;
     if (this.targetType !== 'CARD') { this.message = '当前仅受理卡片内容举报。'; return; }
@@ -43,6 +52,7 @@ export struct ReportContentPage {
     } catch (error) { if (this.guard.valid(ticket)) this.message = stage47ErrorText(error as Object, '读取失败，请重试。'); }
     finally { if (this.guard.valid(ticket)) this.busy = false; }
   }
+  // 提交举报。
   private async submit(): Promise<void> {
     const ticket: ContentPageTicket = this.guard.ticket(); const card: ReportCardView | undefined = this.card;
     if (!this.guard.valid(ticket) || this.busy || this.submitted || card === undefined) return;
@@ -56,7 +66,9 @@ export struct ReportContentPage {
     } catch (error) { if (this.guard.valid(ticket)) this.message = stage47ErrorText(error as Object, '提交结果未确认，请用原内容重试。'); }
     finally { if (this.guard.valid(ticket)) this.busy = false; }
   }
+  // 卡片内容已变化时重新读取摘要。
   private async refreshCard(): Promise<void> { if (this.busy) return; this.pending = undefined; this.card = undefined; await this.load(); }
+  // 被举报卡片的摘要区域。
   @Builder private cardSummary(card: ReportCardView) {
     Row({ space: 12 }) {
       if (card.photos.length > 0) { Column() { CardReportPhoto({ mediaId: card.photos[0].mediaId }) }.width(76).height(76) }
@@ -64,6 +76,7 @@ export struct ReportContentPage {
         .alignItems(HorizontalAlign.Start).layoutWeight(1)
     }.width('100%').padding(16).backgroundColor(pageColor(this.palette, 'surface')).borderRadius(22)
   }
+  // 页面布局。
   build() {
     NavDestination() { Stack({ alignContent: Alignment.TopStart }) { WarmNoteBackdrop({ palette: this.palette })
       Scroll() { Column({ space: 14 }) {

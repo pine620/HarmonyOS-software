@@ -1,9 +1,11 @@
+/**
+ * 【文件职责】构建信息 buildInfo（buildId、policyHash、protocolVersion），附在每个云函数响应中，用于确认线上部署的版本。policyHash = content-policy.js 的 sha256。
+ */
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-// ZIP packaging records the entire artifact. DevEco records the synchronized
-// source snapshot separately because the IDE compiles/installs dependencies.
+// ZIP 打包时会生成覆盖整个产物的清单；DevEco 部署时由同步脚本另外记录源码快照（因为由 IDE 负责编译与安装依赖）。
 const policyHash = crypto.createHash('sha256').update(fs.readFileSync(path.join(__dirname, 'content-policy.js'))).digest('hex');
 let buildInfo = { buildId: 'image-read-v1-source-' + policyHash.slice(0, 12), policyHash, protocolVersion: 'image-read-v1' };
 const manifest = path.join(__dirname, 'release-manifest.json');

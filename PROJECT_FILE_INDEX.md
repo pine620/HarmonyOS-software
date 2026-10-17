@@ -1,6 +1,6 @@
 # 项目文件索引
 
-按 2026-10-16 的现有发布文件结构整理，重点覆盖 `Application` 与 `CloudProgram`。先看下面的职责说明，完整文件清单在文末。首次运行见 [README](README.md)，后端操作见 [云端指南](CloudProgram/README.md)。
+按 2026-10-17 的现有发布文件结构整理，重点覆盖 `Application` 与 `CloudProgram`。先看下面的职责说明，完整文件清单在文末。首次运行见 [README](README.md)，后端操作见 [云端指南](CloudProgram/README.md)。
 
 路径从项目根目录起算。GitHub 仓库包含 Application 与 CloudProgram 的源码；三个 build profile 随源码共享；负责人此次明确要求根 build profile 和 AGC SDK 配置保留原值提交。独立签名证书/私钥和云工程关联配置继续忽略。
 
@@ -255,6 +255,8 @@ auth、media、service 目录有 `runtime.js`（实际 JS 实现）；每个目�
 - 改账号边界：PrivacyStore/AuthSessionStore/AuthService → auth/service → IdentityBinding/票据/清理流程。
 - 新增、移动或删除文件后更新本索引；完整清单仅保留 .idea/.gitignore 工程目录占位文件，不包含 .git、其他 .idea 文件、.hvigor、依赖、构建、日志、证书和系统缓存。
 
+
+`CloudProgram/cloudfunctions/shared/cloud-operation.js` 统一封装 service 与四个领域云对象的业务操作响应，由统一打包器收集为部署依赖。
 
 ## 完整文件清单
 
@@ -525,7 +527,7 @@ Application/scripts/summarize_preload_metrics.py
 </details>
 
 <details>
-<summary>CloudProgram：145 个文件</summary>
+<summary>CloudProgram：146 个文件</summary>
 
 ```text
 CloudProgram/AppScope/resources/rawfile/schema.json
@@ -568,6 +570,7 @@ CloudProgram/clouddb/objecttype/TastePreference.json
 CloudProgram/clouddb/objecttype/UserProfile.json
 CloudProgram/clouddb/objecttype/WidgetRegistration.json
 CloudProgram/cloudfunctions/shared/card-review-access.js
+CloudProgram/cloudfunctions/shared/cloud-operation.js
 CloudProgram/cloudfunctions/shared/content-policy.js
 CloudProgram/cloudfunctions/shared/image-models.js
 CloudProgram/cloudfunctions/shared/image-reader.js

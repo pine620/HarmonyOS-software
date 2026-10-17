@@ -1,13 +1,19 @@
 'use strict';
 const {fail}=require('./stages47-common');
-// Auth 1.0.5 has no arbitrary-UID delete API. This adapter uses the documented
-// client-authorized REST deregistration endpoint, never a guessed admin URL.
+/**
+ * 【文件职责】注销账号后删除 AGC 认证用户（由生命周期任务调用）。
+ * Auth SDK 1.0.5 没有按任意 UID 删除用户的接口，这里使用官方文档中“由客户端授权”的 REST 注销接口（用注销时保存的加密 Token），绝不调用猜测的管理接口。
+ */
+// 创建模块：ctx 提供解密与 Token 校验函数。
 function createAuthenticationCleanup(ctx){
+  // 向 AGC 认证服务发送 JSON 请求（15 秒超时）。
   async function jsonRequest(path,headers,body){const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),15000);
     try{const response=await fetch('https://connect-drcn.dbankcloud.cn'+path,{method:'POST',headers,body:body===undefined?undefined:JSON.stringify(body),signal:abort.signal});
       if(!response.ok)throw fail('认证清理上游暂不可用。','AUTH_UPSTREAM_FAILED');const result=await response.json();if(!result||typeof result!=='object')throw fail('认证清理响应无效。','AUTH_UPSTREAM_FAILED');return result;
     }catch(error){if(error&&error.code)throw error;throw fail('认证清理连接失败，请稍后重试。','AUTH_UPSTREAM_FAILED');}finally{clearTimeout(timer);}}
+  // 读取必需配置。
   function setting(env,name){const value=String(env[name]||process.env[name]||'');if(!value)throw fail('认证清理服务配置尚未就绪。','AUTH_ACTION_REQUIRED');return value;}
+  // 删除一个认证用户：解密注销时保存的 Token，确认身份一致后调用注销接口。
   async function remove(job,binding,env){const accessToken=ctx.decryptPrivateText(job.authCredentialCiphertext,'delete-account:'+job.entityId,env);
     try{if(await ctx.verifiedAgcUid(accessToken)!==binding.providerUid)throw fail('认证身份不匹配。','AUTH_ACTION_REQUIRED');}catch(_){throw fail('注销授权已失效，需要核实认证身份清理。','AUTH_ACTION_REQUIRED');}
     const clientId=setting(env,'SHIKE_AGC_CLIENT_ID'),projectId=setting(env,'SHIKE_AGC_PROJECT_ID');

@@ -1,14 +1,19 @@
+/**
+ * 【文件职责】校验打包产物（ZIP 解压目录）：清单中每个文件的 sha256 一致、policyHash 与 content-policy.js 一致、handler 与依赖完整。由 package-functions.mjs 与 shike-media/check-deployment.mjs 调用。
+ */
 import { readFileSync, readdirSync, statSync, lstatSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { builtinModules, createRequire } from 'node:module';
 import { join, resolve, relative, sep, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const hash = value => createHash('sha256').update(value).digest('hex');
+// 校验一个解压后的产物目录，失败时抛错。
 export function verifyArtifact(directory) {
   const root = resolve(directory), release = JSON.parse(readFileSync(join(root, 'shared/release-manifest.json'), 'utf8'));
   const { buildId, ...identity } = release;
   if (release.manifestVersion !== 1 || release.protocolVersion !== 'image-read-v1') throw new Error('Unsupported manifest protocol.');
   if (hash(JSON.stringify(identity)) !== buildId) throw new Error('Manifest identity mismatch.');
+  // 递归列出产物目录中的全部文件。
   function walk(directory, prefix = '') {
     return readdirSync(directory).sort().flatMap(name => {
       const path = join(directory, name), next = prefix ? prefix + '/' + name : name;

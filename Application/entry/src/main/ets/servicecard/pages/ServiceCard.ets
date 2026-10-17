@@ -1,8 +1,12 @@
+/**
+ * 【文件职责】「食刻推荐」桌面卡片页面（2×2 / 2×4）。数据通过 LocalStorage 由 ServiceCardStore 绑定；点击打开卡片详情，刷新按钮发送消息给扩展。
+ */
 import { serviceCardOpenAction, serviceCardPrice, serviceCardRefreshAction,
   serviceCardShortScore } from '../ServiceCardPresentation';
 
 const serviceCardStorage: LocalStorage = new LocalStorage();
 
+// 卡片页面（数据字段由 @LocalStorageProp 绑定）。
 @Entry(serviceCardStorage)
 @Component
 struct ServiceCard {
@@ -23,30 +27,36 @@ struct ServiceCard {
   @State private cardHeight: number = 160;
   @State private coverFailed: boolean = false;
 
+  // 封面变化时刷新。
   private onCoverChanged(): void {
     this.coverFailed = false;
   }
 
+  // 是否有可展示的卡片。
   private hasCard(): boolean {
     return this.cardId.trim().length > 0;
   }
 
+  // 是否有封面。
   private hasCover(): boolean {
     return this.hasCard() && !this.coverFailed && /^shike_cover_[0-9a-f_]+$/.test(this.coverImageName) &&
       this.coverCardId === this.cardId && this.coverPhotoPath === this.photoPath &&
       this.coverPhotoBucket === this.photoBucket && this.photoPath.length > 0;
   }
 
+  // 打开推荐卡片。
   private openRecommendation(): void {
     postCardAction(this, serviceCardOpenAction(this.cardId));
   }
 
+  // “打开”按钮的无障碍文本。
   private openLabel(): string {
     if (!this.hasCard()) return '打开食刻，发现附近好味道';
     return `${this.productName}，${this.categoryText}，${this.locationText}，` +
       `好味评分${serviceCardShortScore(this.scoreText)}，${serviceCardPrice(this.priceText)}，打开详情`;
   }
 
+  // 顶部区域。
   @Builder
   private header() {
     Row({ space: 6 }) {
@@ -66,6 +76,7 @@ struct ServiceCard {
     }.width('100%').height(44)
   }
 
+  // 文字摘要。
   @Builder
   private summary() {
     Button({ type: ButtonType.Normal }) {
@@ -107,6 +118,7 @@ struct ServiceCard {
     .onClick((): void => { this.openRecommendation(); })
   }
 
+  // 封面。
   @Builder
   private cover() {
     Button({ type: ButtonType.Normal }) {
@@ -131,6 +143,7 @@ struct ServiceCard {
     .onClick((): void => { this.openRecommendation(); })
   }
 
+  // 布局（按尺寸切换）。
   build() {
     Row() {
       Column() {

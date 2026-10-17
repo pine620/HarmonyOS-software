@@ -1,3 +1,6 @@
+/**
+ * 【文件职责】“删除记录”页面：列出自己 30 天内删除的卡片，可分页加载与恢复。数据来自 ContentStatusRepository（list-deleted-cards / restore-deleted-card）。
+ */
 import { AppDestinationStyle } from '../common/AppPageUi';
 import { util } from '@kit.ArkTS';
 import { PrimaryActionStyle, QuietActionStyle, SecondaryActionStyle, stage47ErrorText, invalidatesProtectedPage } from '../common/Stage47Ui';
@@ -6,6 +9,7 @@ import { DeletedCardRow, DeletedCardsPageResult, RestoreDeletedRequest } from '.
 import { ContentStatusRepository } from '../repository/ContentStatusRepository';
 import { ContentPageGuard, ContentPageTicket } from '../service/ContentPageGuard';
 import { PagedDataSource } from '../service/PagedDataSource';
+// 删除记录页面。
 @Component
 export struct DeletedCardsPage {
   @StorageLink('stage47AppActive') @Watch('onEnvironmentChanged') appActive: boolean = true;
@@ -15,11 +19,16 @@ export struct DeletedCardsPage {
   private visible: boolean = false; private guard: ContentPageGuard = new ContentPageGuard();
   private repo: ContentStatusRepository = new ContentStatusRepository(); private source: PagedDataSource<DeletedCardRow> = new PagedDataSource<DeletedCardRow>();
   private pending: RestoreDeletedRequest | undefined = undefined;
+  // 清空数据并关闭页面守卫。
   private clear(): void { this.guard.close(); this.message = ''; this.source.replace([]); this.count = 0; this.cursor = ''; this.busy = false; this.pending = undefined; this.retryCard = ''; }
+  // 页面变为可见：重新加载第一页。
   private shown(): void { this.visible = true; this.clear(); if (this.appActive) { this.guard.open(); void this.load(false); } }
+  // 页面隐藏：清空数据。
   private hidden(): void { this.visible = false; this.clear(); }
   aboutToDisappear(): void { this.hidden(); }
+  // App 前后台或账号变化时重新加载。
   private onEnvironmentChanged(): void { this.clear(); if (this.visible && this.appActive) { this.guard.open(); void this.load(false); } }
+  // 加载一页（more=true 为下一页）。
   private async load(more: boolean): Promise<void> {
     const ticket: ContentPageTicket = this.guard.ticket(); if (this.busy || !this.guard.valid(ticket)) return;
     this.busy = true; this.message = '正在读取删除记录…';
@@ -30,6 +39,7 @@ export struct DeletedCardsPage {
     } catch (error) { if (this.guard.valid(ticket)) { if (!more || invalidatesProtectedPage(error as Object)) { this.source.replace([]); this.count = 0; this.cursor = ''; } this.message = stage47ErrorText(error as Object, '读取失败。'); } }
     finally { if (this.guard.valid(ticket)) this.busy = false; }
   }
+  // 恢复一张卡片，成功后从列表中移除。
   private async restore(row: DeletedCardRow): Promise<void> {
     const ticket: ContentPageTicket = this.guard.ticket(); if (this.busy || !row.canRestore || !this.guard.valid(ticket)) return;
     if (this.pending === undefined) { const request: RestoreDeletedRequest = { cardId: row.cardId, expectedVersion: row.version, requestId: util.generateRandomUUID() }; this.pending = request; }
@@ -41,6 +51,7 @@ export struct DeletedCardsPage {
     } catch (error) { if (this.guard.valid(ticket)) this.message = stage47ErrorText(error as Object, '恢复结果未确认，请重试原请求或刷新。'); }
     finally { if (this.guard.valid(ticket)) this.busy = false; }
   }
+  // 一行记录。
   @Builder
   private row(row: DeletedCardRow) {
     Column({ space: 8 }) {
@@ -52,6 +63,7 @@ export struct DeletedCardsPage {
         .onClick((): void => { void this.restore(row); })
     }.padding(14).width('100%').backgroundColor($r('app.color.personal_surface')).borderRadius(16).alignItems(HorizontalAlign.Start)
   }
+  // 页面布局。
   build() {
     NavDestination() { Column({ space: 12 }) {
       Text('删除后保留 30 天；到期、已下架或已开始清理的卡片不可恢复。实际资格以服务端为准。').fontSize(14).fontColor($r('app.color.personal_muted')).width('100%')

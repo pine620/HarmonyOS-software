@@ -1,3 +1,6 @@
+/**
+ * 【文件职责】举报详情：显示被举报卡片与举报内容；管理员可选择“保留 / 下架”并填写理由后处理（resolve-card-report）。
+ */
 import { PagePaletteName, pageColor } from '../common/PagePaletteUi';
 import { NoteActionStyle, WarmNoteBackdrop } from '../common/WarmNoteUi';
 import { ChoiceActionStyle } from '../common/Stage47Ui';
@@ -13,6 +16,7 @@ import { CardReportRepository } from '../repository/CardReportRepository';
 import { ContentPageGuard, ContentPageTicket } from '../service/ContentPageGuard';
 import { ImageDescriptors } from '../service/ImageDescriptors';
 import { ReadScheduler } from '../service/ReadScheduler';
+// 举报详情页面。
 @Component
 export struct CardReportDetailPage {
   @Prop palette: PagePaletteName = AppPageSurface.palette;
@@ -33,12 +37,18 @@ export struct CardReportDetailPage {
   private pending: ResolveCardReportRequest | undefined = undefined;
   private repo: CardReportRepository = new CardReportRepository();
   private guard: ContentPageGuard = new ContentPageGuard();
+  // 清空数据。
   private clear(): void { this.detail = undefined; this.reason = ''; this.action = 'KEEP'; this.confirming = false; this.expanded = false; this.photoId = ''; this.busy = false; this.message = ''; this.pending = undefined; }
+  // 重置并重新加载。
   private reset(): void { this.guard.close(); this.clear(); if (this.visible && this.appActive) { this.guard.open(); void this.load(); } }
+  // 页面变为可见。
   private shown(): void { this.visible = true; this.reset(); }
+  // 页面隐藏：清空。
   private hidden(): void { this.visible = false; this.guard.close(); this.clear(); }
   aboutToDisappear(): void { this.hidden(); }
+  // 环境变化时重置。
   private onEnvironmentChanged(): void { this.reset(); }
+  // 读取举报详情。
   private async load(): Promise<void> {
     const ticket: ContentPageTicket = this.guard.ticket(); if (this.busy || !this.guard.valid(ticket)) return;
     this.busy = true; this.message = '正在读取…';
@@ -47,11 +57,13 @@ export struct CardReportDetailPage {
     } catch (error) { if (this.guard.valid(ticket)) { this.detail = undefined; this.message = stage47ErrorText(error as Object, '读取失败，请重试。'); } }
     finally { if (this.guard.valid(ticket)) this.busy = false; }
   }
+  // 处理前二次确认。
   private confirm(): void {
     if (this.busy || !this.guard.valid(this.guard.ticket()) || this.detail === undefined) return;
     if (this.reason.trim().length === 0) { this.message = '请填写处理说明。'; return; }
     this.confirming = true; this.message = '';
   }
+  // 提交处理结果。
   private async resolve(): Promise<void> {
     const ticket: ContentPageTicket = this.guard.ticket(); const detail: CardReportDetail | undefined = this.detail;
     if (!this.admin || this.busy || !this.confirming || !this.guard.valid(ticket) || detail === undefined || detail.report.status !== 'PENDING') return;
@@ -69,9 +81,11 @@ export struct CardReportDetailPage {
       this.message = stage47ErrorText(error as Object, '处理结果未确认，请保持原操作重试，或刷新查看结果。');
     } } finally { if (this.guard.valid(ticket)) this.busy = false; }
   }
+  // 一行“标签：值”。
   @Builder private field(label: string, value: string) {
     if (value.length > 0) { Text(label + ' · ' + value).fontSize(14).lineHeight(22).fontColor(pageColor(this.palette, 'ink')).width('100%') }
   }
+  // 卡片内容区域（含图片）。
   @Builder private cardContent(card: ReportCardView) {
     Column({ space: 12 }) {
       Text(card.available ? card.title : '内容已不可用').fontSize(21).fontWeight(FontWeight.Bold).fontColor(pageColor(this.palette, 'ink')).width('100%')
@@ -104,6 +118,7 @@ export struct CardReportDetailPage {
       } else { Text('卡片已删除或作者账号不可用，举报记录仍可查看。').fontSize(14).fontColor(pageColor(this.palette, 'muted')).width('100%') }
     }.padding(18).width('100%').alignItems(HorizontalAlign.Start).backgroundColor(pageColor(this.palette, 'surface')).borderRadius(24)
   }
+  // 举报内容区域。
   @Builder private reportContent(detail: CardReportDetail) {
     Column({ space: 10 }) {
       Text('举报详情').fontSize(18).fontWeight(FontWeight.Bold).fontColor(pageColor(this.palette, 'ink')).width('100%')
@@ -120,6 +135,7 @@ export struct CardReportDetailPage {
       }
     }.padding(18).width('100%').alignItems(HorizontalAlign.Start).backgroundColor(pageColor(this.palette, 'surface')).borderRadius(24)
   }
+  // 管理员处理区域。
   @Builder private decision(detail: CardReportDetail) {
     Column({ space: 12 }) {
       Text('审核处理').fontSize(18).fontWeight(FontWeight.Bold).fontColor(pageColor(this.palette, 'ink')).width('100%')
@@ -145,6 +161,7 @@ export struct CardReportDetailPage {
       }
     }.padding(18).width('100%').alignItems(HorizontalAlign.Start).backgroundColor(pageColor(this.palette, 'surface')).borderRadius(24)
   }
+  // 页面布局。
   build() {
     NavDestination() { Stack({ alignContent: Alignment.TopStart }) { WarmNoteBackdrop({ palette: this.palette })
       Scroll() { Column({ space: 14 }) {

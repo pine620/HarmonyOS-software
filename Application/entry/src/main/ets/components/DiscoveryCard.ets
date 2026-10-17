@@ -1,7 +1,11 @@
+/**
+ * 【文件职责】推荐流 / 搜索结果中的一张卡片（包一层 ReviewCard，补充店铺名等发现页信息）。
+ */
 import { FoodCard } from '../model/CloudContracts';
 import { mapFoodCardToReviewCardViewData } from '../mapper/CloudCardViewMapper';
 import { ReviewCard, ReviewCardViewData } from './review/ReviewDisplay';
 
+// 推荐流卡片组件。
 @Component
 export struct DiscoveryCard {
   @Require @Prop card: FoodCard;
@@ -15,12 +19,14 @@ export struct DiscoveryCard {
   onCoverDecoded: (id: string, url: string) => void = (_id: string, _url: string): void => {};
   onRetry: () => void = (): void => {};
   onOpen: () => void = (): void => {};
+  // 店铺名称标签。
   private merchantLabel(): string {
     const snapshot: string | undefined = this.card.merchantNameSnapshot;
     const name: string = snapshot === undefined || snapshot.length === 0 ? this.card.shop : snapshot;
     const mode: string = this.card.consumptionMode === 'DELIVERY' ? '外卖' : this.card.consumptionMode === 'DINE_IN' ? '到店' : '历史推荐';
     return (name.length > 0 ? name : '未关联店铺') + ' · ' + mode;
   }
+  // 把卡片转换为 ReviewCard 的视图数据。
   private reviewData(): ReviewCardViewData {
     const data: ReviewCardViewData = mapFoodCardToReviewCardViewData(this.card);
     data.coverUrl = this.coverUrl;
@@ -30,6 +36,7 @@ export struct DiscoveryCard {
     data.shop = this.merchantLabel();
     return data;
   }
+  // 卡片布局。
   build() {
     Column({ space: 0 }) {
       ReviewCard({ data: this.reviewData(), featured: this.featured, coverScale: this.coverScale,

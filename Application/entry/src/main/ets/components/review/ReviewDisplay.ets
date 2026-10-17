@@ -1,7 +1,13 @@
+/**
+ * 【文件职责】卡片展示组件（全 App 卡片外观的核心）：ReviewCard 主组件及分类标签、价格徽标、证据徽标。
+ * 数据来自 CloudCardViewMapper 转换后的 ReviewCardViewData；marketStyle=true 时使用推荐流（发现页）配色与精简布局。
+ */
 import { common } from '@kit.AbilityKit';
 import { ImageRepository } from '../../service/ImageRepository';
+// 证据徽标的语气：已核实 / 辅助信息 / 待确认。
 export type EvidenceTone = 'verified' | 'assisted' | 'pending';
 
+// ReviewCard 需要的全部展示数据（已格式化好的文本）。
 export interface ReviewCardViewData {
   id: string;
   productName: string;
@@ -23,6 +29,7 @@ export interface ReviewCardViewData {
   locationLabel: string;
 }
 
+// 空数据（组件默认值）。
 export function emptyReviewCardViewData(): ReviewCardViewData {
   return {
     id: '',
@@ -46,6 +53,7 @@ export function emptyReviewCardViewData(): ReviewCardViewData {
   };
 }
 
+// 分类标签组件。
 @Component
 export struct FoodTag {
   @Prop label: string = '';
@@ -72,6 +80,7 @@ export struct FoodTag {
   }
 }
 
+// 价格徽标组件。
 @Component
 export struct PriceBadge {
   @Prop priceText: string = '价格待补充';
@@ -103,18 +112,21 @@ export struct PriceBadge {
   }
 }
 
+// 证据徽标组件（例如“实拍公开”）。
 @Component
 export struct EvidenceBadge {
   @Prop label: string = '待确认';
   @Prop tone: EvidenceTone = 'pending';
   @Prop marketStyle: boolean = false;
 
+  // 徽标文字颜色。
   private textColor(): Resource {
     if (this.tone === 'verified') return $r('app.color.leaf');
     if (this.tone === 'assisted') return this.marketStyle ? $r('app.color.discovery_accent') : $r('app.color.accent_action');
     return $r('app.color.warning');
   }
 
+  // 徽标的无障碍描述。
   private description(): string {
     if (this.tone === 'verified') return '此卡片已公开，配有发布者实拍图';
     if (this.tone === 'assisted') return '商品事实由图片或来源信息辅助填写';
@@ -136,6 +148,7 @@ export struct EvidenceBadge {
   }
 }
 
+// 卡片主组件：封面、名称、店铺、价格、评分与点评摘要。
 @Component
 export struct ReviewCard {
   @Prop @Watch('onDataChanged') data: ReviewCardViewData = emptyReviewCardViewData();
@@ -148,40 +161,48 @@ export struct ReviewCard {
   onCoverFailed: () => void = (): void => {};
   onCoverDecoded: (id: string, url: string) => void = (_id: string, _url: string): void => {};
 
+  // 数据变化时重新计算图片解码尺寸等状态。
   private onDataChanged(): void {
     if (this.data.coverUrl.length === 0 || this.data.coverLoading || this.data.coverUrl !== this.nativeCoverFailed) this.nativeCoverFailed = '';
   }
 
+  // 图片解码尺寸（按显示宽度限制，节省内存）。
   private decodeSize(): ImageSourceSize {
     const size: ImageSourceSize = { width: 180 * this.coverScale, height: this.photoHeight() };
     return size;
   }
+  // 封面显示高度（保持原图比例并限制范围）。
   private photoHeight(): number {
     const height: number = this.marketStyle ? this.featured ? 186 : 132 : this.featured ? 224 : 142;
     return Math.round(height * this.coverScale);
   }
 
+  // 点评摘要最多显示的行数。
   private reviewLineCount(): number {
     return this.marketStyle ? 1 : this.featured ? 3 : 2;
   }
+  // 按 marketStyle 选择的配色（正文 / 次要 / 强调 / 表面 / 柔和）。
   private inkColor(): Resource { return this.marketStyle ? $r('app.color.discovery_ink') : $r('app.color.ink'); }
   private mutedColor(): Resource { return this.marketStyle ? $r('app.color.discovery_muted') : $r('app.color.muted'); }
   private accentColor(): Resource { return this.marketStyle ? $r('app.color.discovery_accent') : $r('app.color.accent_action'); }
   private surfaceColor(): Resource { return this.marketStyle ? $r('app.color.discovery_surface') : $r('app.color.surface'); }
   private softColor(): Resource { return this.marketStyle ? $r('app.color.discovery_soft') : $r('app.color.accent_soft'); }
 
+  // 封面状态文字（加载中 / 无图 / 无权限等）。
   private coverStatusText(): string {
     if (this.data.coverLoading) return '正在加载实拍图';
     if (this.data.coverFailed) return '实拍图暂时不可用';
     return '暂无实拍图';
   }
 
+  // 封面的无障碍描述。
   private coverDescription(): string {
     if (this.data.coverLoading) return '图片就绪后将自动显示';
     if (this.data.coverFailed) return '可稍后刷新推荐再试';
     return '商品信息仍可查看';
   }
 
+  // 元信息行（时间、位置等）。
   private metadataText(): string {
     const parts: Array<string> = [];
     if (this.data.authorName.length > 0) parts.push(this.data.authorName);
@@ -190,6 +211,7 @@ export struct ReviewCard {
     return parts.join(' · ');
   }
 
+  // 整张卡片的无障碍朗读文本。
   private accessibilitySummary(): string {
     const parts: Array<string> = [
       this.data.productName,
@@ -204,6 +226,7 @@ export struct ReviewCard {
     return parts.join('，');
   }
 
+  // 卡片布局。
   build() {
     Column({ space: this.marketStyle ? 0 : 10 }) {
       Stack({ alignContent: Alignment.BottomStart }) {
@@ -244,7 +267,7 @@ export struct ReviewCard {
           .accessibilityText(this.data.productName + '，' + this.coverStatusText());
         }
 
-        // Discovery (market) cards keep only name, shop, price and taste; the category is shown by the filter row.
+        // 发现页（market）卡片只保留名称、店铺、价格与口味；分类已在筛选栏中体现，不再重复显示。
         if (!this.marketStyle) {
           Row() {
             Blank();

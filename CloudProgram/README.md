@@ -1,231 +1,278 @@
-# 云端搭建与部署
+# 食刻云端（CloudProgram）
 
-本目录包含 7 个 AGC 云对象、3 个独立云函数（图片读取 / 首页预取 / 定时维护）、36 个 Cloud DB 对象定义及环境变量配置说明。客户端第一次运行见 [项目 README](../README.md)，各文件职责见 [索引](../PROJECT_FILE_INDEX.md)。源码状态更新日期为 2026-10-16，官方操作资料核对日期仍为 2026-10-02。
+本目录是食刻的 AGC 云开发源码：**7 个云对象、3 个事件函数、36 个 Cloud DB 对象定义**，以及统一打包脚本和 Node 契约测试。客户端第一次运行见 [项目 README](../README.md)，逐文件职责见 [索引](../PROJECT_FILE_INDEX.md)。
 
-## 0. 先确定团队、项目与分工
+> 源码状态核对日期 2026-10-17。Git 推送不会部署 AGC；本 README 中的打包、部署、开关调整均由部署负责人执行。
 
-### 加入已有团队后端
+---
 
-管理员添加成员、授予角色/项目/应用/调试签名权限，新成员切换团队的完整步骤见 [README：加入 AGC 团队](../README.md#agc-team)。先完成授权，再登录 DevEco；克隆 Git 仓库不自动获得云端权限。
+## 1. 目录结构
 
-| 成员工作 | 需要确认的访问范围 | 首次应看到的结果 |
+```text
+CloudProgram/
+├── README.md                    本文件
+├── package.json                 打包 / 检查 / 测试脚本入口（npm run …）
+├── cloud-config.json            本地生成的团队 / 项目 / 应用关联元数据（不提交真实配置）
+├── AppScope/resources/rawfile/schema.json   平台生成的 schema 快照（检查脚本以它对照 objecttype）
+├── clouddb/
+│   ├── db-config.json           默认存储区 shike 与数据处理位置
+│   └── objecttype/*.json        36 个对象：字段、主键、索引、权限
+├── cloudfunctions/
+│   ├── shared/                  共享模块（唯一维护处，不单独部署）
+│   ├── shike-service/           全部 90 个业务操作的维护源码 + 兼容回落入口
+│   ├── shike-content/ …social/ …account/ …governance/   四个领域云对象（只有 TS 入口与配置）
+│   ├── shike-auth/              华为账号兼容登录
+│   ├── shike-media/             所有 Cloud Storage 读写、封面生成
+│   ├── shike-image/             批量图片读取（事件函数）
+│   ├── shike-prefetch/          首页快照预取（事件函数）
+│   └── shike-maintenance/       定时维护（事件函数）+ timer-contract.json
+├── env-templates/               环境变量占位模板（只有占位值）
+├── scripts/                     prepare-deveco / 统一打包 / 产物与源码检查
+└── tests/*.test.cjs             契约测试（node --test）
+```
+
+### 1.1 每个函数目录里有什么
+
+| 文件 | 作用 |
+| --- | --- |
+| `shike*.ts` / `shike*.js` | 入口：云对象为 TS 类（方法名即客户端调用的方法），事件函数为 `handler` |
+| `runtime.js` | 业务实现（auth / media / service 才有；领域函数运行 `service/` 下的副本） |
+| `function-config.json` | handler、functionType（1 云对象 / 0 事件函数）、HTTP 触发器鉴权 |
+| `package.json` + `package-lock.json` | 该函数独立的生产依赖（Node 20.x），两者 dependencies 必须一致 |
+| `tsconfig.json` | 云对象 TS 入口编译为 CommonJS |
+
+### 1.2 共享源码与生成副本
+
+- **唯一维护源码**：`cloudfunctions/shared/`、`shike-service/`、`shike-media/`。
+- **生成副本（已 Git 忽略，不要手改）**：各函数内的 `shared/`；`shike-{content,social,account,governance,maintenance}/service/`；`shike-maintenance/media/`；编译出的 `shike*.js(.map)`。
+- 生成方式：打包器和 `prepare-deveco` 从入口文件出发递归跟踪 `require('./…')`，把 `./shared/` 映射到 `cloudfunctions/shared/`、`./service/` 映射到 `shike-service/`、`./media/` 映射到 `shike-media/`（规则在 `scripts/function-layout.mjs`）。新增共享模块只要被 `require`，就会自动随包。
+- 改了 `shared/` 或 `shike-service/` 后，**所有用到它们的函数都要重新生成并部署**；否则线上会运行旧副本。
+
+### 1.3 shared/ 模块
+
+| 文件 | 职责 |
+| --- | --- |
+| `cloud-operation.js` | service 与四个领域云对象共用的“执行操作 + 包装响应”（请求号、构建信息、昵称登录错误脱敏、互动耗时日志） |
+| `content-policy.js` | 内容可见性策略（卡片 / 作者 / 图片 / 修订 / 审核读取资格）；其 sha256 即响应中的 `policyHash` |
+| `image-models.js` | Cloud DB 模型基类 `CloudDbModel` 与 `CardMedia` 模型 |
+| `image-reader.js` | 图片读取与权限校验（`shike-image` 与旧接口共用） |
+| `media-descriptor.js` | 图片描述符（原图 / 480 封面的 sha256、大小）与字节校验 |
+| `public-snapshot.js` | 游客首页快照的生成、校验与读取 |
+| `read-errors.js` | 统一错误响应、请求号、读取指标采样 |
+| `release-info.js` | 构建信息（buildId / policyHash / protocolVersion） |
+| `card-review-access.js` | 审核员图片准入 |
+
+### 1.4 shike-service 内部模块
+
+`runtime.js` 是请求入口与通用能力（身份校验与缓存、模型、私信加密、Push、卡片读取组装、推荐流、好友 / 私信 / 群聊、操作表），其余按业务拆分并通过依赖注入装配：
+
+| 模块 | 业务 |
+| --- | --- |
+| `stage1-services.js` | 发布回执、作者修改（修订 / 撤回）、软删除、注销、历史数据维护 |
+| `stage2-services.js` | 商家（官方点 / 用户点）、价格与分类字段、商家计数对账 |
+| `stage3-services.js` | 地图商家、公开搜索、店铺推荐与开放门槛 |
+| `stage6-services.js` | 群内选餐投票 |
+| `stage7-services.js` | 用户主页、赞踩 |
+| `stages47-common.js` | 游标签名、分页、哈希等共用工具 |
+| `card-interaction-services.js` | 卡片互动（反应 / 收藏）状态、回执与计数 |
+| `personal-collections.js` | 收藏集合与历史迁移、卡片预览 |
+| `food-ranking-services.js` / `random-food-services.js` | 榜单 / 今日吃什么 |
+| `card-report-services.js` | 卡片举报与审核处理 |
+| `lifecycle-services.js` / `authentication-cleanup.js` | 删除记录恢复、生命周期清理、认证用户删除 |
+| `nickname-auth.js` | 昵称密码登录 |
+
+### 1.5 增删一个业务操作
+
+同步修改 4 处并保持一致：`shike-service/runtime.js` 的 `operations` 表 → `shikeService.ts` 方法 → 对应领域函数 TS 方法 → 客户端 `Application/entry/src/main/ets/service/CloudRoutes.ets`。`npm run check:release-source` 会核对方法表、已退役操作不被加回。service 与领域函数由客户端 `cloudFunction.call` 调用，**不要**为它们生成调用代理；只有改了 `shike-auth` / `shike-media` 的导出方法或参数模型，才右击该云对象 **Generate Invoke Interface**，目标选 `Application/cloud_objects`。
+
+---
+
+## 2. 团队、项目与分工
+
+| 成员工作 | 需要的访问范围 | 首次应看到的结果 |
 | --- | --- | --- |
-| 客户端联调 | 测试项目与 com.wyq.shike 应用、配置下载、调试证书/Profile；模拟器凭据可由管理员登记 | 应用可见、SDK 配置可下载、关联应用签名能完成 |
-| 云对象开发/部署 | 云开发对应角色及目标项目权限、函数配置/部署/日志权限 | CloudDev 指向正确项目，当前七个云对象可见，承担部署的成员能执行相应操作 |
-| 数据/存储维护 | Cloud DB/Storage 资源管理权限及管理员约定的操作范围 | 可核对 shike 存储区、对象定义、存储实例与规则 |
-| 团队/协议管理 | 管理用户及访问权限；云开发协议签署由持有者/法务负责 | 成员授权与服务协议已完成 |
+| 客户端联调 | 测试项目与 `com.wyq.shike` 应用、配置下载、调试证书 / Profile；模拟器凭据可由管理员登记 | 应用可见、SDK 配置可下载、关联应用签名能完成 |
+| 云函数开发 / 部署 | 云开发角色及目标项目权限、函数配置 / 部署 / 日志权限 | CloudDev 指向正确项目，10 个函数可见 |
+| 数据 / 存储维护 | Cloud DB / Storage 资源管理权限 | 可核对 shike 存储区、对象定义、存储实例与规则 |
+| 团队 / 协议管理 | 管理用户及访问权限；云开发协议由持有者 / 法务签署 | 成员授权与服务协议已完成 |
 
-角色以控制台的实际权限列表为准，不把“已选开发角色”当成所有操作都已授权。AGC 成员角色与 Cloud DB 数据对象里的 Administrator 权限属于不同层次：后者供受控服务端访问，不能为了让成员联调而开放设备用户直接读写。
+- AGC 成员角色与 Cloud DB 对象里的 Administrator 权限是两回事：后者只供受控服务端访问，不能为联调而开放设备用户直接读写。
+- 开发前由负责人给出团队、测试项目 / 应用标识、区域、端云分支和云端生效版本，并明确谁部署、谁维护 DB、谁管理秘密。
+- 同一函数的 `$latest` 被更新会影响所有连接该后端的成员，部署前同步变更范围，完成后记录版本。
 
-开发开始前，由负责人给出团队、测试项目/应用标识、区域、端云分支/提交和云端生效版本；明确谁部署、谁维护 DB、谁管理秘密。同一函数的 `$latest` 被更新会影响所有连接该后端的成员，部署前同步变更范围与兼容性，完成后记录版本。个人本地修改不会自动更新云端。
+**打开 CloudDev**：本仓库外层含 README 和索引，不满足 DevEco Studio 26.0.0.821 的端云双目录识别条件。需要 IDE 内云端开发 / 部署时，另建外层只有 `Application`、`CloudProgram` 两个非隐藏条目的规范端云工程再引入源码，关联团队已有应用；进入 `Tools > CloudDev` 用个人团队账号 `Sign in`，经 `Serverless > Cloud Functions / Cloud DB > Go to console` 核对项目。`cloud-config.json` 的 `teamId`、`projectId`、`appId` 必须与负责人提供的一致，且不上传 GitHub。
 
-### 打开和核对 CloudDev
+参考：[团队帐号管理](https://developer.huawei.com/consumer/cn/doc/app/agc-help-manageaccount-0000002306610129) · [CloudDev 管理面板](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/agc-harmonyos-clouddev-console)
 
-首次客户端运行打开 `Application`。本仓库外层含 README 和索引，不满足 DevEco Studio 26.0.0.821 的端云双目录识别条件；不要仅补一个 cloud-config.json 后就打开外层。需要 IDE 内云端开发/部署时，按第 1 节创建或按官方流程迁移规范端云工程，保留外层仅有 `Application`、`CloudProgram` 两个非隐藏条目的结构，再引入本项目源码并关联团队已有应用。进入 `Tools > CloudDev`，用个人团队账号 `Sign in`，通过 `Serverless > Cloud Functions / Cloud DB > Go to console`核对项目。
+---
 
-`cloud-config.json`里 appSelected 的 appId/projectId 和 teamId 应与负责人提供的身份一致。这份本地关联配置不上传 GitHub。首次接手可由管理员通过安全渠道提供测试项目的配置，也可使用下面官方创建向导关联同一应用并生成；成员登录/权限由平台处理，不手写 uid 来授权。
+## 3. 从零搭建一套后端
 
-参考官方[团队帐号管理](https://developer.huawei.com/consumer/cn/doc/app/agc-help-manageaccount-0000002306610129)、[CloudDev 管理面板](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/agc-harmonyos-clouddev-console)。
+已有后端且只做联调时跳过本节。
 
-## 1. 创建 AGC 项目与应用
+### 3.1 AGC 项目与应用
 
-已有后端且只做联调时跳过本节。以下用于负责人从零初始化一套后端；同包名应用的归属由平台规则约束，若需不同包名的隔离测试应用，先统一客户端身份与平台配置，不随意更改主项目包名。
+1. 在约定团队登录 [AGC](https://developer.huawei.com/consumer/cn/service/josp/agc/index.html)，创建项目并启用数据处理位置**中国**；创建 HarmonyOS 应用，包名与 `Application/AppScope/app.json5` 一致：`com.wyq.shike`。
+2. DevEco `File > New > Create Project` 选 **Application > [CloudDev]Empty Ability**，在**单独的临时目录**用相同包名关联该应用，生成 `CloudProgram/cloud-config.json`。模板里的示例对象和函数不是食刻资源，不要整体覆盖本项目。
+3. 团队未签署云开发协议时由持有者 / 法务签署；在 Notifications 检查云函数 / DB / Storage 开通状态。
+4. 项目认证服务开启**邮箱认证**；从正确应用下载 `agconnect-services.json` 放入 `Application/AppScope/resources/rawfile/`。
 
-1. 在约定团队中登录 [AGC](https://developer.huawei.com/consumer/cn/service/josp/agc/index.html)，从“开发与服务”创建项目，启用数据处理位置**中国**；创建/选择 HarmonyOS **应用**，包名与 `Application/AppScope/app.json5`一致：`com.wyq.shike`，并确认应用已归属该项目。
-2. 在 DevEco 欢迎页 `Create Project`或 `File > New > Create Project`选择 **Application > [CloudDev]Empty Ability**。若需为现有源码补生成关联配置，使用单独的临时工程目录，不覆盖本项目。
-3. 在工程信息页填相同 Bundle name，点击 Next；登录自己的开发者账号，`Team`选约定团队。向导按包名查询应用，核对其 APP ID、所属项目和中国数据处理位置，再选择 Finish。查询不到时排查包名、团队、应用授权；游离应用需先由管理员关联项目。
-4. 团队尚未签署云开发协议时，请持有者/法务签署。等待初始化、OHPM/npm 同步；在 Notifications 检查云函数/DB/Storage 开通状态。失败从 CloudDev 控制台入口处理；欠费/服务协议问题交负责人。
-5. 用向导生成的 `CloudProgram/cloud-config.json`作为这套后端的关联配置。临时模板中的 Post、示例数据和 id-generator 不是食刻资源；保留本项目的 Application 源码、七个云对象、三个事件函数及当前 36 个对象定义，不整体用模板替换。
-6. AGC 项目认证服务开启**邮箱认证**。从正确应用下载 agconnect-services.json，按根 README 放入 `Application/AppScope/resources/rawfile`；当前 AGC SDK 默认初始化读取应用级资源。客户端生成自己的关联应用调试签名。华为兼容登录、Push 和缓存按后文另配置。
+参考：[创建 / 关联云开发工程](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/agc-harmonyos-create-appproject) · [已有端工程迁移](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/agc-harmonyos-project-migration)
 
-官方资料：[创建/关联 HarmonyOS 云开发工程](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/agc-harmonyos-create-appproject)、[已有端工程迁移](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/agc-harmonyos-project-migration)。客户端接手无需重新迁移；需要 IDE 内云端开发时，先满足第 0 节的端云工程识别条件，并复用团队已有 AGC 资源。
+### 3.2 Cloud DB
 
-## 2. Cloud DB 和 Storage
+1. 建立中国区存储区 **`shike`**（与 `clouddb/db-config.json` 及服务端默认值一致）。
+2. 右击 **clouddb > Deploy Cloud DB**，等待 `Deploy successfully`，在控制台核对 36 个对象与存储区。
+3. 所有对象只给 **Administrator：Read / Upsert / Delete**，World / Authenticated / Creator 不开放。
 
-1. 建立中国区 Cloud DB 存储区 **`shike`**，与 `clouddb/db-config.json` 及服务端默认值一致。
-2. DevEco 右击 **clouddb > Deploy Cloud DB**，等待 `Deploy successfully`；从 `Tools > CloudDev > Serverless > Cloud DB > Go to console`检查“对象类型”“存储区”“数据”页签，确认 `objecttype/`下 36 个对象与目标 shike 存储区。部署前核对项目，不覆盖结构不同的已有对象。
-3. 所有对象仅给 **Administrator：Read/Upsert/Delete**，World/Authenticated/Creator 不开放权限。
-4. 创建一个中国区 AGC Cloud Storage 实例，把完整实例名用于 `SHIKE_STORAGE_BUCKET`。不使用 OBS，原图和私有对象保持受限。当前新增受控封面/首页快照读取及本人暂存区上传链路，须按下文限定路径配置规则，不能开放整个 bucket 或 public/approved 目录。
-5. 图片由 shike-media 使用平台项目凭证处理；设备只通过鉴权媒体接口访问。`PROJECT_CREDENTIAL` 由 AGC 注入，不自行创建或复制。
-
-| 对象组 | 对象与职责 |
+| 对象组 | 对象 |
 | --- | --- |
-| 用户/身份 | UserProfile：资料与媒体引用；IdentityBinding：provider UID 到业务 UID；AuthMigrationTicket：一次性票据消费审计 |
-| 内容/媒体 | FoodCard：商品、价格、口味、E3 位置与状态；CardMedia：图片归属、路径、摘要、尺寸和卡片关联 |
-| 商家 | Merchant：官方点／用户点、坐标系、审核状态、地图资格与公开推荐计数 |
-| 卡片互动 | Report：举报；CardAction：旧 LIKE 与独立收藏；CardReaction：新赞踩；CardComment / CommentReaction：保留历史评论数据和旧接口 |
-| 版本/权限/任务 | FoodCardRevision：待审编辑版本；PublishRequestRecord：请求回执；MaintenanceJob：迁移、会话及生命周期任务 |
-| 好友/私信 | Friendship：关系/申请；FriendReport：用户举报；Conversation：会话/未读；ChatMessage：TEXT/CARD/LINK |
-| 群聊 | GroupConversation：群资料/摘要；GroupMember：角色/未读；GroupMessage：文字/卡片 |
-| 个人内容 | TastePreference：口味偏好；FoodList / FoodListItem：私人清单；PersonalFoodState：个人食物状态；MealChoiceHistory：选择记录 |
-| 群投票 | MealPoll / MealPollOption / MealPollVote：投票、选项与投票记录 |
-| 通知/卡片 | NotificationEvent：站内事件；PushRegistration：系统通知设备登记；WidgetRegistration：桌面卡片实例登记 |
+| 用户 / 身份 | `UserProfile`、`IdentityBinding`（provider UID → 业务 UID）、`AuthMigrationTicket`、`NicknameClaim`、`PasswordCredential`、`PasswordThrottle` |
+| 内容 / 媒体 | `FoodCard`、`CardMedia`、`FoodCardRevision`、`PublishRequestRecord`（幂等回执） |
+| 商家 | `Merchant` |
+| 互动 / 治理 | `CardReaction`（新赞踩）、`CardAction`（旧 LIKE 与收藏）、`CardRating`（历史保留）、`Report`、`CardComment` / `CommentReaction`（历史评论数据） |
+| 好友 / 私信 / 群聊 | `Friendship`、`FriendReport`、`Conversation`、`ChatMessage`、`GroupConversation`、`GroupMember`、`GroupMessage` |
+| 个人内容 / 投票 | `PersonalFoodState`、`TastePreference`、`FoodList`、`FoodListItem`、`MealChoiceHistory`、`MealPoll`、`MealPollOption`、`MealPollVote` |
+| 通知 / 卡片 / 任务 | `NotificationEvent`、`PushRegistration`、`WidgetRegistration`、`MaintenanceJob` |
 
-**已有数据的项目：**保留历史 CardRating 及其数据。AppScope/schema.json 是平台生成的快照，客户端与云端快照可能处于不同代次；当前部署以 `clouddb/objecttype/` 的 36 个定义为准。已部署字段的类型、主键和敏感属性不能直接更改；新增结构先制定迁移方案，由管理员操作并导出核对。当前 FoodCard 定义含 16 个索引，Merchant 含 4 个索引，核对时包含字段顺序与 ASC/DESC。
+**已有数据的项目**：已部署字段的类型、主键、敏感属性不能直接改；有数据的对象 / 存储区不采用“删除重建”。新增结构先制定迁移方案，由管理员操作并导出核对。当前部署以 `clouddb/objecttype/` 为准（FoodCard 含 15 个索引、Merchant 含 5 个，核对时包含字段顺序与 ASC/DESC）。String 字段上限 200 字符，正文 / 长链接用 Text；消息正文、链接、摘要和 Token 是服务端 AES-256-GCM 密文，不改成明文。对象定义与各 runtime 的 `fieldTypes`、主键、索引和销户清理必须同步。参见 [部署云数据库](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/agc-harmonyos-clouddev-deploydatabase)。
 
-String 字段有 200 字符上限，正文/长链接采用 Text。UserProfile.nickname/avatarUrl、CardMedia.objectKey/sha256、Report.reason、FriendReport.reason 保持已有敏感属性；查询用镜像字段依既有模型处理。消息正文、链接、摘要和 Token 的 Text 字段采用服务端 AES-256-GCM 密文，不改成明文或用 isSensitive 代替。对象定义与各 runtime 的 fieldTypes、主键、索引和销户清理必须同步。
+### 3.3 Cloud Storage
 
-部署 DB 会由 IDE 下载/更新 schema。若对象在控制台改动，按平台导出并对齐工程快照；本项目端侧通过云对象访问业务数据，不能为解决 schema 差异而开放直接读写。官方明确已有字段类型等不能直接改；有数据的对象/存储区不采用“删除重建”作为修复方案。参见[部署云数据库](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/agc-harmonyos-clouddev-deploydatabase)。
+1. 创建一个中国区 AGC Cloud Storage 实例，完整实例名用于 `SHIKE_STORAGE_BUCKET`（不使用 OBS）。
+2. 存储规则只开放：生成的公开封面 `public/approved/**.cover-v1.jpg` 与精确的首页快照 `public/snapshot/home-v1.json` 匿名读；已认证用户只能写本人 `private/pending/{uid}/`。原图、其他私有对象和目录列举保持受限。
+3. 存储访问使用 AGC 注入的 `PROJECT_CREDENTIAL`，不要自行创建或复制。
+4. 客户端 `service/ImageReadConfig.ets` 的 `HOME_SNAPSHOT_BUCKET` 要等于该实例名。
 
-游客首页需要将 FoodCard 的新增索引 `status_createdAt_desc`、`status_category_createdAt` 同步部署并确认生效，保留所有已有数据和索引。对象权限仍只开放 Administrator，由云对象筛选 APPROVED 数据，不开放客户端直接读取。
+---
 
-## 3. 准备云对象环境变量
+## 4. 环境变量
 
-环境变量只放入对应 AGC 云对象配置，秘密使用秘密变量。以下按名称列出必需配置，值由管理员在控制台填写或通过安全渠道交接；仓库不保存环境文件。接手已有后端时先核对当前配置，不覆盖已有的完整变量集。
+只放入对应函数的 AGC 配置，秘密使用秘密变量；仓库不保存真实值，`env-templates/` 只有占位。接手已有后端时先核对现有配置，不覆盖完整变量集。
 
-| 云对象 | 配置 |
+| 函数 | 必需 | 可选 / 开关 |
+| --- | --- | --- |
+| `shike-service` 与 4 个领域函数（**变量集必须完全相同**） | `SHIKE_DB_ZONE=shike`、`SHIKE_STORAGE_BUCKET`、`SHIKE_MEDIA_INTERNAL_KEY`、`SHIKE_MESSAGE_ENCRYPTION_KEY`、`SHIKE_CURSOR_SIGNING_KEY`、`SHIKE_IDENTITY_TICKET_KEY`、`SHIKE_CARD_REVIEW_ADMIN_UIDS`；昵称登录另需 `SHIKE_AGC_PROJECT_ID / CLIENT_ID / CLIENT_SECRET`、`SHIKE_ACCOUNT_SIGNING_PRIVATE_KEY`（可选 `SHIKE_AGC_AUTH_BASE`） | 功能开关（见根 README §5）；Push（§7）；地图选点 / POI：`SHIKE_MAP_PICKER_COORDINATE_SYSTEM`、`SHIKE_HUAWEI_POI_VERIFIED`、`SHIKE_HUAWEI_POI_COORDINATE_SYSTEM`、`SHIKE_HUAWEI_SITE_API_KEY`（秘密）；扫描预算：`SHIKE_STAGE3_MAP_SCAN_BUDGET`、`SHIKE_STAGE3_CARD_SCAN_BUDGET`、`SHIKE_STAGE3_MAX_VIEWPORT_SPAN`；读取指标：`SHIKE_READ_METRICS_ENABLED`、`SHIKE_READ_METRICS_SAMPLE_RATE`；测试环境恢复期：`SHIKE_ENVIRONMENT=test` + `SHIKE_TEST_RECOVERY_SECONDS` |
+| `shike-media` | `SHIKE_DB_ZONE`、`SHIKE_STORAGE_BUCKET`、`SHIKE_MEDIA_INTERNAL_KEY`（与 service 相同）；`PROJECT_CREDENTIAL` 由平台注入 | `SHIKE_MEDIA_COVERS_VERIFIED` |
+| `shike-auth` | `SHIKE_ACCOUNT_CLIENT_ID / CLIENT_SECRET`、`SHIKE_AGC_PROJECT_ID / CLIENT_ID / CLIENT_SECRET`、`SHIKE_IDENTITY_TICKET_KEY`（与 service 相同） | `SHIKE_ACCOUNT_REDIRECT_URI`、`SHIKE_AGC_AUTH_BASE` |
+| `shike-image` | `SHIKE_IMAGE_READ_ENABLED`、`SHIKE_DB_ZONE`、`SHIKE_STORAGE_BUCKET`、`PROJECT_CREDENTIAL`（模板 `env-templates/shike-image.env.example.json`） | — |
+| `shike-prefetch` | `SHIKE_STORAGE_BUCKET`、`PROJECT_CREDENTIAL` | — |
+| `shike-maintenance` | `SHIKE_MAINTENANCE_TRIGGER_KEY`（≥32 位）及 service 同组变量 | `SHIKE_MAINTENANCE_ENABLED`、`SHIKE_LIFECYCLE_VERIFIED`、`SHIKE_MEDIA_COVERS_VERIFIED`、`SHIKE_NICKNAME_MIGRATING` |
+
+要点：
+
+- 四个领域函数运行的是 service runtime，**缺少变量时请求在领域函数内失败，不会自动回落**。
+- `SHIKE_MEDIA_INTERNAL_KEY`：service / media 相同的高熵秘密，用于 60 秒有效的 HMAC 委托。
+- `SHIKE_MESSAGE_ENCRYPTION_KEY`：**Base64 编码的 32 字节随机值**，稳定保管；换值会导致已有密文无法解密。
+- `SHIKE_IDENTITY_TICKET_KEY`：auth / service 完全一致，迁移票据 10 分钟有效、一次性消费。Account Kit 与 AGC 客户端秘密用途不同，不互相替代；华为账号功能还需包名、证书指纹和 Redirect URI 匹配。
+- `SHIKE_CARD_REVIEW_ADMIN_UIDS`：JSON 字符串数组，最多 100 个 canonical UID，配置到 service 与 governance（模板 `shike-tester-review-access.env.example.json`）。
+- 昵称登录：按 `shike-service-nickname-auth.env.example.json` 与 maintenance 模板配置；开始保持 `SHIKE_NICKNAME_AUTH_ENABLED=false`、`SHIKE_NICKNAME_MIGRATING=true`，迁移验证后再调整。
+- 地图首发要求 `SHIKE_STAGE3_MAP_COORDINATE_SYSTEM=GCJ02`；可靠可见商家混入 WGS84 时不开放地图。`SHIKE_INDEXED_QUERY_VERIFIED` 只在历史迁移覆盖完成、索引查询验收后启用。
+
+---
+
+## 5. 打包与部署
+
+所有命令在 `CloudProgram/` 用 **Node.js 20.x** 执行，只准备本地产物，不会自动部署 AGC。
+
+| 目的 | 命令 |
 | --- | --- |
-| shike-media | `SHIKE_DB_ZONE=shike`、`SHIKE_STORAGE_BUCKET`、`SHIKE_MEDIA_INTERNAL_KEY`；可选 `SHIKE_MEDIA_COVERS_VERIFIED` |
-| shike-service | `SHIKE_DB_ZONE=shike`、相同 bucket、相同 `SHIKE_MEDIA_INTERNAL_KEY`、`SHIKE_MESSAGE_ENCRYPTION_KEY`、`SHIKE_CURSOR_SIGNING_KEY`、`SHIKE_CARD_REVIEW_ADMIN_UIDS`；身份迁移另配置票据 key；昵称登录另见下文 |
-| shike-content / shike-social / shike-account / shike-governance | **与 shike-service 完全相同的变量集**（它们运行同一份 service runtime）；缺少变量时请求在领域函数内失败，不会自动回落 |
-| shike-image | `SHIKE_IMAGE_READ_ENABLED`、`SHIKE_DB_ZONE`、`SHIKE_STORAGE_BUCKET`（模板见 `env-templates/shike-image.env.example.json`） |
-| shike-maintenance | `SHIKE_MAINTENANCE_TRIGGER_KEY`（≥32 位）及 shike-service 同组变量；定时器约定见 `timer-contract.json` |
-| shike-auth（华为兼容登录） | `SHIKE_ACCOUNT_CLIENT_ID/SECRET`、`SHIKE_AGC_PROJECT_ID`、`SHIKE_AGC_CLIENT_ID/SECRET`、`SHIKE_IDENTITY_TICKET_KEY`；可选 `SHIKE_ACCOUNT_REDIRECT_URI`、`SHIKE_AGC_AUTH_BASE` |
+| 为 DevEco 右键部署生成函数内副本 / 检查是否最新 | `npm run prepare:deveco` / `npm run check:deveco` |
+| 打包单个 / 全部云对象（ZIP） | `npm run package:cloud -- shike-service` / `npm run package:cloud:all` |
+| 打包事件函数 | `npm run package:image`、`npm run package:prefetch`、`npm run package:maintenance`（或 `node scripts/package-functions.mjs <函数名>`） |
+| 校验已解压的产物 | `node scripts/check-artifact.mjs <目录>`（`npm run check:artifact`） |
+| 发布前源码检查 | `npm run check:release-source` |
 
-- 媒体内部 key 是 service/media 相同的高熵秘密，用于 60 秒有效期的 HMAC 委托。须分别配置到两个云对象。
-- 消息加密 key 是 **Base64 编码的 32 字节随机密钥**，只配置到 service；稳定保管，直接换值会使已有密文无法解密。
-- 票据 key 在 auth/service 完全一致，迁移票据有效期 10 分钟、一次性消费。Account Kit 与 AGC 客户端秘密用途不同，不互相替代。
-- 华为账号功能还需 AGC/Account Kit 中应用包名、证书指纹和实际使用的 Redirect URI 匹配；普通业务接口不接受华为 Token。
+统一打包器（`scripts/package-functions.mjs`）会：校验 function-config 与 package/lock → `npm ci` 并编译 TS 入口 → 递归复制本地依赖 → 安装生产依赖 → 生成含每个文件 sha256 的 `shared/release-manifest.json`（buildId / policyHash / schemaHash）→ 压缩到 `build/cloud/` 并自检。
 
-### 可选：Push 和桌面卡片远程更新
+部署步骤：
 
-在 AGC 开通 Push Kit，创建服务账号/密钥，重新申请含 Push 权益的调试或发布 Profile。给 service 配置：
+1. 每个函数选 **Node.js 20.x**，保留 `function-config.json` 的 functionType 与 `HDA-SYSTEM / apigw-client` 鉴权，不开放免认证 HTTP。
+2. 数据库 / 环境就绪后按 **auth → media → service → content / social / account / governance** 部署，再单独部署 `shike-image`、`shike-prefetch`、`shike-maintenance`。已有后端只更新涉及的函数。
+3. 控制台核对函数名、handler、运行时、变量和生效版本，记录部署人、Git 提交与云版本，通知同一后端的成员。
+4. 由成员验证邮箱登录、图片、推荐流与发布；控制台“部署成功”不等于端云联调成功。
+
+注意：
+
+- 批量 `Deploy Cloud Functions` 会部署目录内全部对象，`Deploy Cloud Program` 还涉及整套云资源；已有数据时优先单函数部署。
+- **`Sync … / Overwrite` 是从云端下载覆盖本地**（会生成备份），不是上传发布。
+- 部署后 `Cannot find module './runtime'` 或 `./shared/…`：检查产物是否由最新源码生成、文件同级与大小写；`Cannot find package`：检查生产依赖。
+
+参考：[部署云对象](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/agc-harmonyos-clouddev-deploycloudobj) · [生成调用代理](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/agc-harmonyos-clouddev-invokecloudobj) · [整工程部署](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/agc-harmonyos-clouddev-deploy) · [同步云端代码](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/agc-harmonyos-clouddev-sync)
+
+---
+
+## 6. 定时维护、首页快照与图片读取
+
+### shike-maintenance
+
+无 HTTP 触发器，由 AGC 控制台定时器调用；请求体须带与 `SHIKE_MAINTENANCE_TRIGGER_KEY` 一致的 `workerToken`。推荐配置见 `shike-maintenance/timer-contract.json`（只是约定，**不会自动创建定时器**）。
+
+| action | 作用 |
+| --- | --- |
+| `home-snapshot` | 生成游客首页快照 `public/snapshot/home-v1.json`（建议每 5 分钟） |
+| `lifecycle`（默认） | 执行到期清理任务（删卡、注销、会话清理），每次最多 3 个任务 |
+| `media-covers` | 逐张回填旧图片的 480px 封面（需 `SHIKE_MEDIA_COVERS_VERIFIED=true`） |
+| `card-history` / `reaction-history` | 历史卡片 / 赞踩数据维护（`mode`：status / initialize / run / retry） |
+| `public-content` | 公开内容整理与商家计数对账（按 `cursor` 分批） |
+| `nickname-claims` | 昵称数据迁移 |
+
+### 首页快照
+
+客户端 `HomeSnapshotReader.ets` 优先用 Cloud Foundation 预取结果（`shike-prefetch`）或直读快照文件，超过 15 分钟、格式不对或读取失败时回落到常规列表。快照内容与匿名调用 `list-nearby-cards` 第一页完全相同，不含任何查看者数据。
+
+### 图片读取
+
+- 客户端 `ImageReadConfig.ets` 使用 `BATCH` 模式经 `shike-image` 批量读图，默认关闭 `NOT_SUPPORTED` 自动回退；未部署或 `SHIKE_IMAGE_READ_ENABLED=false` 时图片显示可重试占位。先在测试环境保持关闭、确认关闭响应，再验收后开启。
+- 公开 / 审核 / 修订图片的可见资格始终由服务端检查；新缓存复用只代表文件有效，展示权限仍需重新确认。
+- 职责分离：`shared/image-reader.js` 读取并校验权限；`shike-media/cover-converter.js`、`cover-worker.js` 生成封面；maintenance 负责回填与定时。
+
+---
+
+## 7. 可选：Push 与桌面卡片远程更新
+
+在 AGC 开通 Push Kit，创建服务账号 / 密钥，重新申请含 Push 权益的 Profile，然后给 service 与四个领域函数（变量集保持一致）配置：
 
 | 变量 | 内容 |
 | --- | --- |
 | `SHIKE_PUSH_PROJECT_ID` | AGC 项目 ID |
-| `SHIKE_PUSH_SUB_ACCOUNT` | 服务账号标识，秘密变量 |
+| `SHIKE_PUSH_SUB_ACCOUNT` | 服务账号标识（秘密） |
 | `SHIKE_PUSH_KEY_ID` | 服务账号密钥 ID |
-| `SHIKE_PUSH_PRIVATE_KEY_BASE64` | 服务账号 PEM 私钥的 Base64，秘密变量 |
-| `SHIKE_SERVICE_CARD_DAILY_PUSH_LIMIT` | 可选，每实例每日 1–5 次，默认 2 |
+| `SHIKE_PUSH_PRIVATE_KEY_BASE64` | 服务账号 PEM 私钥的 Base64（秘密） |
+| `SHIKE_SERVICE_CARD_DAILY_PUSH_LIMIT` | 每卡片实例每日 1–5 次，默认 2 |
 | `SHIKE_SERVICE_CARD_TEST_MESSAGE` | 仅联调可设 true，平时保持 false |
 
-通知与桌面卡片同步由用户分别开启，Token 密文存储。每设备最多登记 16 张、每账号最多 100 张卡片。远程摘要重新从当前 APPROVED 卡片生成，客户端不提交任意商品文本或模块/Ability 名称。关闭/退出前须确认云端登记删除，Push 失败不回滚业务消息或站内事件。
+通知与桌面卡片同步由用户分别开启，Token 加密存储；每设备最多登记 16 张、每账号最多 100 张卡片。远程摘要从当前 APPROVED 卡片重新生成，客户端不提交任意文本或模块 / Ability 名。Push 失败不回滚业务消息。未配置 Push 时社交通知与卡片远程更新静默跳过。
 
-## 4. 编译并部署七个云对象
+---
 
-| 目录 | handler | 用途 |
-| --- | --- | --- |
-| cloudfunctions/shike-auth | shikeAuth.ShikeAuth | 华为授权码校验、AGC 会话交换与迁移 |
-| cloudfunctions/shike-media | shikeMedia.ShikeMedia | 图片准备、Base64 上传/读取，内部委托提升/删除 |
-| cloudfunctions/shike-service | shikeService.ShikeService | 卡片、资料、好友/群聊、通知、绑定及清理 |
-| cloudfunctions/shike-content | shikeContent.ShikeContent | 内容、互动、榜单与轮盘领域 |
-| cloudfunctions/shike-social | shikeSocial.ShikeSocial | 好友、私信与群聊领域 |
-| cloudfunctions/shike-account | shikeAccount.ShikeAccount | 登录与账号领域 |
-| cloudfunctions/shike-governance | shikeGovernance.ShikeGovernance | 举报与治理领域 |
+## 8. 调试云对象
 
-> **2026-10-16 精简：**`shike-location` 已下线（客户端不再调用），部署负责人可在 AGC 删除该函数；`report-card`、`report-user`、`report-merchant`、`set-card-reaction`、`get-card-revision`、`get-stage47-capabilities`、`toggle-card-action`、`list-my-favorite-cards`、`list-my-reports`、`list-own-review-requests` 十个无调用操作已从 runtime、TS 导出和端侧路由表删除，业务操作现为 92 个。`Application/cloud_objects` 只保留 `shike-auth` 与 `shike-media` 代理；其余函数由 `CloudGateway` 通过 `cloudFunction.call` 调用，**不要**再为 service 或领域函数生成调用代理。
-
-每个对象选择 **Node.js 20.x**，保留 `function-config.json` 的 **functionType=1**、`HDA-SYSTEM / apigw-client` 平台鉴权。不要额外开放免认证公网 HTTP API。
-
-1. 在外层端云工程确认 CloudDev 指向约定测试项目，各对象依赖同步完成。实际业务逻辑在同目录 runtime.js；TS 负责导出方法和包装响应。手工打包另用符合各 package.engines 的 Node.js 20.x/npm，不把客户端 IDE 内置工具版本当成云运行时版本。
-2. 当前统一维护的共享模块在 `cloudfunctions/shared/`。先按下文“图片读取与统一打包”准备独立 ZIP，或生成函数内 DevEco 依赖；源码目录缺少这些生成副本时不能直接右键部署。
-3. 数据库/环境就绪后按 **auth → media → service → content / social / account / governance** 部署对应已核验产物，并单独部署 `shike-image`、`shike-prefetch`、`shike-maintenance`。ZIP 根目录须包含 handler、同包 runtime/共享模块、配置和生产依赖；已有后端优先更新涉及的函数。
-4. `Tools > CloudDev > Serverless > Cloud Functions > Go to console`，核对函数名称、handler、Node 运行时、变量和实际生效版本/`$latest`。记录部署人、Git 提交与云版本，通知使用同一后端的成员。
-5. 只有改过 `shike-auth` 或 `shike-media` 的导出类、方法或参数模型时，才右击该云对象选 **Generate Invoke Interface**，弹窗目标选择 `Application/cloud_objects`，确认后核对生成代理、Index.ets 公共导出、Gateway/DTO/Repository。service 与四个领域函数改动后同步 `shikeService.ts`、对应领域 TS 与端侧 `CloudRoutes.ets` 三处方法表。无签名变化的 runtime 修复不需每次重生成。
-6. 按根 README 生成签名、注册模拟器凭据，由成员验证邮箱登录、图片、附近与发布；控制台部署成功不等于端云联调已成功。
-
-批量 `cloudfunctions > Deploy Cloud Functions`会部署目录内全部对象；`CloudProgram > Deploy Cloud Program`还涉及整套云资源。团队已有数据时优先有范围的单对象部署。**Sync '对象' / Sync Cloud Functions / Sync Cloud Program 是从云端下载，Overwrite 会覆盖本地源码并生成备份，不是上传发布。**确需同步时先保存 Git 改动、对比云端版本，再选择 Skip/Overwrite；同步 DB 当前支持对象类型，不是业务数据备份。
-
-**从旧版升级到本版：**核对 `clouddb/objecttype/` 当前 36 个对象及真实 AGC 导出，保留已有数据、主键、字段类型和索引排序。本地现有 `CardRating`、`MealChoiceHistory` 定义；`FriendContentAccessGrant` 已从当前源码移除，但不能据此删除线上历史对象或数据。service 的现有阶段模块、榜单、轮盘、个人集合与生命周期模块，以及共享 policy/read-errors/image-reader 均由统一打包器递归收集。service 导出变动后同步更新 `CloudRoutes.ets`；客户端调用走 `cloudFunction.call`，不再生成 service 代理。编译入口 JS/map 和函数内派生副本不随 Git 发布。
-
-卡片举报审核权限从 `SHIKE_CARD_REVIEW_ADMIN_UIDS`（JSON 字符串数组，最多 100 个 canonical UID）读取，客户端的“管理员系统”入口也只对其中账号显示；该变量需配置到 shike-service 与 shike-governance。`SHIKE_INDEXED_QUERY_VERIFIED` 仅在历史迁移覆盖完成、实际索引查询验收后启用。秘密和项目身份仍通过团队安全渠道配置。
-
-本版标签为 **cc版**。本次榜单、轮盘与精简后的功能运行验收由负责人完成；本次 Git 发布未执行构建、运行验证或 AGC 部署。源码已包含 30 天软删除恢复、持久生命周期任务和独立维护 Worker，实际开启仍受服务端开关与平台定时配置控制。服务卡片继续同步公开摘要与图片身份，应用前台准备封面缓存。
-
-地图／搜索门槛继续保留：`SHIKE_STAGE3_SEARCH_VERIFIED`、`SHIKE_STAGE3_MAP_VERIFIED` 分别控制开放，且仍须历史覆盖与索引条件就绪。地图首发要求 `SHIKE_STAGE3_MAP_COORDINATE_SYSTEM=GCJ02`；可靠可见商家混入 WGS84 时不开放地图。选点坐标与官方 POI 仍按 `SHIKE_MAP_PICKER_COORDINATE_SYSTEM`、`SHIKE_HUAWEI_POI_VERIFIED`、`SHIKE_HUAWEI_POI_COORDINATE_SYSTEM` 核对；官方查询密钥 `SHIKE_HUAWEI_SITE_API_KEY` 使用秘密变量。部署成员逐项确认环境资格，不能仅凭这次发布替生产环境开放门槛。
-
-外卖平台读取 AGC Remote Config 的 `shike_delivery_platforms`，文档格式为 version=1 与 platforms 数组；缺失、无效或请求失败时保留有效缓存／默认配置。端侧依赖新增 `@hw-agconnect/remoteconfig-ohos`，成员同步 OHPM 锁文件后再构建。
-
-部署成员也可在 `CloudProgram/` 执行 `npm run package:cloud -- shike-service`（单对象）或 `npm run package:cloud:all`（全部对象）。该脚本安装锁定依赖、编译入口、复制随包功能模块并准备独立 ZIP，输出到 `CloudProgram/build/cloud/`；只准备本地产物，不自动部署 AGC。本次提交没有执行打包脚本。
-
-以上操作参见官方[部署云对象](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/agc-harmonyos-clouddev-deploycloudobj)、[生成调用代理](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/agc-harmonyos-clouddev-invokecloudobj)、[整工程部署](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/agc-harmonyos-clouddev-deploy)与[同步云端代码](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/agc-harmonyos-clouddev-sync)。
-
-<details>
-<summary>手工准备 shike-media 上传包的例子（由部署成员执行）</summary>
-
-由部署成员在 `CloudProgram/` 使用 `npm run package:cloud -- shike-media`，该包装命令会调用统一打包器并准备包含共享依赖的独立 ZIP。上传脚本输出的 ZIP，不手工只复制 runtime；本次未执行该命令。
-
-</details>
-
-部署后 `Cannot find module './runtime'` 优先检查文件同级、大小写、包层级及生效版本；`Cannot find package` 检查生产依赖。记录云版本、函数名和首条脱敏错误，不回传凭证或 Base64 图片。
-
-### 分域路由与首页快照
-
-`CloudRoutes.ets` 当前启用分域：内容、社交、账号、治理分别调用 `shike-content`、`shike-social`、`shike-account`、`shike-governance`，保留 `shike-service` 兼容路径。四个领域函数复用原 service runtime，维护源码仍在 shike-service；函数内 `service/` 与 `shared/` 都是生成副本。部署成员在 `CloudProgram/` 使用 `npm run package:cloud:all` 准备七个云对象的 ZIP，或按函数名单独打包；图片、预取、维护函数另用统一 `package-functions.mjs` 准备。DevEco 右键部署前重新执行 `prepare:deveco` / `check:deveco`。不要仅部署四个新入口而漏掉依赖、相应数据库配置和领域所需的秘密变量。
-
-客户端 `CloudFunctionVersion.ets` 固定调用 `$latest`，部署后立即对所有连接该后端的成员生效；部署前同步变更范围。
-
-`HomeSnapshotReader.ets` 使用预取结果或 `public/snapshot/home-v1.json`，失败回常规列表；`shike-prefetch` 是保留平台鉴权的 type 0 入口。maintenance 的 `timer-contract.json` 新增 `action=home-snapshot` 独立定时约定，建议每 5 分钟生成；该 JSON 不会自动创建定时器。端侧 `HOME_SNAPSHOT_BUCKET` 要与目标环境实例一致。
-
-当前 `ImageReadConfig.ets` 开启公开封面直读、首页快照与客户端直传。配置 Storage 时只开放确需公开的生成封面对象和精确首页快照路径；原图、私有文件及目录列举保持受限。直传只允许已认证用户向本人 `private/pending/{uid}/` 路径按业务规则上传，并由 media 验证/提升，不授予跨账号或匿名写权限。规则、封面回填、快照生成和真实读取/回退均需负责人先在测试环境验证；未就绪时不能据此承诺首页或图片性能。
-
-轮盘桌面卡片位于 `randomfoodcard/`，由 `RandomFoodWidgetStore.ets` 管理候选与本机封面，并在 `random_food_form_config.json` 注册。个人四个子页已拆分为独立文件；聊天前台轮询使用 `PollBackoff.ets`。这些入口均需用户验证生命周期与换号行为。
-
-### 图片读取与统一打包
-
-当前客户端 `ImageReadConfig.ets` 使用 `BATCH`，默认关闭 `NOT_SUPPORTED` 自动回退；新入口未部署或关闭时，图片会显示可重试占位。`shike-image` 是普通事件函数，handler=`shikeImage.handler`、functionType=0，保留配置中的 `HDA-SYSTEM / apigw-client` 鉴权，不能开放匿名图片读取。业务公开/审核/修订图片的可见资格仍由服务端检查。
-
-共享源码仅维护于 `cloudfunctions/shared/`，维护函数复用原 service/media 模块。函数内 `shared/`、maintenance 的 `service/` 与 `media/` 是生成副本，不提交 Git。部署成员任选下面一种准备方式，运行与云端验收由负责人执行：
-
-1. **ZIP 部署**：在 `CloudProgram/` 使用 Node.js 20.x，执行 `node scripts/package-functions.mjs shike-image` 或替换为需要更新的函数名。打包器编译 TS 入口、复制/重定位本地依赖、安装生产依赖、生成产物清单并准备 ZIP。既有 `package:cloud`、`package:maintenance` 命令已转入这一流程。上传输出的独立 ZIP，记录对应 buildId / policyHash / schemaHash。
-2. **DevEco 右键部署**：在 `CloudProgram/` 先执行 `npm run prepare:deveco`，再执行 `npm run check:deveco`，然后由成员在 IDE 部署涉及的函数。每次共享或原 service/media 源码更新后重新同步并检查；不要用旧生成副本作为打包输入。
-3. 根据 `env-templates/shike-image.env.example.json` 配置测试环境。模板只有占位值；平台凭据按现有资源管理，不将实际凭据填回 Git。先保持 `SHIKE_IMAGE_READ_ENABLED=false`，确认关闭响应，再在隔离测试环境通过负责人验收后开启。
-4. 所有活跃函数需使用一致的共享策略源码。部署成功后由负责人核对 SDK 成功/错误包络、图片权限、批次大小、换号及后台取消、缓存损坏与服务卡片封面。新缓存复用只代表文件有效，展示权限仍需重新确认。没有运行结果前不宣称图片性能达标。
-
-图片原图读取、上传和封面生成职责分离：`shared/image-reader.js` 读取并校验权限；media 的 `cover-converter.js` / `cover-worker.js` 处理封面；maintenance 保留回填与定时职责。Node.js 打包/源码检查、契约测试均由负责人执行，本次 Git 提交未执行这些脚本。
-
-### 榜单与轮盘更新
-
-当前 service 新增 `food-ranking-services.js`（高分/好友榜单）、`random-food-services.js`（轮盘候选、内容、选择回执/历史）；旧 stage4/stage5、moderation 与 content-status 模块已移除。统一打包器从当前源码递归收集依赖，不能继续沿用旧部署包。
-
-榜单上线仍受 `SHIKE_FOOD_RANKINGS_VERIFIED` 与实际索引/数据覆盖门槛控制。负责人先核对 FoodCard、Merchant、MealChoiceHistory 的当前定义与云端真实导出，保留已有数据；再更新 service、图片共享链路及使用中的 maintenance 产物，验证榜单分页与快照准备态、轮盘来源/账号隔离、返回恢复和选择历史。Git 推送不自动部署或开放门槛。
-
-此前 FriendReport 与 IdentityBinding 声明问题本次已按当前源码重新核对；静态声明对齐不等于云端已部署正确版本。运行验证由负责人完成。
-
-### 当前登录、互动与举报部署补充
-
-昵称密码登录实现在 service 的 `nickname-auth.js`，依赖新增 `NicknameClaim`、`PasswordCredential`、`PasswordThrottle` 对象。数据库仍只对受控服务端开放。部署负责人按 `env-templates/shike-service-nickname-auth.env.example.json` 与 maintenance 配套模板配置；模板仅保存占位值，AGC 客户端秘密与 PKCS8 签名私钥只能放入秘密配置。开始保持 `SHIKE_NICKNAME_AUTH_ENABLED=false`、`SHIKE_NICKNAME_MIGRATING=true`，由负责人完成迁移及验证后再调整开关。邮箱/华为认证用于既有账号验证与迁移，不等于昵称登录已配置成功。
-
-卡片互动在 `card-interaction-services.js`，端侧由 `CardInteractionController.ets` 协调意图、回执与计数；卡片举报在 `card-report-services.js`，图片准入复用 `shared/card-review-access.js`。测试审核授权的 UID 配置见对应 env 示例，不向所有应用用户开放管理权限。
-
-维护入口仍是 `shikeMaintenance.handler`，按当前 `timer-contract.json` 在平台配置定时事件与秘密，不开放免认证 HTTP。共享或 service/media 源码更新后，应重新打包维护函数或执行 DevEco 依赖同步，不能沿用旧派生副本。Git 推送不创建定时器、不配置秘密、不部署云端。
-
-### 云对象断点与远程调用调试
-
-手机模拟器调试客户端；云对象使用下面的独立调试入口。先确保测试 DB、服务配置/环境变量已就绪；项目代码仍校验 AGC 用户 Token，开发成员登录 IDE 不会绕过业务鉴权。
-
-1. **本地断点**：右击目标云对象选 `Debug 'shike-xxx'`，底部 cloudfunctions 窗口出现 `Cloud Functions loaded successfully`后，在 TS 包装层或 runtime 的可执行代码行设置断点。停止并重新 Debug 才应用修改。
-2. `View > Tool Windows > Cloud Functions Requestor`，选择目标 Cloud Function、`Environment=Local`、导出 Method，Event 填**方法参数数组**。要查云端生效代码则选 `Remote`，必须先部署，Remote 本身不会命中本地断点。
-3. 例如 service 的只读 `listMyCards(input: CloudEnvelope)`，Event 是数组内一个对象，不能填短横线业务操作名，也不能把对象写成 JSON 字符串：
+1. **本地断点**：右击目标云对象选 `Debug 'shike-xxx'`，出现 `Cloud Functions loaded successfully` 后在 TS 包装层或 runtime 设断点；修改后需停止并重新 Debug。
+2. `View > Tool Windows > Cloud Functions Requestor`：选择函数、`Environment=Local`、导出 Method，Event 填**方法参数数组**；要查线上代码选 `Remote`（需先部署，不会命中本地断点）。
+3. 示例（service 的只读 `listMyCards`）——Event 是数组内一个对象，不能填短横线操作名，也不能写成 JSON 字符串：
 
    ```json
    [{ "accessToken": "<自己的有效测试用户 AGC Access Token>", "payload": {} }]
    ```
 
-4. 有效 Token 只在成员自己的受控调试环境使用，不保存带真实 Token 的触发事件，不放代码/截图/聊天。普通联调直接由已登录客户端触发即可；无效占位 Token 得到拒绝属于正常结果。
-5. 点击 Trigger，看 Result；Remote 的 Logs 查看云日志。本地 runtime 若无法取得资源配置/平台凭证，先排查云开发调试环境，或使用已部署测试后端 Remote；不手工复制全局管理凭证绕过。
+4. 有效 Token 只在自己的受控调试环境使用，不保存、不截图、不贴到聊天；无效占位 Token 被拒绝是正常结果。
+5. 预期：成功响应 `ok=true`（无本人卡片时允许空数据）。失败时反馈 Method、Local / Remote、首个错误、文件 / 行号、云版本和脱敏日志。
 
-预期：本地调用进入对应断点，远程调用读取约定云版本；成功响应 `ok=true`，无本人卡片时允许空数据。失败反馈 Method/Local 或 Remote、首个错误、文件/行号、云版本和脱敏日志。官方指南：[调试云对象](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/agc-harmonyos-clouddev-debugcloudobj)。
+参考：[调试云对象](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/agc-harmonyos-clouddev-debugcloudobj)
 
-## 5. 可选：附近云缓存
+---
 
-先保持 `SHIKE_NEARBY_CLOUD_CACHE_ENABLED=false` 跑通数据库路径。需要灰度时，在 AGC 建立可从 service 访问的云缓存实例，增量配置以下变量（仓库不再提供该模板）：
+## 9. 测试
 
-- 普通变量：HOST、PORT、USERNAME；秘密变量：PASSWORD、至少 32 字符的独立 KEY_SECRET，前缀均为 `SHIKE_NEARBY_CACHE_`。
-- 功能开关 `SHIKE_NEARBY_CLOUD_CACHE_ENABLED=true`；指标开关 `SHIKE_NEARBY_CACHE_METRICS_ENABLED=true` 可单独用于关闭缓存时的基线。
-- Redis v3 仅缓存最多 200 条候选 ID，每次响应重新查询卡片并核对当前读取资格；TTL 25 秒、单连接/命令限时 400ms；失败回 Cloud DB，实例冷却 30 秒。key 使用 HMAC，不含明文坐标/UID；完整个性化响应、Token和图片不缓存。
-- 只减少候选查询，不能消除逐卡资料/媒体组装；无跨写路径主动失效，客户端还可能显示旧快照，不能承诺界面 25 秒内更新。
-- 先采集基线，再验证 hit/miss、故障回源、分页、新鲜度和费用。回滚将功能开关设 false 并发布生效，键自行过期。
+契约测试位于 `tests/`，由负责人手动运行（`npm run test:*`，完整列表见根 README §6）。部分测试会按函数名截取 `shike-service/runtime.js` 等源码片段在 `vm` 沙箱中执行，或用正则读取模型的 `fieldTypes` / `indexes` 单行定义——**重命名、移动这些函数或把模型定义改成多行时，要同步测试中的锚点**。根 `npm test` 是占位脚本，不是验收套件。
 
-指标回归由成员在固定设备/数据/网络下采冷开、热开、刷新、分页、详情基线，再对比开启/关闭缓存后的读取、延迟和费用。至少 21 张卡验证分页，两个账号验证最终响应隔离；故障注入只在测试环境，确认 fallback/cooldown 及恢复。客户端图片解码指标不等于屏幕实际首帧；云候选查询计数不等于全部计费读取，结合 AGC 统计。
+---
 
-离线汇总由成员使用 `Application/scripts/summarize_preload_metrics.py`，必填 phase（baseline/cache/rollback）、scenario（cold/warm/refresh/paging/detail/offline/fault/isolation）、network（wifi/cellular/offline/other）。不要混组或重复导入；临时开启客户端 NearbyPerformanceTrace 指标后，验收结束恢复开关。CloudProgram 根 package 的 test 是占位失败脚本，不是自动化验收套件。
+## 10. 历史与兼容说明
 
-## 6. 应用内分享
+- 已下线：`shike-location` 函数、旧分享函数与托管网页（端侧改用 `shike://card?cardId=…` 应用内分享）、按发布位置的旧“附近”接口及其可选 Redis 候选缓存（`SHIKE_NEARBY_*` 变量不再有任何作用，可在 AGC 删除）。已部署的旧函数 / 资源是否删除由部署负责人确认兼容范围后处理。
+- `FriendContentAccessGrant` 已从源码移除，但不能据此删除线上历史对象或数据；`CardRating`、`CardComment` / `CommentReaction` 同样保留历史数据。
+- `ioredis` 依赖目前仍保留在 service、四个领域函数与 maintenance 的 `package.json` 中，代码已不再加载它；移除需在 Node 20 下重新 `npm install` 更新 lock 后再打包。
 
-当前分享采用 `CardDeepLink.ets` 的 `shike://card?cardId=...` 路由，接收方必须已安装食刻；入口仍需校验 cardId 并重新读取服务端内容。旧 App Linking 网页 fallback、`shike-share` 和托管页面源码已移除。本次只同步源码删除，没有操作既有线上资源；线上旧入口是否下线由负责人确认兼容范围后处理。
-
-本项目不上架应用市场，仅供团队成员在模拟器或真机上联调。签名、秘密和构建产物不进入 Git。
-
-AGC 服务接入参考：[邮箱认证](https://developer.huawei.com/consumer/cn/doc/appgallery-connect-Guides/agc-auth-harmonyts-login-email-0000001522426989)、[云服务模拟器调试](https://developer.huawei.com/consumer/cn/doc/doccenter-capabilities/cloudfoundation-emulator)、[云缓存](https://developer.huawei.com/consumer/cn/doc/appgallery-connect-Guides/agc-cloudcache-use-0000001485525416)。
+AGC 服务接入参考：[邮箱认证](https://developer.huawei.com/consumer/cn/doc/appgallery-connect-Guides/agc-auth-harmonyts-login-email-0000001522426989) · [云服务模拟器调试](https://developer.huawei.com/consumer/cn/doc/doccenter-capabilities/cloudfoundation-emulator)

@@ -1,20 +1,27 @@
+/**
+ * 【文件职责】用户主页中的笔记式卡片预览格子（名称、价格、封面）。
+ */
 import { PagePaletteName, pageColor } from '../common/PagePaletteUi';
 import { cardPriceText } from '../model/CardPrice';
 import { PersonalPreviewRow } from '../service/PersonalPreviewLoader';
 
+// 预览格子组件。
 @Component
 export struct NotePreviewTile {
   @Prop palette: PagePaletteName = 'SOCIAL';
   @ObjectLink row: PersonalPreviewRow;
   @Prop busy: boolean = false;
   onOpen: (cardId: string) => void = (_cardId: string): void => {};
+  // 格子标题。
   private label(): string {
     if (this.row.state === 'UNAVAILABLE') return '内容暂不可访问';
     return this.row.card === undefined ? '正在读取卡片…' : this.row.card.productName;
   }
+  // 图片的无障碍描述。
   private photoLabel(): string {
     return this.row.state === 'NO_IMAGE' ? '暂无实拍' : this.row.state === 'ERROR' ? '实拍暂不可用' : '正在加载实拍';
   }
+  // 格子布局（按加载状态显示封面、占位或“不可用”）。
   build() {
     Button() {
       Column({ space: 0 }) {

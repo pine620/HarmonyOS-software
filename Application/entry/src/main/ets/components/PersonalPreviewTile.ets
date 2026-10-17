@@ -1,6 +1,10 @@
+/**
+ * 【文件职责】收藏、浏览记录等个人列表中的卡片预览格子。
+ */
 import { cardPriceText } from '../model/CardPrice';
 import { PersonalPreviewRow } from '../service/PersonalPreviewLoader';
 
+// 个人预览格子组件。
 @Component
 export struct PersonalPreviewTile {
   @ObjectLink row: PersonalPreviewRow;
@@ -8,17 +12,20 @@ export struct PersonalPreviewTile {
   @Prop busy: boolean = false;
   onOpen: (cardId: string) => void = (_cardId: string): void => {};
   onRemove: (cardId: string) => void = (_cardId: string): void => {};
+  // 格子标题。
   private label(): string {
     if (this.row.state === 'UNAVAILABLE') return '内容暂不可访问';
     if (this.row.card !== undefined) return this.row.card.productName;
     return this.row.state === 'ERROR' ? '预览读取失败' : '正在读取卡片…';
   }
+  // 图片的无障碍描述。
   private photoLabel(): string {
     if (this.row.state === 'UNAVAILABLE') return '不可访问';
     if (this.row.state === 'NO_IMAGE') return '暂无图片';
     if (this.row.state === 'ERROR') return '图片未加载';
     return '加载中';
   }
+  // 格子布局（按加载状态显示封面、占位或“不可用”）。
   build() {
     Row({ space: 4 }) {
       Button() {

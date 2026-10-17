@@ -1,3 +1,7 @@
+/**
+ * 【文件职责】店铺与卡片字段：发布 / 修订时把客户端提交的店铺、价格、消费方式等规范化成存储字段（cardFields / storageFields），
+ * 店铺解析（官方 POI → Merchant）、用户自建店铺的创建与更新、读取店铺，以及店铺“公开推荐数”计数的事务内更新与对账。
+ */
 'use strict';
 
 const crypto = require('crypto');
@@ -12,6 +16,7 @@ const normalize = (value) => String(value || '').normalize('NFKC').trim().replac
 const hash = (value) => crypto.createHash('sha256').update(value).digest('hex');
 const COUNTERS = ['publicRecommendationCount', 'publicDeliveryCount', 'publicDineInCount'];
 
+// 创建模块：ctx 由 runtime.js 注入。
 function createStage2Services(ctx) {
   const { collection, one, models, profileForWrite, logicalWriteTime } = ctx;
   const model = (name, row) => Object.assign(new models[name](), row);
@@ -19,16 +24,19 @@ function createStage2Services(ctx) {
     (await tx.executeQuery(collection(env, name).query().equalTo(field, value).limit(1)))[0] || null;
   const setting = (env, key) => String(env[key] || process.env[key] || '');
   const coordinateSystem = (value) => ['GCJ02', 'WGS84'].includes(value) ? value : 'UNKNOWN';
+  // 校验并截断文本。
   function text(value, max, required = false) {
     const result = String(value || '').trim();
     if (result.length > max || (required && result.length === 0)) throw accessError('店铺信息长度无效。', 'VALIDATION_ERROR');
     return result;
   }
+  // 校验 UUID。
   function uuid(value) {
     const id = String(value || '').toLowerCase();
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)) throw accessError('请求标识必须为 UUID。', 'VALIDATION_ERROR');
     return id;
   }
+  // 校验坐标（E6 整数，范围合法）。
   function location(payload) {
     if (typeof payload.latitudeE6 !== 'number' || typeof payload.longitudeE6 !== 'number') {
       throw accessError('店铺坐标必须是整数微度。', 'VALIDATION_ERROR');
@@ -40,6 +48,7 @@ function createStage2Services(ctx) {
     }
     return { latitudeE6, longitudeE6 };
   }
+  // 校验金额（整数分，非负）。
   function money(value) {
     if (value === undefined || value === null || value === '') return null;
     if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0 || value > 100000000) {
@@ -47,14 +56,17 @@ function createStage2Services(ctx) {
     }
     return value;
   }
+  // 当前用户能否把卡片关联到该店铺（已核验或本人创建）。
   function canAssociate(row, uid) {
     return !!row && (['VERIFIED_PROVIDER', 'USER_CONFIRMED_APPROVED'].includes(row.verificationStatus) ||
       (row.verificationStatus === 'USER_CONFIRMED_PENDING' && row.createdByUid === uid));
   }
+  // 店铺是否可以出现在地图上（核验状态与坐标系满足要求）。
   function mapEligible(row) {
     return !!row && ['VERIFIED_PROVIDER', 'USER_CONFIRMED_APPROVED'].includes(row.verificationStatus) &&
       coordinateSystem(row.coordinateSystem) !== 'UNKNOWN' && Number(row.publicRecommendationCount) > 0;
   }
+  // 店铺的返回视图。
   function merchantView(row) {
     return { merchantId: row.merchantId, name: row.name, address: String(row.address || ''), district: String(row.district || ''),
       sourceType: row.sourceType, provider: String(row.provider || ''), providerPoiId: String(row.providerPoiId || ''),
@@ -64,6 +76,7 @@ function createStage2Services(ctx) {
       publicDineInCount: Number(row.publicDineInCount || 0), updatedAt: dateMillis(row.updatedAt),
       reviewAction: String(row.reviewAction || ''), reviewReason: String(row.reviewReason || '') };
   }
+  // 把发布 / 修订请求中的店铺与价格字段规范化（read 可替换为事务内读取）。
   async function cardFields(payload, uid, env, read = (name, field, value) => one(collection(env, name).query().equalTo(field, value)),
     allowUnspecified = false) {
     const mode = String(payload.consumptionMode || 'UNSPECIFIED');
@@ -88,7 +101,7 @@ function createStage2Services(ctx) {
     const merchantId = text(payload.merchantId, 100);
     const merchant = merchantId ? await read('Merchant', 'merchantId', merchantId) : null;
     if (merchantId && !canAssociate(merchant, uid)) throw accessError('店铺不存在、已拒绝或无权关联待审店铺。', 'MERCHANT_NOT_VERIFIED');
-    // Snapshots, legacy bridges and query fields are always server-derived.
+    // 快照字段、旧版兼容字段和查询字段一律由服务端推导，不信任客户端。
     return { consumptionMode: mode, visibility, categoryV2, categoryVersion: 2,
       category: LEGACY_CATEGORY[categoryV2] || 'other', itemPriceFen, dineInAvgFen, orderTotalFen, deliveryFeeFen,
       queryPriceFen: mode === 'DINE_IN' ? dineInAvgFen : itemPriceFen, priceFen: itemPriceFen === null ? 0 : itemPriceFen,
@@ -97,11 +110,14 @@ function createStage2Services(ctx) {
       consumedAt: consumed, searchTextNormalized: normalize(String(payload.productName || '') + ' ' +
         (merchant ? merchant.name : String(payload.shop || ''))) };
   }
+  // 规范化字段 → 存储字段（日期转 Date 等）。
   function storageFields(fields) { return { ...fields, consumedAt: fields.consumedAt === null ? null : new Date(fields.consumedAt) }; }
+  // 一张卡片对店铺三类计数的贡献。
   function contribution(card, owner) {
     const eligible = card && card.merchantId && isAccountActive(owner) && readableCardState(card) && currentVisibility(card) === 'PUBLIC';
     return eligible ? [1, card.consumptionMode === 'DELIVERY' ? 1 : 0, card.consumptionMode === 'DINE_IN' ? 1 : 0] : [0, 0, 0];
   }
+  // 生成计数变化后的店铺行。
   function changedCounter(row, delta, now) {
     const changed = { ...row, updatedAt: new Date(now) };
     COUNTERS.forEach((key, index) => {
@@ -112,7 +128,8 @@ function createStage2Services(ctx) {
     changed.mapVisible = mapEligible(changed);
     return model('Merchant', changed);
   }
-  // Read/prepare only. Callers queue these rows after ALL transaction reads.
+  // 只做读取与准备；调用方要在事务的全部读取完成之后再把这些行加入写入队列。
+  // 卡片发布 / 修改 / 删除时，计算相关店铺的计数变化（只读取与准备，写入由调用方在全部读取之后排队）。
   async function prepareCounterTransition(tx, before, after, owner, env, now) {
     const deltas = new Map();
     for (const [card, sign] of [[before, -1], [after, 1]]) {
@@ -131,34 +148,7 @@ function createStage2Services(ctx) {
     }
     return result;
   }
-  async function prepareAccountCounterRemoval(tx, uid, owner, env, now) {
-    const deltas = new Map();
-    let readCount = 0;
-    for (let offset = 0; ; offset += 100) {
-      const limit = Math.min(100, 801 - readCount);
-      const cards = await tx.executeQuery(collection(env, 'FoodCard').query().equalTo('ownerUid', uid)
-        .greaterThan('merchantId', '').orderByAsc('merchantId').orderByAsc('id').limit(limit, offset));
-      readCount += cards.length;
-      if (readCount > 800) throw accessError('账号内容超过当前计数事务容量；注销未提交，需先完成分批维护方案。', 'COUNTER_TRANSACTION_LIMIT');
-      for (const card of cards) {
-        if (!card.merchantId) continue;
-        const delta = deltas.get(card.merchantId) || [0, 0, 0];
-        contribution(card, owner).forEach((count, index) => { delta[index] -= count; });
-        deltas.set(card.merchantId, delta);
-      }
-      if (cards.length < limit) break;
-    }
-    const rows = [];
-    for (const id of [...deltas.keys()].sort()) {
-      if (deltas.get(id).every((value) => value === 0)) continue;
-      const merchant = await txOne(tx, env, 'Merchant', 'merchantId', id);
-      readCount++;
-      if (readCount > 800) throw accessError('账号关联店铺超过当前计数事务容量；注销未提交，需先完成分批维护方案。', 'COUNTER_TRANSACTION_LIMIT');
-      if (!merchant) throw accessError('关联店铺已失效。', 'INVALID_STATE');
-      rows.push(changedCounter(merchant, deltas.get(id), now));
-    }
-    return rows;
-  }
+  // 重新统计某店铺的公开推荐数（维护任务使用，可重复执行）。
   async function reconcileMerchantPublicCounters(payload, env) {
     let result = null;
     const committed = await collection(env, 'Merchant').runTransaction({ apply: async (tx) => {
@@ -186,9 +176,9 @@ function createStage2Services(ctx) {
     if (!committed || !result) throw new Error('计数重算未保存。');
     return { merchant: merchantView(result) };
   }
+  // 插入新店铺（确定性主键）。
   async function insertMerchant(row, creationHash, env) {
-    // executeInsert, not executeUpsert: deterministic primary keys must never
-    // let a duplicate resolver overwrite counters or a moderator's decision.
+    // 使用 executeInsert 而不是 executeUpsert：确定性主键绝不能让重复的解析请求覆盖计数或审核员的决定。
     try { await collection(env, 'Merchant').insert(row); }
     catch (_error) {
       const existing = await one(collection(env, 'Merchant').query().equalTo('merchantId', row.merchantId));
@@ -198,6 +188,7 @@ function createStage2Services(ctx) {
     }
     return { merchant: merchantView(row), alreadyProcessed: false };
   }
+  // 解析官方地点：已存在则返回，否则创建。
   async function resolveMerchant(uid, payload, env) {
     await ctx.contentPolicy(env).assertAccountActive(uid);
     if (payload.provider !== 'HUAWEI_MAP') throw accessError('地点提供方无效。', 'VALIDATION_ERROR');
@@ -234,6 +225,7 @@ function createStage2Services(ctx) {
       publicRecommendationCount: 0, publicDeliveryCount: 0, publicDineInCount: 0, mapVisible: false,
       reviewAction: '', reviewReason: '', reviewedAt: null, creationRequestHash: '' }), '', env);
   }
+  // 创建用户自建店铺。
   async function createUserMerchant(uid, payload, env) {
     await ctx.contentPolicy(env).assertAccountActive(uid);
     const fields = { name: text(payload.name, 100, true), address: text(payload.address, 600), ...location(payload) };
@@ -246,6 +238,7 @@ function createStage2Services(ctx) {
       publicRecommendationCount: 0, publicDeliveryCount: 0, publicDineInCount: 0, mapVisible: false,
       reviewAction: '', reviewReason: '', reviewedAt: null, creationRequestHash: creationHash }), creationHash, env);
   }
+  // 更新自己创建的店铺。
   async function updateUserMerchant(uid, payload, env) {
     const requestId = uuid(payload.requestId);
     const fields = { name: text(payload.name, 100, true), address: text(payload.address, 600), ...location(payload) };
@@ -274,16 +267,18 @@ function createStage2Services(ctx) {
     if (!committed || !result) throw new Error('店铺修改未保存。');
     return { merchant: merchantView(result) };
   }
+  // 读取店铺。
   async function getMerchant(uid, payload, env) {
     await ctx.contentPolicy(env).assertAccountActive(uid);
     const row = await one(collection(env, 'Merchant').query().equalTo('merchantId', text(payload.merchantId, 100, true)));
     if (!row || (!canAssociate(row, uid) && row.createdByUid !== uid)) throw accessError('店铺不可访问。', 'NOT_FOUND');
     return { merchant: merchantView(row) };
   }
+  // 店铺能力：选点坐标系、是否开放官方 POI 校验。
   function capabilities(env) { return {
     pickerCoordinateSystem: coordinateSystem(setting(env, 'SHIKE_MAP_PICKER_COORDINATE_SYSTEM')),
     providerVerificationEnabled: !!setting(env, 'SHIKE_HUAWEI_SITE_API_KEY') && setting(env, 'SHIKE_HUAWEI_POI_VERIFIED') === 'true' }; }
-  return { cardFields, storageFields, prepareCounterTransition, prepareAccountCounterRemoval,
+  return { cardFields, storageFields, prepareCounterTransition,
     reconcileMerchantPublicCounters, resolveMerchant, createUserMerchant, updateUserMerchant, getMerchant,
     capabilities, normalize, mapEligible };
 }

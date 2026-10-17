@@ -1,18 +1,29 @@
+/**
+ * 【文件职责】华为账号兼容登录的实现（shike-auth 云对象调用）。
+ * SIGN_IN 流程：用客户端的一次性授权码向华为 OAuth 换取 Token → 校验 id_token（签发方、应用、nonce、有效期）
+ * → 用 AGC 客户端凭据（SHIKE_AGC_CLIENT_ID / SECRET）调用 AGC 认证 REST 接口 user-signin 换取 AGC 会话
+ * → 签发加密的迁移票据（SHIKE_IDENTITY_TICKET_KEY，10 分钟有效），客户端再用 complete-legacy-login 在 shike-service 中完成绑定。
+ * LINK_HUAWEI：校验当前 AGC 用户后调用 user-link，把华为身份关联到当前邮箱账号。
+ * 每个上游请求 8 秒超时、整个流程 22 秒上限；日志只记录阶段与状态码，绝不记录授权码、Token 或响应正文。
+ */
 'use strict';
 
 const crypto = require('crypto');
+// 华为 OAuth 接口地址与超时设置。
 const ACCOUNT_TOKEN_URL = 'https://oauth-login.cloud.huawei.com/oauth2/v3/token';
 const ACCOUNT_TOKEN_INFO_URL =
   'https://oauth-api.cloud.huawei.com/rest.php?nsp_fmt=JSON&nsp_svc=huawei.oauth2.user.getTokenInfo';
 const AUTH_REQUEST_TIMEOUT_MS = 8000;
 const AUTH_FLOW_TIMEOUT_MS = 22000;
 
+// 读取必需的环境变量。
 function required(env, name) {
   const value = env[name] || process.env[name];
   if (!value) throw new Error(`登录云对象缺少环境变量 ${name}`);
   return String(value);
 }
 
+// 脱敏错误日志。
 function safeLogError(error) {
   const name = error && error.name ? String(error.name) : 'Error';
   const code = error && error.code !== undefined ? ` code=${String(error.code).slice(0, 32)}` : '';
@@ -24,6 +35,7 @@ function safeLogError(error) {
   return `${name}${code}: ${redacted}`;
 }
 
+// 解析 JWT 的 payload（不验签，签名由 TLS 直连的官方接口保证）。
 function decodeJwtPayload(token) {
   const parts = String(token || '').split('.');
   if (parts.length !== 3) throw new Error('华为账号未返回有效的 ID Token。');
@@ -36,10 +48,9 @@ function decodeJwtPayload(token) {
   }
 }
 
+// 校验华为 id_token 的签发方、应用（aud/azp）、nonce 与有效期。
 function validateTokenBinding(idToken, clientId, nonce) {
-  // The ID token is received directly from Huawei's TLS token endpoint. Check
-  // its application, issuer, nonce, and lifetime bindings before accepting the
-  // access token returned in the same response.
+  // id_token 直接从华为的 TLS 令牌接口获得；在接受同一响应中的 Access Token 之前，先校验它的应用、签发方、nonce 与有效期。
   const claims = decodeJwtPayload(idToken);
   const audience = Array.isArray(claims.aud) ? claims.aud.map(String) : [String(claims.aud || '')];
   const nowSeconds = Math.floor(Date.now() / 1000);
@@ -51,12 +62,14 @@ function validateTokenBinding(idToken, clientId, nonce) {
   return claims;
 }
 
+// 构造认证错误。
 function authRequestError(code, message) {
   const error = new Error(message);
   error.code = code;
   return error;
 }
 
+// 发送一个认证相关的 HTTPS 请求（带超时与流程截止时间），返回 JSON。
 async function requestAuthJson(url, options, stage, stageLabel, deadlineAt) {
   const timeoutMs = Math.min(AUTH_REQUEST_TIMEOUT_MS, deadlineAt - Date.now());
   if (timeoutMs <= 0) {
@@ -88,7 +101,7 @@ async function requestAuthJson(url, options, stage, stageLabel, deadlineAt) {
     } else if (!error || typeof error.code !== 'string' || !error.code.startsWith('AUTH_UPSTREAM_')) {
       failure = authRequestError('AUTH_UPSTREAM_NETWORK_ERROR', `${stageLabel}连接失败，请稍后重新登录。`);
     }
-    // Record the phase and status, never authorization codes, tokens or bodies.
+    // 只记录阶段与状态，绝不记录授权码、Token 或响应正文。
     console.error(`[HuaweiAuth] stage=${stage}; code=${failure.code}; status=${status || 'not-received'}`);
     throw failure;
   } finally {
@@ -96,6 +109,7 @@ async function requestAuthJson(url, options, stage, stageLabel, deadlineAt) {
   }
 }
 
+// 查询华为 Access Token 的信息并校验所属应用。
 async function accountTokenInfo(accessToken, expectedClientId, deadlineAt) {
   if (!accessToken || String(accessToken).length > 8192) {
     throw new Error('华为账号用户凭证为空或格式不正确。');
@@ -118,6 +132,7 @@ async function accountTokenInfo(accessToken, expectedClientId, deadlineAt) {
   return { uid, expiresIn, scope: String(result.scope || '') };
 }
 
+// 获取 AGC 服务端 API Token（客户端凭据模式）。
 async function clientApiToken(env, deadlineAt) {
   const base = env.SHIKE_AGC_AUTH_BASE || process.env.SHIKE_AGC_AUTH_BASE || 'https://connect-drcn.dbankcloud.cn';
   const body = await requestAuthJson(`${base}/agc/apigw/oauth2/v1/token`, {
@@ -134,6 +149,7 @@ async function clientApiToken(env, deadlineAt) {
   return String(body.access_token);
 }
 
+// 调用 AGC 认证 REST 接口（user-signin / user-link）。
 async function agcAuthRequest(env, path, body, userAccessToken, deadlineAt) {
   const base = env.SHIKE_AGC_AUTH_BASE || process.env.SHIKE_AGC_AUTH_BASE || 'https://connect-drcn.dbankcloud.cn';
   const apiToken = await clientApiToken(env, deadlineAt);
@@ -159,6 +175,7 @@ async function agcAuthRequest(env, path, body, userAccessToken, deadlineAt) {
   return result;
 }
 
+// 校验用户 AGC Token 存在。
 function requireUserAccessToken(accessToken) {
   const value = String(accessToken || '').trim();
   if (!value || value.length > 8192) {
@@ -167,6 +184,7 @@ function requireUserAccessToken(accessToken) {
   return value;
 }
 
+// 取 Token 字符串。
 function tokenValue(value) {
   if (typeof value === 'string') {
     try { value = JSON.parse(value); } catch (_error) { return { token: '', validPeriod: 0 }; }
@@ -174,18 +192,19 @@ function tokenValue(value) {
   return value && typeof value === 'object' ? value : { token: '', validPeriod: 0 };
 }
 
+// Base64URL 编码。
 function base64Url(value) {
   return Buffer.from(value).toString('base64')
     .replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
 }
 
+// 迁移票据密钥（Base64 的 32 字节，与 shike-service 相同）。
 function identityTicketKey(env) {
   return crypto.createHash('sha256').update(required(env, 'SHIKE_IDENTITY_TICKET_KEY')).digest();
 }
 
 /**
- * The migration ticket is opaque to the client. Its legacy and AGC UIDs are
- * encrypted with the deployment-only key and authenticated by AES-GCM.
+ * 迁移票据对客户端是不透明的：其中的旧 UID 与 AGC UID 用只存在于部署配置中的密钥加密，并由 AES-GCM 认证。
  */
 function issueIdentityTicket(legacyUid, agcUid, env) {
   const now = Math.floor(Date.now() / 1000);
@@ -205,6 +224,7 @@ function issueIdentityTicket(legacyUid, agcUid, env) {
   return `v1.${base64Url(iv)}.${base64Url(ciphertext)}.${base64Url(tag)}`;
 }
 
+// 用授权码换取并校验华为身份。
 async function obtainHuaweiAccountIdentity(payload, env, deadlineAt) {
   const authorizationCode = String(payload.authorizationCode || '');
   const nonce = String(payload.nonce || '');
@@ -237,6 +257,7 @@ async function obtainHuaweiAccountIdentity(payload, env, deadlineAt) {
   };
 }
 
+// SIGN_IN：华为身份 → AGC 会话 + 迁移票据。
 async function obtainUserCredential(payload, env) {
   const deadlineAt = Date.now() + AUTH_FLOW_TIMEOUT_MS;
   const huaweiAccount = await obtainHuaweiAccountIdentity(payload, env, deadlineAt);
@@ -258,8 +279,7 @@ async function obtainUserCredential(payload, env) {
     expiresAt: Date.now() + validitySeconds * 1000,
     migrationTicket: issueIdentityTicket(huaweiAccount.legacyUid, String(userInfo.uid), env),
     profile: {
-      // The client uses upsert-profile after consuming the ticket. Do not
-      // expose either provider UID in this public auth response.
+      // 客户端消费票据后会调用 upsert-profile；这个公开的认证响应中不暴露任何认证方 UID。
       uid: '',
       nickname: '华为账号用户',
       avatarUrl: '',
@@ -271,6 +291,7 @@ async function obtainUserCredential(payload, env) {
   };
 }
 
+// LINK_HUAWEI：把华为身份关联到当前 AGC 用户。
 async function linkHuaweiAccount(accessToken, payload, env) {
   const deadlineAt = Date.now() + AUTH_FLOW_TIMEOUT_MS;
   const huaweiAccount = await obtainHuaweiAccountIdentity(payload, env, deadlineAt);
@@ -286,6 +307,7 @@ async function linkHuaweiAccount(accessToken, payload, env) {
   return { success: true };
 }
 
+// 操作表（只有一个操作）。
 const operations = {
   'exchange-huawei-account': async ({ accessToken, payload }, env) => {
     const input = payload || {};
@@ -296,6 +318,7 @@ const operations = {
   }
 };
 
+// 执行认证操作（规范化输入）。
 async function executeOperation(operation, input, env = process.env) {
   if (!operations[operation]) throw new Error(`未知登录操作 ${operation}`);
   const safeInput = input && typeof input === 'object' ? input : { accessToken: '', payload: {} };

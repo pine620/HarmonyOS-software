@@ -1,3 +1,6 @@
+/**
+ * 【文件职责】“浏览记录”页面：读取本机 CardVisitStore，按可见窗口懒加载卡片预览与封面（PersonalPreviewLoader），点击打开详情。
+ */
 import { AppDestinationStyle } from '../common/AppPageUi';
 import { common } from '@kit.AbilityKit';
 import { FoodCard } from '../model/CloudContracts';
@@ -11,6 +14,7 @@ import { ErrorDetail, errorText } from '../common/ErrorKit';
 import { ReadRequestOptions } from '../service/ReadScheduler';
 import { StateView } from '../common/StateViewUi';
 
+// 浏览记录页面。
 @Component
 export struct CardHistoryPage {
   onOpenCard: (card: FoodCard) => void = (_card: FoodCard): void => {};
@@ -28,9 +32,12 @@ export struct CardHistoryPage {
   private generation: number = 0;
   private owner: string = '';
   private session: number = 0;
+  // 取得 UIAbility 上下文。
   private context(): common.UIAbilityContext { return this.getUIContext().getHostContext() as common.UIAbilityContext; }
+  // 异步结果是否仍有效。
   private valid(generation: number): boolean { return this.active && this.appActive && generation === this.generation &&
     this.owner === (AuthService.profile()?.uid || '') && this.session === AuthSessionStore.generation(); }
+  // 激活页面：读取本机记录并开始加载可见区域。
   private activate(): void {
     if (this.active || !this.appActive) return;
     this.active = true; this.generation++; this.owner = AuthService.profile()?.uid || ''; this.session = AuthSessionStore.generation();
@@ -41,19 +48,25 @@ export struct CardHistoryPage {
       this.count = visits.length; this.window(0, 5);
     } catch (error) { this.message = errorText(error as ErrorDetail); }
   }
+  // 停用页面：作废加载器。
   private deactivate(): void {
     this.active = false; this.generation++; this.previews.reset(false); this.source.setRows([]);
     this.count = 0; this.opening = false; this.clearPending = false;
   }
+  // App 前后台或账号变化时重新激活。
   private onEnvironmentChanged(): void { this.deactivate(); if (this.visible && this.appActive) this.activate(); }
   aboutToDisappear(): void { this.visible = false; this.deactivate(); }
+  // 可见范围变化时更新加载窗口。
   private window(first: number, last: number): void { if (this.active) this.previews.window(this.context(), first, last, true); }
+  // 刷新列表。
   private refresh(): void { this.deactivate(); this.activate(); }
+  // 清空本机浏览记录。
   private clear(): void {
     if (!this.active || this.owner.length === 0) return;
     try { CardVisitStore.clear(this.context(), this.owner); this.deactivate(); this.activate(); this.message = '本机浏览记录已清空。'; }
     catch (error) { this.message = errorText(error as ErrorDetail); }
   }
+  // 打开卡片详情（卡片已不可见时从记录中移除）。
   private async open(cardId: string): Promise<void> {
     if (!this.active || this.opening) return;
     const generation: number = this.generation; this.opening = true;
@@ -65,6 +78,7 @@ export struct CardHistoryPage {
     } catch (error) { if (this.valid(generation)) { this.refresh(); this.message = errorText(error as ErrorDetail); } }
     finally { if (this.valid(generation)) this.opening = false; }
   }
+  // 页面布局。
   build() {
     NavDestination() {
       Column({ space: 12 }) {

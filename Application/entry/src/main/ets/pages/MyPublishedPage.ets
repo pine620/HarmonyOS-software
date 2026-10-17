@@ -7,16 +7,21 @@ import { cardPriceText } from '../model/CardPrice';
 import { CardRepository } from '../repository/CardRepository';
 import { ErrorDetail, errorText } from '../common/ErrorKit';
 
-// Pack 4.3 (2026-10-15): split out of ProfileSubPages.ets without behaviour changes.
+/**
+ * 【文件职责】“我的卡片”页面：列出自己发布的全部卡片（含状态），可打开、删除（软删除，30 天内可恢复）。数据来自 CardRepository.list-my-cards / delete-own-card。
+ */
 
+// 价格文本。
 function priceText(card: FoodCard): string {
   return cardPriceText(card);
 }
 
+// 状态文本：已发布 / 已下架。
 function statusText(card: FoodCard): string {
   return card.status === 'APPROVED' ? '已发布' : '已下架';
 }
 
+// 我的卡片页面。
 @Component
 export struct MyPublishedPage {
   onOpenCard: (card: FoodCard) => void = (_card: FoodCard): void => {};
@@ -29,10 +34,12 @@ export struct MyPublishedPage {
   private repository: CardRepository = new CardRepository();
   private hasBeenShown: boolean = false;
 
+  // 出现时加载。
   aboutToAppear(): void {
     void this.refresh();
   }
 
+  // 重新读取我的卡片。
   private async refresh(): Promise<void> {
     if (this.loading) return;
     this.loading = true;
@@ -48,11 +55,13 @@ export struct MyPublishedPage {
     }
   }
 
+  // 删除前确认。
   private requestDeleteCard(cardId: string): void {
     this.pendingDeleteCardId = cardId;
     this.status = '删除后卡片将立即隐藏，清理请求会保存在云端，请再次确认。';
   }
 
+  // 删除卡片并刷新列表。
   private async deleteCard(cardId: string): Promise<void> {
     if (this.loading) return;
     this.loading = true;
@@ -70,6 +79,7 @@ export struct MyPublishedPage {
     }
   }
 
+  // 一行卡片。
   @Builder
   private cardRow(card: FoodCard) {
     Column({ space: 8 }) {
@@ -132,6 +142,7 @@ export struct MyPublishedPage {
     .border({ width: 1, color: $r('app.color.personal_line') })
   }
 
+  // 页面布局。
   build() {
     NavDestination() {
       Column({ space: 14 }) {
