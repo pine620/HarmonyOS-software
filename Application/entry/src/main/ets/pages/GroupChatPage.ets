@@ -526,7 +526,7 @@ export struct GroupChatPage {
   // 页面布局。
   build() {
     NavDestination() {
-      if (this.showMealPoll) { MealPollPage({ groupId: this.group.id, pollId: this.selectedPollId, onDone: (): void => { this.showMealPoll = false; void this.loadMessages(true); }, onOpenCard: (card: FoodCard): void => this.onOpenCard(card) }) } else {
+      if (this.showMealPoll) { MealPollPage({ groupId: this.group.id, pollId: this.selectedPollId, memberCount: this.memberCount(), onDone: (): void => { this.showMealPoll = false; void this.loadMessages(true); }, onOpenCard: (card: FoodCard): void => this.onOpenCard(card) }) } else {
       Stack({ alignContent: Alignment.Bottom }) {
         WarmNoteBackdrop({ palette: this.palette });
         Column({ space: 10 }) {

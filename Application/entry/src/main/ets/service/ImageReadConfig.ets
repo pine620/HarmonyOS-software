@@ -18,5 +18,7 @@ export const HOME_SNAPSHOT_BUCKET: string = 'shike-otidx';
  * 客户端直传：邮箱原生登录的用户把实拍图直接上传到 Cloud Storage 的 private/pending/{uid}/，
  * shike-media 只负责校验并转为公开图片。这个开关同时决定是否把用户的 AGC Token 交给 Cloud Foundation Kit
  * （存储安全规则需要它来识别上传者）。false = 所有人都走原来的函数上传。
+ * 暂时关闭：带上 AGC Token 后云函数网关对邮箱会话返回 401（response empty），导致邮箱登录后资料加载失败；
+ * 查明网关拒绝原因前，邮箱用户与昵称 / 华为用户一样走函数上传。
  */
-export const CLIENT_DIRECT_UPLOAD_ENABLED: boolean = true;
+export const CLIENT_DIRECT_UPLOAD_ENABLED: boolean = false;

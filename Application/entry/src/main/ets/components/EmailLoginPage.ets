@@ -5,7 +5,7 @@
  */
 import { common } from '@kit.AbilityKit';
 import { PasswordAccountStatus, UserProfile } from '../model/CloudContracts';
-import { AuthService, PasswordSavedError } from '../service/AuthService';
+import { AuthService, EmailProfilePendingError, PasswordSavedError } from '../service/AuthService';
 import { AuthSessionStore } from '../service/AuthSessionStore';
 
 // 登录界面的几种视图。
@@ -38,6 +38,8 @@ export struct EmailLoginPage {
   private active: boolean = false;
   private verifiedProfile: UserProfile | undefined = undefined;
   private recovering: boolean = false;
+  // 邮箱已验证但资料加载失败时记下该邮箱；同一邮箱再次提交只重试加载资料，不再使用已被消耗的验证码。
+  private profilePendingEmail: string = '';
 
   // 组件显示时标记为活动。
   aboutToAppear(): void { this.active = true; }
@@ -66,7 +68,7 @@ export struct EmailLoginPage {
   // 已完成邮箱/华为验证但未设置昵称密码时取消：退出该会话。
   private async cancelVerified(): Promise<void> {
     await AuthService.cancelAuthentication(this.context());
-    this.verifiedProfile = undefined;
+    this.verifiedProfile = undefined; this.profilePendingEmail = '';
   }
 
   // 关闭登录界面。
@@ -195,13 +197,18 @@ export struct EmailLoginPage {
         const profile: UserProfile = await AuthService.nicknameLogin(this.context(), this.nickname, this.password);
         if (this.active) this.finish(profile);
       } else {
-        const profile: UserProfile = this.view === 'REGISTER'
-          ? await AuthService.registerVerifiedEmail(this.context(), this.email, this.code)
-          : await AuthService.emailLogin(this.context(), this.email, this.code, false);
+        const retryProfile: boolean = this.profilePendingEmail.length > 0 && this.profilePendingEmail === this.email.trim();
+        this.profilePendingEmail = '';
+        const profile: UserProfile = retryProfile
+          ? await AuthService.retryEmailProfile(this.context())
+          : this.view === 'REGISTER'
+            ? await AuthService.registerVerifiedEmail(this.context(), this.email, this.code)
+            : await AuthService.emailLogin(this.context(), this.email, this.code, false);
         if (this.active) await this.acceptProvider(profile);
       }
     } catch (error) {
       if (this.active) {
+        if (error instanceof EmailProfilePendingError) this.profilePendingEmail = this.email.trim();
         if (error instanceof PasswordSavedError) {
           this.view = 'PASSWORD'; this.recovering = false; this.verifiedProfile = undefined;
           this.password = ''; this.code = '';

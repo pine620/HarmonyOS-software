@@ -47,6 +47,14 @@ export class PasswordSavedError extends Error {
   constructor() { super('密码已保存，请使用昵称和新密码登录。'); this.name = 'PasswordSavedError'; }
 }
 
+// 邮箱已验证（验证码已被 AGC 消耗、原生会话仍保留），但食刻资料加载失败：页面应改用 retryEmailProfile 重试，不能再用旧验证码。
+export class EmailProfilePendingError extends Error {
+  constructor(detail: string) {
+    super(`食刻资料初始化失败：${detail}。邮箱已验证，可直接重试，无需重新获取验证码。`);
+    this.name = 'EmailProfilePendingError';
+  }
+}
+
 // 认证类错误对象中可能包含的字段。
 interface AuthErrorDetail {
   code?: number | string;
@@ -237,7 +245,22 @@ export class AuthService {
     AuthService.assertIntent(intent);
     AuthService.authMode = 'email';
     await SessionRestoreStore.save(context, 'EMAIL');
-    return AuthService.loadProfile(context, intent);
+    try {
+      return await AuthService.loadProfile(context, intent);
+    } catch (error) {
+      throw new EmailProfilePendingError(authErrorText(error as Object));
+    }
+  }
+
+  // 邮箱已验证但资料加载失败后的重试：沿用当前原生邮箱会话，只重新加载资料，不再消耗验证码。
+  static async retryEmailProfile(context: common.Context): Promise<UserProfile> {
+    const intent: number = ++AuthService.intent;
+    if (!AuthService.isEmailSession()) throw new Error('邮箱验证已失效，请重新获取验证码。');
+    try {
+      return await AuthService.loadProfile(context, intent);
+    } catch (error) {
+      throw new EmailProfilePendingError(authErrorText(error as Object));
+    }
   }
 
   // 把云端认证错误码翻译成中文提示；未知错误码附在提示末尾，方便反馈问题。
@@ -304,7 +327,7 @@ export class AuthService {
     try {
       return await AuthService.loadProfile(context, intent);
     } catch (error) {
-      throw new Error(`食刻资料初始化失败：${authErrorText(error as Object)}`);
+      throw new EmailProfilePendingError(authErrorText(error as Object));
     }
   }
 
